@@ -19,7 +19,7 @@ export function BrowserList({ browsers, onOpen, onError }: Props) {
 
   return (
     <div className="browser-list">
-      <h1>Browsers</h1>
+      <h1>Code Browser</h1>
       {browsers.length === 0 && <p className="hint">No browsers yet. Create one below, or let the agent start one.</p>}
       <ul>
         {browsers.map((b) => (

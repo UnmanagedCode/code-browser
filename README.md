@@ -1,9 +1,9 @@
 # code-browser
 
-A shared headless Chromium for code-conductor. An agent drives it with Playwright over CDP, using its own scripts run through Bash; a person watches the same browser live in a **Browser** panel and can take control, from a desktop or a phone.
+A shared headless Chromium for code-conductor. An agent drives it with Playwright over CDP, using its own scripts run through Bash; a person watches the same browser live in a **Code Browser** panel and can take control, from a desktop or a phone.
 
 - **Agent:** `start_browser` → run the returned Playwright snippet → `browser_info` before each later script. Tabs, logins and cookies persist per browser name.
-- **Person:** open the panel (cc's **Browser** entry, or the panel link the agent gives you) to watch, switch tabs, and take control to click, type, scroll and answer page dialogs.
+- **Person:** open the panel (cc's **Code Browser** entry, or the panel link the agent gives you) to watch, switch tabs, and take control to click, type, scroll and answer page dialogs.
 
 Details: [docs/features.md](docs/features.md) · [docs/protocol.md](docs/protocol.md) · [docs/architecture.md](docs/architecture.md)
 

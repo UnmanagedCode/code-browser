@@ -2,7 +2,7 @@
 
 > See also: [README](../README.md) · [protocol](protocol.md) · [architecture](architecture.md)
 
-code-browser gives an agent and a person one shared headless Chromium. The agent drives it with its own Playwright scripts; the person watches, and can take over, in the **Browser** panel.
+code-browser gives an agent and a person one shared headless Chromium. The agent drives it with its own Playwright scripts; the person watches, and can take over, in the **Code Browser** panel.
 
 ## Agent workflow
 
@@ -36,7 +36,7 @@ The agent talks to Chromium over its own CDP connection; the backend is not on t
 
 ## Panel
 
-Open it from cc's **Browser** nav entry, or from the `panelPath` link an agent gives you.
+Open it from cc's **Code Browser** nav entry, or from the `panelPath` link an agent gives you.
 
 - **Browser list:** each browser with its status, who controls it, a *no sandbox* badge while Chromium runs without its sandbox, *allowed without sandbox* (with **Disallow without sandbox**) for a browser a human allowed, *not started: no sandbox* after a refused start, and *Crashed* after an unexpected exit. Open, Start/Stop, Delete (asks first). **Disallow without sandbox** on a browser that is running unsandboxed asks first, because it stops that browser now (the profile and, through session restore, the tabs and logins are kept); on any other browser it takes effect without a prompt. A Start (or New browser) that is refused for want of a sandbox opens that browser's viewer instead of showing an error. **New browser** creates and starts a profile; the name field takes `a-z`, `0-9` and `-`.
 - **Viewer:** toolbar (back to the list, ← → ⟳, address bar, ⌨), tab strip, controller bar, the live screen.

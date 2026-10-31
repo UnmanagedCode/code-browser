@@ -9,7 +9,7 @@
   },
   "frontend": {
     "path": "/",
-    "navLabel": "Browser"
+    "navLabel": "Code Browser"
   },
   "mcp": {
     "endpoint": "/api/mcp",
