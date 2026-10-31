@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { createController } from '../src/controller.js';
 import { fakeClock } from './helpers.mjs';
 
@@ -85,4 +86,20 @@ test('repeated viewerGone does not restart the lease', () => {
   c.viewerGone('v1');
   clock.advance(500);
   assert.equal(c.kind(), 'agent');
+});
+
+// Invariant: a pending control lease (real timer, CONTROL_LEASE_MS long) never keeps the process alive: a process
+// that has nothing else to do exits at once instead of waiting the lease out.
+test('a pending lease does not keep the process alive', async () => {
+  const src = `import { createController } from ${JSON.stringify(new URL('../src/controller.js', import.meta.url).href)};
+    const c = createController();
+    c.take('v1');
+    c.viewerGone('v1');`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', src], { stdio: 'ignore' });
+  const outcome = await Promise.race([
+    new Promise((resolve) => child.on('exit', (code) => resolve(`exit ${code}`))),
+    new Promise((resolve) => setTimeout(() => resolve('still running'), 3000)),
+  ]);
+  child.kill('SIGKILL');
+  assert.equal(outcome, 'exit 0');
 });

@@ -1,7 +1,9 @@
 import { CONTROL_LEASE_MS } from './limits.js';
 
+// unref'd: a pending lease must not keep the process alive.
 const defaultSchedule = (fn, ms) => {
   const h = setTimeout(fn, ms);
+  h.unref();
   return () => clearTimeout(h);
 };
 
