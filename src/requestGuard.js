@@ -4,7 +4,15 @@
 // request came from is Origin↔Host, compared by host and port under Origin's scheme.
 // A request with no Origin is a same-origin GET, a non-browser client, or cc's own
 // server-side MCP call; it passes unless `requireOrigin` is set (WebSocket upgrades).
-export function requestRefusal(headers, { requireOrigin = false } = {}) {
+//
+// `listenPort` is the backend's own port. A Host naming it is a direct connection (a proxy's Host
+// carries the proxy's port), and Origin==Host proves nothing there: an attacker hostname rebound to
+// 127.0.0.1 supplies both. So a direct connection must use a loopback name. Rebinding onto cc's own
+// port is indistinguishable from visiting cc and is cc's gap.
+const defaultPort = (protocol) => (protocol === 'https:' ? 443 : 80);
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+
+export function requestRefusal(headers, { requireOrigin = false, listenPort } = {}) {
   const origin = headers.origin;
   let scheme = 'http:';
   let o = null;
@@ -21,5 +29,9 @@ export function requestRefusal(headers, { requireOrigin = false } = {}) {
   try { h = new URL(`${scheme}//${host}`); } catch { return 'Host is malformed'; }
   if (h.username || h.password || h.pathname !== '/' || h.search || h.hash) return 'Host is malformed';
   if (o && h.host !== o.host) return 'Origin does not match Host';
+  if (listenPort) {
+    const port = h.port === '' ? defaultPort(h.protocol) : Number(h.port);
+    if (port === listenPort && !LOOPBACK_HOSTS.has(h.hostname)) return "Host names this backend's own port but is not a loopback name";
+  }
   return null;
 }

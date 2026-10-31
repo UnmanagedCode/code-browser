@@ -95,6 +95,8 @@ Chromium runs on the cc host and browses untrusted pages. Those pages can send r
 **Blocked today**
 
 - **Origin == Host.** `requestRefusal` and cc's own upgrade check refuse a request whose `Origin` does not match `Host`: the panel socket, every REST mutation and `api/mcp`.
+- **DNS rebinding onto the backend's own port.** Origin == Host proves nothing when an attacker hostname is rebound to `127.0.0.1` (it supplies both). A request whose `Host` names the backend's own listen port is a direct connection, so its host name must be loopback (`127.0.0.1`, `localhost`, `[::1]`); anything else is `403` on every route (health, a constant answer, excepted) and on the WebSocket. A proxied request carries the proxy's port and is not judged by this rule (`listenPort` in `src/requestGuard.js`).
+- **Malformed request targets** (`//[`, `http://[`) are a `400`, and nothing a handler does on an `upgrade` can exit the process (`src/app.js`).
 - **JSON content type on every state-changing route**, `api/mcp` included. A cross-origin JSON request needs a preflight, which the backend never grants; a `no-cors` or form POST goes out as `text/plain` or form-encoded and gets `415`.
 - **Chromium's own CDP guards.** `--remote-allow-origins` is never passed, so Chromium refuses CDP WebSocket connections that carry an `Origin` (the backend's `ws` client sends none). Its devtools HTTP endpoints check `Host`; `/json/new` needs `PUT`; `/json/activate` and `/json/close` need an unguessable target id.
 - **GET routes in this backend have no side effects.**
@@ -103,7 +105,7 @@ Chromium runs on the cc host and browses untrusted pages. Those pages can send r
 **Still exposed (documented, not fixed)**
 
 - Any loopback or LAN service that changes state on a `GET`, or on a `text/plain`/form `POST` without its own guard, can be triggered by a page the agent visits. That includes port probing through the CDP port's HTTP listener. The target is the other service, not code-browser.
-- DNS rebinding onto cc's own port: cc has no `Host` allowlist, so a rebound hostname arrives with matching `Origin` and `Host`. This is a cc-level gap.
+- DNS rebinding onto **cc's own port**: cc has no `Host` allowlist, so a rebound hostname arrives with matching `Origin` and `Host`, and a request through cc's proxy is indistinguishable from a visit to cc. This is a cc-level gap; rebinding onto the backend's own port is blocked (above).
 - **No loopback blocking, by design.** There is no `--host-resolver-rules` and no proxy, because agents legitimately browse local apps (`src/chromium/args.js`, `buildArgs`; `tests/args.test.mjs` asserts their absence).
 
 Related: an agent reading untrusted pages in a logged-in shared profile can be prompt-injected.

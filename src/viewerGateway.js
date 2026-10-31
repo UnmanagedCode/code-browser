@@ -3,7 +3,6 @@ import { assertName } from './browserManager.js';
 import { CodedError } from './errors.js';
 import { MAX_FRAME_DIM, WS_MAX_PAYLOAD } from './limits.js';
 import { parsePathname } from './http.js';
-import { requestRefusal } from './requestGuard.js';
 
 const VIEWER_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const WS_PATH = '/api/ws';
@@ -175,13 +174,12 @@ export function createViewerGateway({ manager, log = console, pingMs = PING_MS }
   heartbeat.unref();
 
   return {
-    // `req`, `socket`, `head` from the HTTP server's 'upgrade' event.
+    // `req`, `socket`, `head` from the HTTP server's 'upgrade' event, after app.js has applied the request guard.
     handleUpgrade(req, socket, head) {
       const refuse = (status, text) => {
         socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
       };
       if (parsePathname(req.url) !== WS_PATH) return refuse(404, 'Not Found');
-      if (requestRefusal(req.headers, { requireOrigin: true })) return refuse(403, 'Forbidden');
       wss.handleUpgrade(req, socket, head, onConnection);
     },
     close() {

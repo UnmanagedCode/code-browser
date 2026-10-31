@@ -10,7 +10,8 @@ Applied by `src/app.js` to every HTTP request, in this order; no handler runs be
 
 | Order | Check | Refusal |
 |---|---|---|
-| 1 | A request that carries an `Origin` must have the same host:port as `Host` (`src/requestGuard.js`, `requestRefusal`) | `403` |
+| 0 | A request target that is not a valid URL | `400` (after the Origin check, so a foreign Origin still gets `403`) |
+| 1 | A request that carries an `Origin` must have the same host:port as `Host`; and a `Host` that names the backend's own port must be a loopback name (`127.0.0.1`, `localhost`, `[::1]`). `api/health` skips the loopback rule. (`src/requestGuard.js`, `requestRefusal`) | `403` |
 | 2 | Route lookup | `404` unknown path, `405` wrong method |
 | 3 | Every state-changing route (`POST`, `DELETE`), `api/mcp` included, needs `Content-Type: application/json` | `415` |
 | 4 | Body read: size cap `MAX_BODY_BYTES` (`src/limits.js`), valid JSON; an empty body reads as `{}` | `413`, `400` |
@@ -77,7 +78,7 @@ Error codes: `UNKNOWN_TOOL`, `INVALID_NAME`, `NOT_FOUND`, `NOT_RUNNING`, `CHROMI
 
 ## Panel WebSocket: `api/ws`
 
-- Upgrade refused with `403` unless `Origin` is present and its host:port equals `Host`; any other path is `404`.
+- Upgrade refused with `403` unless `Origin` is present and its host:port equals `Host` (and the loopback rule above holds); a malformed target is `400`; any other path is `404`.
 - One socket per panel page. `ws` options: `maxPayload` = `WS_MAX_PAYLOAD`, `perMessageDeflate: false`; an oversized message closes the socket (`1009`). The server pings periodically and drops sockets that do not answer.
 - Text messages are JSON. Client messages carry `msg`; server messages carry `type`. Client binary messages are refused.
 - Every client message but `hello` is refused until `hello` has been accepted.

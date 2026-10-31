@@ -257,3 +257,15 @@ test('an incomplete websocket handshake does not crash the backend', async () =>
   await rawExchange(stack.port, `GET /api/ws HTTP/1.1\r\nHost: 127.0.0.1:${stack.port}\r\nOrigin: ${origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`);
   assert.equal((await fetch(`${origin}/api/health`)).status, 200);
 });
+
+// Invariant: the panel socket is refused for a rebound Host on the backend's port even with a matching Origin;
+// loopback names and a proxied Host still upgrade.
+test('websocket upgrade: rebound Host refused, loopback and proxied Hosts accepted', async () => {
+  await boot();
+  const handshake = (host) => rawExchange(stack.port, `GET /api/ws HTTP/1.1\r\nHost: ${host}\r\nOrigin: http://${host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n`
+    + 'Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n', { timeout: 300 });
+  assert.match(await handshake(`rebound.evil.test:${stack.port}`), /^HTTP\/1\.1 403 /);
+  for (const host of [`127.0.0.1:${stack.port}`, `localhost:${stack.port}`, 'cc.example:9']) {
+    assert.match(await handshake(host), /^HTTP\/1\.1 101 /, host);
+  }
+});

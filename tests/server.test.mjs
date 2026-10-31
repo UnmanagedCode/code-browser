@@ -220,3 +220,32 @@ test('an upgrade handler that throws cannot take the process down', async () => 
   assert.equal(answer, '');
   assert.equal((await request(port, { path: '/api/health' })).status, 200);
 });
+
+// Invariant: DNS rebinding onto the backend's own port is refused: a hostname that is not loopback, naming this
+// port, with a matching Origin gets 403 on api/mcp, every REST mutation and reads, and no handler runs.
+test('a rebound Host on the backend port is refused with 403 on every route but health', async () => {
+  const { port, manager, mcp } = await boot();
+  const host = `rebound.evil.test:${port}`;
+  const headers = { ...JSON_HEADERS, host, origin: `http://${host}` };
+  for (const route of MUTATING) {
+    const r = await request(port, { ...route, headers });
+    assert.equal(r.status, 403, `${route.method} ${route.path}`);
+    assert.match(r.json.error, /loopback/);
+  }
+  assert.equal((await request(port, { path: '/api/browsers', headers: { host, origin: `http://${host}` } })).status, 403);
+  assert.equal((await request(port, { path: '/', headers: { host } })).status, 403);
+  assert.deepEqual(manager.calls, []);
+  assert.deepEqual(mcp.calls, []);
+  assert.equal((await request(port, { path: '/api/health', headers: { host } })).status, 200, 'health is a constant answer');
+});
+
+// Invariant: loopback names on the backend port and a proxy's Host (another port) still work.
+test('loopback Hosts on the backend port and proxied Hosts are accepted', async () => {
+  const { port, mcp } = await boot();
+  const body = '{"tool":"list_browsers","arguments":{}}';
+  for (const host of [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`, 'cc.example:9', 'cc.example']) {
+    const r = await request(port, { method: 'POST', path: '/api/mcp', headers: { ...JSON_HEADERS, host, origin: `http://${host}` }, body });
+    assert.equal(r.status, 200, host);
+  }
+  assert.equal(mcp.calls.length, 5);
+});
