@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import type { BrowserState, BrowserSummary, ClientMessage, FrameHeader, ServerMessage } from './protocol';
-import type { SocketStatus, ViewerSocket, View } from './socket';
+import { createViewerSocket, type SocketStatus, type ViewerSocket, type View } from './socket';
 
 function fakeSocket() {
   const msgFns = new Set<(m: ServerMessage) => void>();
@@ -276,5 +276,57 @@ describe('errors and the list', () => {
     confirm.mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('api/browsers/a', expect.objectContaining({ method: 'DELETE' })));
+  });
+});
+
+describe('view changes clear per-run state', () => {
+  // Invariant: a dialog and state belong to one run of a browser; when it stops they are gone (the next start replays its own).
+  it('stopping the browser clears its dialog and shows it as stopped', async () => {
+    await openViewer({ kind: 'human', you: true });
+    await f.emit({ type: 'dialog', tabId: 'T1', dialogType: 'alert', message: 'hi', defaultPrompt: '' });
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    await f.emit({ type: 'browsers', list: [{ ...running('a'), status: 'stopped' }] });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByText('This browser is stopped.')).toBeTruthy();
+  });
+});
+
+describe('messages that beat the first render', () => {
+  class FakeWs {
+    readyState = 0; binaryType = ''; sent: string[] = [];
+    onopen: (() => void) | null = null; onmessage: ((e: { data: unknown }) => void) | null = null; onclose: (() => void) | null = null;
+    send(d: string) { this.sent.push(d); }
+    close() {}
+    open() { this.readyState = 1; this.onopen?.(); }
+    deliver(m: unknown) { this.onmessage?.({ data: JSON.stringify(m) }); }
+  }
+  const realSocket = () => {
+    let ws!: FakeWs;
+    const socket = createViewerSocket({ url: 'ws://x/api/ws', viewerId: 'viewer-123456', createSocket: () => (ws = new FakeWs()) as unknown as WebSocket });
+    return { socket, ws };
+  };
+
+  // Invariant: a `browsers` reply that arrives before App subscribes is not lost: the list renders without another message.
+  it('the browser list renders from a reply delivered before mount', async () => {
+    goTo('');
+    const { socket, ws } = realSocket();
+    ws.open();
+    ws.deliver({ type: 'browsers', list: [running('a')] });
+    render(<App socket={socket} />);
+    expect(screen.getByRole('button', { name: 'Open' })).toBeTruthy();
+    socket.close();
+  });
+
+  // Invariant: a deep link does not sit at "Connecting…" when `browsers` and `state` both arrived before mount.
+  it('a deep link shows the viewer from replies delivered before mount', async () => {
+    goTo('?browser=a');
+    const { socket, ws } = realSocket();
+    ws.open();
+    ws.deliver({ type: 'browsers', list: [running('a')] });
+    ws.deliver(state());
+    render(<App socket={socket} />);
+    await waitFor(() => expect(screen.getByRole('tablist')).toBeTruthy());
+    expect(screen.queryByText('Connecting…')).toBeNull();
+    socket.close();
   });
 });

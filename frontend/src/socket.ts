@@ -41,6 +41,17 @@ export function createViewerSocket({ url, viewerId, createSocket = (u) => new We
   // and the backend sends no further frame to a viewer with one in flight.
   let held: { header: FrameHeader; jpeg: Uint8Array } | null = null;
 
+  // Control messages that arrive with no subscriber (the reply to `hello` can beat App's effect) are kept,
+  // coalesced to what a late subscriber needs: the latest `browsers`, the latest `state` per browser, open
+  // dialogs and the latest error. They replay once, in order of latest arrival.
+  const heldMessages = new Map<string, ServerMessage>();
+  const hold = (m: ServerMessage) => {
+    const key = m.type === 'state' ? `state:${m.name}` : m.type === 'dialog' ? `dialog:${m.tabId}` : m.type;
+    if (m.type === 'dialogClosed') { heldMessages.delete(`dialog:${m.tabId}`); return; }
+    heldMessages.delete(key);
+    heldMessages.set(key, m);
+  };
+
   const status = (s: SocketStatus) => statusFns.forEach((fn) => fn(s));
   const isOpen = () => ws !== null && ws.readyState === 1;
   const rawSend = (msg: ClientMessage) => { if (isOpen()) ws!.send(JSON.stringify(msg)); return isOpen(); };
@@ -69,7 +80,8 @@ export function createViewerSocket({ url, viewerId, createSocket = (u) => new We
     ws.onmessage = (ev) => {
       if (typeof ev.data === 'string') {
         const msg = JSON.parse(ev.data) as ServerMessage;
-        messageFns.forEach((fn) => fn(msg));
+        if (messageFns.size === 0) hold(msg);
+        else messageFns.forEach((fn) => fn(msg));
       } else {
         const { header, jpeg } = decodeFrame(ev.data as ArrayBuffer);
         if (frameFns.size === 0) held = { header, jpeg };
@@ -93,7 +105,10 @@ export function createViewerSocket({ url, viewerId, createSocket = (u) => new We
   return {
     send: rawSend,
     setView(view) {
-      if ((view?.name ?? null) !== (desired?.name ?? null)) held = null; // a frame of the previous browser is stale
+      if ((view?.name ?? null) !== (desired?.name ?? null)) {
+        held = null; // a frame, state and dialogs of the previous browser are stale; the browser list is not
+        for (const key of [...heldMessages.keys()]) if (key !== 'browsers' && key !== 'error') heldMessages.delete(key);
+      }
       desired = view;
       syncView();
     },
@@ -102,7 +117,13 @@ export function createViewerSocket({ url, viewerId, createSocket = (u) => new We
       desired = { ...desired, maxWidth, maxHeight };
       if (effective()) rawSend({ msg: 'viewport', maxWidth, maxHeight });
     },
-    onMessage: (fn) => subscribe(messageFns, fn),
+    onMessage(fn) {
+      const off = subscribe(messageFns, fn);
+      const replay = [...heldMessages.values()];
+      heldMessages.clear();
+      replay.forEach(fn);
+      return off;
+    },
     onFrame(fn) {
       const off = subscribe(frameFns, fn);
       if (held) {

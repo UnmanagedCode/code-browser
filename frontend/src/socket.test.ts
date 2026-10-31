@@ -193,6 +193,67 @@ describe('viewer socket', () => {
     expect(seen).toEqual([]);
   });
 
+  const deliver = (m: unknown) => last().onmessage?.({ data: JSON.stringify(m) });
+  const tabState = (name: string, v: number) => ({ type: 'state', name, status: 'running', tabs: [{ targetId: `T${v}`, url: '', title: '' }] });
+
+  // Invariant: control messages that arrive before anything subscribed (the reply to hello can beat App's effect)
+  // are kept, coalesced to what a late subscriber needs: latest browsers, latest state per browser, open dialogs, latest error.
+  it('replays the held messages to the first subscriber, coalesced, once', () => {
+    const s = make();
+    last().open();
+    deliver({ type: 'browsers', list: [{ name: 'old' }] });
+    deliver({ type: 'browsers', list: [{ name: 'a' }] });
+    deliver(tabState('a', 1));
+    deliver(tabState('a', 2));
+    deliver(tabState('b', 3));
+    deliver({ type: 'dialog', tabId: 'd1', dialogType: 'alert', message: 'one', defaultPrompt: '' });
+    deliver({ type: 'dialog', tabId: 'd2', dialogType: 'alert', message: 'two', defaultPrompt: '' });
+    deliver({ type: 'dialogClosed', tabId: 'd2' });
+    deliver({ type: 'error', code: 'X', message: 'first' });
+    deliver({ type: 'error', code: 'Y', message: 'second' });
+    const seen: unknown[] = [];
+    s.onMessage((m) => seen.push(m))();
+    const second: unknown[] = [];
+    s.onMessage((m) => second.push(m));
+    expect(seen.map((m) => JSON.stringify(m))).toEqual([
+      JSON.stringify({ type: 'browsers', list: [{ name: 'a' }] }),
+      JSON.stringify(tabState('a', 2)),
+      JSON.stringify(tabState('b', 3)),
+      JSON.stringify({ type: 'dialog', tabId: 'd1', dialogType: 'alert', message: 'one', defaultPrompt: '' }),
+      JSON.stringify({ type: 'error', code: 'Y', message: 'second' }),
+    ]);
+    expect(second).toEqual([]);
+  });
+
+  // Invariant: with a subscriber present messages go straight to it and nothing is held for later.
+  it('does not hold messages while subscribed', () => {
+    const s = make();
+    last().open();
+    const seen: unknown[] = [];
+    const off = s.onMessage((m) => seen.push(m));
+    deliver({ type: 'browsers', list: [] });
+    off();
+    const later: unknown[] = [];
+    s.onMessage((m) => later.push(m));
+    expect(seen).toHaveLength(1);
+    expect(later).toEqual([]);
+  });
+
+  // Invariant: held browser state and dialogs belong to the viewed browser and are dropped when the view changes;
+  // the browser list is not tied to a view and stays.
+  it('drops held state and dialogs, but not the list, when the viewed browser changes', () => {
+    const s = make();
+    s.setView({ name: 'a', maxWidth: 0, maxHeight: 0 });
+    last().open();
+    deliver({ type: 'browsers', list: [] });
+    deliver(tabState('a', 1));
+    deliver({ type: 'dialog', tabId: 'd1', dialogType: 'alert', message: 'm', defaultPrompt: '' });
+    s.setView({ name: 'b', maxWidth: 0, maxHeight: 0 });
+    const seen: { type: string }[] = [];
+    s.onMessage((m) => seen.push(m));
+    expect(seen.map((m) => m.type)).toEqual(['browsers']);
+  });
+
   // Invariant: close() stops reconnecting.
   it('close stops reconnection', () => {
     const s = make();

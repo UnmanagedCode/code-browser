@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserList } from './components/BrowserList';
 import { Viewer } from './components/Viewer';
 import * as api from './api';
@@ -34,9 +34,16 @@ export function App({ socket }: { socket: ViewerSocket }) {
   // so that its next start is joined again.
   const summary = useMemo(() => browsers.find((b) => b.name === name), [browsers, name]);
   const viewable = name !== null && summary?.status === 'running';
+  // State and dialogs belong to one run of one browser: clear them when the route changes browser or the
+  // browser stops, but not on mount or when it starts (a reply replayed by the socket must survive).
+  const lastView = useRef<{ name: string | null; viewable: boolean } | null>(null);
   useEffect(() => {
-    setState(null);
-    setDialogs([]);
+    const last = lastView.current;
+    if (last && (last.name !== name || (last.viewable && !viewable))) {
+      setState(null);
+      setDialogs([]);
+    }
+    lastView.current = { name, viewable };
     socket.setView(viewable && name ? { name, maxWidth: 0, maxHeight: 0 } : null);
   }, [socket, name, viewable]);
 
