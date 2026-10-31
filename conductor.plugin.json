@@ -1,0 +1,55 @@
+{
+  "id": "code-browser",
+  "name": "Code Browser",
+  "version": "0.1.0",
+  "pluginApi": 1,
+  "backend": {
+    "start": "node server.js",
+    "healthPath": "/api/health"
+  },
+  "frontend": {
+    "path": "/",
+    "navLabel": "Browser"
+  },
+  "mcp": {
+    "endpoint": "/api/mcp",
+    "timeoutMs": 60000,
+    "tools": [
+      {
+        "name": "list_browsers",
+        "description": "List the shared browsers: name, status (running|stopped), who controls it (agent|human) and the CDP endpoint while running.",
+        "inputSchema": { "type": "object", "properties": {} }
+      },
+      {
+        "name": "start_browser",
+        "description": "Start (creating on first use) a persistent headless Chromium that you and the human share. Workflow: start_browser -> read the returned snippet -> run it via Bash as an .mjs script (it connects to the browser over CDP with Playwright; the browser and its tabs keep state between scripts). The project needs no Playwright install. A browser name keeps its logins and cookies across stops. The human watches and can take control in a panel: obey `controller` in the result, and while it is \"human\" do not drive the page, call browser_info again later.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,39}$", "maxLength": 40, "description": "Browser name (lowercase letters, digits, dashes). Defaults to \"default\"." }
+          }
+        }
+      },
+      {
+        "name": "stop_browser",
+        "description": "Stop a shared browser. Its profile (logins, cookies) is kept; start_browser brings it back.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,39}$", "maxLength": 40, "description": "Browser name. Defaults to \"default\"." }
+          }
+        }
+      },
+      {
+        "name": "browser_info",
+        "description": "Current state of a running shared browser: CDP endpoint, open tabs, the active tab, and who controls it. Returns a ready-to-run Playwright snippet and the panel path to give the user. Call it before each script: if controller is \"human\" the human has taken over, so do not drive the page until it is \"agent\" again.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,39}$", "maxLength": 40, "description": "Browser name. Defaults to \"default\"." }
+          }
+        }
+      }
+    ]
+  }
+}
