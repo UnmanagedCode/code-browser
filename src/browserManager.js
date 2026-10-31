@@ -5,10 +5,11 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 import { CdpConnection } from './cdp.js';
+import { allowsUnsandboxed, removeSettings, setAllowUnsandboxed as writeAllowUnsandboxed, settingsDir } from './browserSettings.js';
 import { buildArgs, isSandboxFailure } from './chromium/args.js';
 import { locateChromium } from './chromium/locate.js';
 import { pluginDir } from './config.js';
-import { ensurePrivateDir, PRIVATE_DIR_MODE } from './fsPrivate.js';
+import { ensurePrivateDir, PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from './fsPrivate.js';
 import { CodedError } from './errors.js';
 import { CDP_TIMEOUT_MS, KILL_GRACE_MS, LAUNCH_TIMEOUT_MS, LOG_SCAN_CHARS, LOG_TAIL_CHARS, NAME_RE, POLL_MS, SHUTDOWN_GRACE_MS, STOP_GRACE_MS } from './limits.js';
 import { pidAlive, reap, removeRun, runNames, writeRun } from './runState.js';
@@ -44,6 +45,7 @@ export function createBrowserManager({
   const profileOf = (name) => path.join(profilesDir, name);
   const running = new Map();
   const lastExit = new Map();
+  const refused = new Set(); // names whose last start was refused for want of a sandbox (in memory only)
   const locks = new Map();
 
   const profileExists = (name) => fs.statSync(profileOf(name), { throwIfNoEntry: false })?.isDirectory() === true;
@@ -76,6 +78,8 @@ export function createBrowserManager({
       status: entry ? 'running' : 'stopped',
       controller: entry?.session?.controller.kind() ?? 'agent',
       sandbox: entry ? entry.sandbox : null,
+      allowUnsandboxed: allowsUnsandboxed(dataDir, name, log),
+      sandboxUnavailable: refused.has(name),
       lastExit: entry ? null : lastExit.get(name) ?? null,
       cdpEndpoint: entry ? `http://127.0.0.1:${entry.port}` : null,
     };
@@ -90,6 +94,8 @@ export function createBrowserManager({
       throw err;
     }
     fs.chmodSync(profileOf(name), PRIVATE_DIR_MODE);
+    removeSettings(dataDir, name); // a recreated name never inherits an earlier browser's opt-in
+    refused.delete(name);
     ensurePrivateDir(path.join(profileOf(name), 'Default'));
     fs.writeFileSync(path.join(profileOf(name), 'Default', 'Preferences'), JSON.stringify(NEW_PROFILE_PREFS));
     events.emit('change');
@@ -173,6 +179,11 @@ export function createBrowserManager({
     await reap(dataDir, name, { profileDir, keeperPath: KEEPER });
     let result = await launch(name, chrome, true);
     if (result.failed?.sandboxFailure) {
+      if (!allowsUnsandboxed(dataDir, name, log)) {
+        refused.add(name);
+        events.emit('change');
+        throw new CodedError('SANDBOX_UNAVAILABLE', `Chromium has no usable sandbox on this host, and browser '${name}' is not allowed to run without one`);
+      }
       log.warn(`code-browser: '${name}' has no usable Chromium sandbox; relaunching with --no-sandbox`);
       result = await launch(name, chrome, false);
     }
@@ -190,6 +201,7 @@ export function createBrowserManager({
       removeRun(dataDir, name);
       throw new CodedError('LAUNCH_FAILED', `could not connect to CDP on port ${port}: ${err.message}`);
     }
+    refused.delete(name);
     const entry = { name, handle, cdp, port, sandbox, startedAt: Date.now(), stopping: false };
     running.set(name, entry);
     lastExit.delete(name);
@@ -243,9 +255,19 @@ export function createBrowserManager({
     onExit(entry, entry.handle.exit);
   }
 
+  // Revoking consent stops a browser that runs unsandboxed now; one that runs sandboxed is untouched.
+  async function doSetAllowUnsandboxed(name, allow) {
+    requireProfile(name);
+    writeAllowUnsandboxed(dataDir, name, allow);
+    if (!allow && running.get(name)?.sandbox === false) await doStop(name);
+    events.emit('change');
+  }
+
   async function doDelete(name) {
     requireProfile(name);
     await doStop(name);
+    removeSettings(dataDir, name); // before the rename: a crash in between keeps the profile and drops the opt-in
+    refused.delete(name);
     ensurePrivateDir(trashDir);
     const dest = path.join(trashDir, `${name}-${Date.now()}`);
     fs.renameSync(profileOf(name), dest);
@@ -256,8 +278,11 @@ export function createBrowserManager({
 
   // Backend boot: nothing outlives the previous backend, so every leftover is killed.
   async function boot() {
-    for (const dir of [dataDir, profilesDir, logsDir, path.join(dataDir, 'run'), trashDir]) ensurePrivateDir(dir);
+    for (const dir of [dataDir, profilesDir, logsDir, path.join(dataDir, 'run'), settingsDir(dataDir), trashDir]) ensurePrivateDir(dir);
     for (const name of names()) fs.chmodSync(profileOf(name), PRIVATE_DIR_MODE);
+    for (const f of fs.readdirSync(settingsDir(dataDir)).filter((n) => n.endsWith('.json'))) {
+      try { fs.chmodSync(path.join(settingsDir(dataDir), f), PRIVATE_FILE_MODE); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+    }
     // An old backend's asynchronous rm of a trash entry may still be running (cc's restart overlap): an entry
     // that vanishes between the listing and the chmod is fine; any other error is not.
     for (const entry of trashFs.readdirSync(trashDir, { withFileTypes: true })) {
@@ -295,6 +320,7 @@ export function createBrowserManager({
     start: (name) => withLock(name, () => doStart(name)),
     stop: (name) => withLock(name, () => doStop(name)),
     delete: (name) => withLock(name, () => doDelete(name)),
+    setAllowUnsandboxed: (name, allow) => withLock(name, () => doSetAllowUnsandboxed(name, allow)),
     entry: (name) => running.get(name),
     session: (name) => running.get(name)?.session,
     boot,

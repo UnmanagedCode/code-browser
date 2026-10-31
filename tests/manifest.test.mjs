@@ -44,12 +44,22 @@ test('tool name patterns equal NAME_RE', async () => {
   }
 });
 
-// Invariant: the two tools that start or describe a browser tell the agent it may run unsandboxed and to check `sandbox`.
-test('start_browser and browser_info descriptions mention the unsandboxed fallback', () => {
-  for (const name of ['start_browser', 'browser_info']) {
-    const d = manifest.mcp.tools.find((t) => t.name === name).description;
-    assert.match(d, /unsandboxed/i, name);
-    assert.match(d, /sandbox/, name);
-    assert.match(d, /`sandbox`/, name);
+// Invariant: no tool can grant the unsandboxed opt-in: each takes at most a `name`, and none is named for it.
+test('no tool takes anything but name or is named for the sandbox opt-in', () => {
+  for (const tool of manifest.mcp.tools) {
+    assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).filter((p) => p !== 'name'), [], tool.name);
+    assert.doesNotMatch(tool.name, /allow|sandbox/);
   }
+});
+
+// Invariant: the tools that start or describe a browser tell the agent about the refusal, that only a human can lift it
+// in the panel, and to check `sandbox`.
+test('descriptions explain the sandbox refusal and the human opt-in', () => {
+  const desc = (name) => manifest.mcp.tools.find((t) => t.name === name).description;
+  assert.match(desc('start_browser'), /SANDBOX_UNAVAILABLE/);
+  assert.match(desc('start_browser'), /human/);
+  assert.match(desc('start_browser'), /panel/);
+  assert.match(desc('start_browser'), /`sandbox`/);
+  assert.match(desc('browser_info'), /`sandbox`/);
+  for (const name of ['browser_info', 'list_browsers']) assert.match(desc(name), /allowUnsandboxed/, name);
 });
