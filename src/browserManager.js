@@ -32,6 +32,7 @@ export function createBrowserManager({
   env = process.env,
   log = console,
   timeouts = {},
+  createSession = null,
 } = {}) {
   const t = { launch: LAUNCH_TIMEOUT_MS, stopGrace: STOP_GRACE_MS, killGrace: KILL_GRACE_MS, shutdownGrace: SHUTDOWN_GRACE_MS, ...timeouts };
   const events = new EventEmitter();
@@ -71,7 +72,7 @@ export function createBrowserManager({
     return {
       name,
       status: entry ? 'running' : 'stopped',
-      controller: 'agent',
+      controller: entry?.session?.controller.kind() ?? 'agent',
       sandbox: entry ? entry.sandbox : null,
       lastExit: entry ? null : lastExit.get(name) ?? null,
       cdpEndpoint: entry ? `http://127.0.0.1:${entry.port}` : null,
@@ -188,6 +189,18 @@ export function createBrowserManager({
     running.set(name, entry);
     lastExit.delete(name);
     handle.exited.then((exit) => onExit(entry, exit));
+    if (createSession) {
+      entry.session = createSession(entry);
+      try {
+        await entry.session.start();
+      } catch (err) {
+        entry.stopping = true;
+        await killHandle(handle);
+        onExit(entry, handle.exit);
+        throw new CodedError('LAUNCH_FAILED', `could not start the browser session: ${err.message}`);
+      }
+      entry.session.events.on('change', () => events.emit('change'));
+    }
     events.emit('started', entry);
     events.emit('change');
   }
@@ -195,6 +208,7 @@ export function createBrowserManager({
   function onExit(entry, exit) {
     if (running.get(entry.name) !== entry) return;
     running.delete(entry.name);
+    entry.session?.dispose();
     entry.cdp.close();
     removeRun(dataDir, entry.name);
     if (!entry.stopping) {
@@ -205,15 +219,12 @@ export function createBrowserManager({
     events.emit('change');
   }
 
-  // Summary plus the open tabs. The active tab is the newest page until the live session tracks it.
-  async function info(name) {
+  // Summary plus the open tabs and the active one.
+  function info(name) {
     const base = summary(name);
     const entry = running.get(name);
-    if (!entry) throw new CodedError('NOT_RUNNING', `browser '${name}' is stopped; call start_browser first`);
-    const { targetInfos } = await entry.cdp.send('Target.getTargets');
-    const pages = targetInfos.filter((t) => t.type === 'page' && !t.subtype);
-    const tabs = pages.map((t, i) => ({ targetId: t.targetId, url: t.url, title: t.title, active: i === pages.length - 1 }));
-    return { ...base, tabs, activeTargetId: tabs.find((t) => t.active)?.targetId ?? null };
+    if (!entry?.session) throw new CodedError('NOT_RUNNING', `browser '${name}' is stopped; call start_browser first`);
+    return { ...base, ...entry.session.info() };
   }
 
   async function doStop(name) {
@@ -268,6 +279,7 @@ export function createBrowserManager({
     stop: (name) => withLock(name, () => doStop(name)),
     delete: (name) => withLock(name, () => doDelete(name)),
     entry: (name) => running.get(name),
+    session: (name) => running.get(name)?.session,
     boot,
     shutdown,
   };
