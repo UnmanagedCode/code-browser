@@ -2,7 +2,7 @@
 
 > See also: [README](../README.md) · [protocol](protocol.md) · [architecture](architecture.md)
 
-code-browser gives an agent and a person one shared headless Chromium. The agent drives it with its own Playwright scripts; the person watches, and can take over, in the **Browser** panel.
+code-browser gives an agent and a person one shared headless Chromium. The agent drives it with its own Playwright scripts; the person watches, and can take over, in the **Code Browser** panel.
 
 ## Agent workflow
 
