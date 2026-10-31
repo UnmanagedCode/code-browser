@@ -231,7 +231,7 @@ console.log(await page.textContent('#result'));`);
       assert.equal((await tool(port, 'list_browsers')).result[0].status, 'running', 'the no-cors POST must not have stopped the browser');
     });
 
-    await t.test('8. no orphans after the backend is killed; profile survives; REST lifecycle', async () => {
+    await t.test('8. no orphans after the backend is killed; profile survives; REST lifecycle; session cookie survives a stop', async () => {
       const run = JSON.parse(fs.readFileSync(path.join(dataDir, 'run', 'e2e.json'), 'utf8'));
       assert.ok(pidAlive(run.chromiumPid));
       await p1.close();
@@ -248,6 +248,11 @@ console.log(await page.textContent('#result'));`);
 
       const rest = (method, p) => fetch(`http://127.0.0.1:${backend.port}/api/browsers/${p}`, { method, headers: { 'content-type': 'application/json' }, body: method === 'DELETE' ? undefined : '{}' });
       assert.equal((await rest('POST', 'e2e/start')).status, 200);
+      // A session cookie (no expiry) must survive stop and start: the profile is seeded with restore_on_startup.
+      await agent(`await context.addCookies([{ name: 'sess', value: '1', url: 'http://example.test/' }]);`);
+      assert.equal((await rest('POST', 'e2e/stop')).status, 200);
+      assert.equal((await rest('POST', 'e2e/start')).status, 200);
+      assert.equal(await agent(`console.log((await context.cookies('http://example.test/')).length);`), '1');
       assert.equal((await rest('POST', 'e2e/stop')).status, 200);
       assert.equal((await rest('DELETE', 'e2e')).status, 200);
       assert.ok(!fs.existsSync(path.join(dataDir, 'profiles', 'e2e')));
