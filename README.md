@@ -21,13 +21,14 @@ Tests: `npm test`; real Chromium end to end: `RUN_REAL_CHROMIUM=1 npm run test:e
 ## Key defaults
 
 - Data: `$PROJECTS_ROOT/.code-browser/` (profiles, run state, logs).
-- Chromium: headless, 1280×800, CDP on a random loopback port, sandboxed unless the host cannot (then `--no-sandbox`, shown as a badge).
+- Chromium: headless, 1280×800, CDP on a random loopback port, sandboxed unless the host cannot (see *Runs unsandboxed* below).
 - The controller lock is advisory for agents and enforced for people (see below).
 
 ## Known limitations
 
 - **Controller is advisory for the agent.** Agents drive Chromium over their own CDP connection, which the backend cannot pause. They are told who controls the browser; a script that ignores it can still act.
 - **Network position.** Pages the shared browser visits run on the cc host and can reach loopback and LAN services. GET and simple-request side effects on other local services are exposed, DNS rebinding onto cc's port is a cc-level gap, and loopback is deliberately not blocked. See [docs/architecture.md → Threat model](docs/architecture.md#threat-model-the-shared-browsers-network-position).
+- **Runs unsandboxed where the host has no usable sandbox.** Containers and hosts that restrict unprivileged user namespaces cannot start Chromium's sandbox, so the backend relaunches it with `--no-sandbox` (logged; `sandbox: false` in `browser_info`, a *no sandbox* badge in the panel, and a warning line in the `start_browser`/`browser_info` text). A renderer compromise by a hostile page then becomes code execution as the host user, in a browser that holds logged-in profiles and can reach loopback. Treat such a host as trusting every page the browser visits.
 - **Prompt injection.** An agent browsing untrusted pages in a logged-in shared profile can be steered by them.
 - Native `<select>` popups, file pickers and permission prompts do not appear in the screencast; no audio.
 - Tab following is heuristic: an agent's `page.bringToFront()` is invisible to other CDP clients.

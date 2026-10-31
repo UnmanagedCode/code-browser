@@ -43,3 +43,13 @@ test('tool name patterns equal NAME_RE', async () => {
     }
   }
 });
+
+// Invariant: the two tools that start or describe a browser tell the agent it may run unsandboxed and to check `sandbox`.
+test('start_browser and browser_info descriptions mention the unsandboxed fallback', () => {
+  for (const name of ['start_browser', 'browser_info']) {
+    const d = manifest.mcp.tools.find((t) => t.name === name).description;
+    assert.match(d, /unsandboxed/i, name);
+    assert.match(d, /sandbox/, name);
+    assert.match(d, /`sandbox`/, name);
+  }
+});

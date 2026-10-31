@@ -6,7 +6,7 @@ import { createMcp } from '../src/mcp.js';
 
 const manifest = JSON.parse(fs.readFileSync(new URL('../conductor.plugin.json', import.meta.url), 'utf8'));
 
-function fakeManager({ controller = 'agent' } = {}) {
+function fakeManager({ controller = 'agent', sandbox = true } = {}) {
   const state = new Map();
   return {
     list: () => [...state.values()],
@@ -15,7 +15,7 @@ function fakeManager({ controller = 'agent' } = {}) {
     stop: async (n) => { if (!state.has(n)) throw new CodedError('NOT_FOUND', 'no such browser'); state.get(n).status = 'stopped'; },
     info: async (n) => {
       if (state.get(n)?.status !== 'running') throw new CodedError('NOT_RUNNING', `browser '${n}' is stopped`);
-      return { name: n, status: 'running', cdpEndpoint: 'http://127.0.0.1:9333', controller, sandbox: true, tabs: [{ targetId: 'T1', url: 'about:blank', title: '', active: true }], activeTargetId: 'T1' };
+      return { name: n, status: 'running', cdpEndpoint: 'http://127.0.0.1:9333', controller, sandbox, tabs: [{ targetId: 'T1', url: 'about:blank', title: '', active: true }], activeTargetId: 'T1' };
     },
   };
 }
@@ -74,4 +74,23 @@ test('a human controller adds the do-not-drive note', async () => {
   assert.equal(info.meta.controller, 'human');
   assert.match(info.text, /human currently has control/);
   assert.match(info.text, /Call browser_info again later/);
+});
+
+// Invariant: an agent is told when the browser runs without Chromium's sandbox, in both tools that hand out the snippet,
+// and only then.
+test('sandbox false adds a one-line warning; sandbox true does not', async () => {
+  for (const sandbox of [false, true]) {
+    const mcp = make({ sandbox });
+    const started = await mcp.handle({ tool: 'start_browser', arguments: { name: 'a' } });
+    const info = await mcp.handle({ tool: 'browser_info', arguments: { name: 'a' } });
+    for (const r of [started, info]) {
+      assert.equal(r.meta.sandbox, sandbox);
+      const warned = /WARNING: .*without Chromium's sandbox/.test(r.text);
+      assert.equal(warned, !sandbox, `sandbox=${sandbox}`);
+      if (!sandbox) {
+        assert.equal(r.text.split('\n').filter((l) => /sandbox/i.test(l) && l.startsWith('WARNING')).length, 1);
+        assert.match(r.text, /untrusted pages/);
+      }
+    }
+  }
 });

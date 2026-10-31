@@ -64,7 +64,7 @@ cc POSTs `{tool, arguments, caller}` to `api/mcp` and expects HTTP `200` with on
 
 `browser_info.meta`: `{name, status, cdpEndpoint, controller, sandbox, tabs: [{targetId, url, title, active}], panelPath}`.
 
-`browser_info.text` (raw text, not escaped): the do-not-drive note when `controller` is `human`; the panel path with its relative-address note; the two Playwright rules; the ready-to-run snippet in a `js` fence (`src/snippet.js`).
+`browser_info.text` (raw text, not escaped): the do-not-drive note when `controller` is `human`; a one-line `WARNING` when `sandbox` is `false`; the panel path with its relative-address note; the two Playwright rules; the ready-to-run snippet in a `js` fence (`src/snippet.js`).
 
 Error codes: `UNKNOWN_TOOL`, `INVALID_NAME`, `NOT_FOUND`, `NOT_RUNNING`, `CHROMIUM_NOT_FOUND` (lists every path tried and the install command), `LAUNCH_FAILED` (carries the Chromium log tail), `CDP_TIMEOUT`, `CDP_ERROR`, `CDP_CLOSED`, `INTERNAL`.
 

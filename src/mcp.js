@@ -7,6 +7,9 @@ import { buildSnippet } from './snippet.js';
 const HUMAN_NOTE = 'A human currently has control of this browser. Do not drive it: do not click, type or navigate. '
   + 'Call browser_info again later; it shows controller "agent" once control is back.';
 
+const UNSANDBOXED_NOTE = "WARNING: this browser runs without Chromium's sandbox (the host has no usable one), so a compromised page could "
+  + 'run code as the host user. Do not browse untrusted pages in it, especially with logged-in profiles.';
+
 // cc POSTs {tool, arguments, caller} and expects HTTP 200 with {result}, {error} or {text, meta?}.
 export function createMcp({ manager, pluginDir, pluginId }) {
   const nameOf = (args) => assertName(args?.name ?? DEFAULT_BROWSER_NAME);
@@ -25,6 +28,7 @@ export function createMcp({ manager, pluginDir, pluginId }) {
     };
     const text = [
       ...(info.controller === 'human' ? [HUMAN_NOTE, ''] : []),
+      ...(info.sandbox === false ? [UNSANDBOXED_NOTE, ''] : []),
       `Panel: ${path} — it is relative to the address the user opens cc at. Give it to the user as-is, or as a markdown link with that path as the target. Do not add a host.`,
       '',
       'Rules:',

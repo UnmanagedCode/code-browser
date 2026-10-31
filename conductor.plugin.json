@@ -18,15 +18,23 @@
       {
         "name": "list_browsers",
         "description": "List the shared browsers: name, status (running|stopped), who controls it (agent|human) and the CDP endpoint while running.",
-        "inputSchema": { "type": "object", "properties": {} }
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
       },
       {
         "name": "start_browser",
-        "description": "Start (creating on first use) a persistent headless Chromium that you and the human share. Workflow: start_browser -> read the returned snippet -> run it via Bash as an .mjs script (it connects to the browser over CDP with Playwright; the browser and its tabs keep state between scripts). The project needs no Playwright install. A browser name keeps its logins and cookies across stops. The human watches and can take control in a panel: obey `controller` in the result, and while it is \"human\" do not drive the page, call browser_info again later.",
+        "description": "Start (creating on first use) a persistent headless Chromium that you and the human share. Workflow: start_browser -> read the returned snippet -> run it via Bash as an .mjs script (it connects to the browser over CDP with Playwright; the browser and its tabs keep state between scripts). The project needs no Playwright install. A browser name keeps its logins and cookies across stops. The human watches and can take control in a panel: obey `controller` in the result, and while it is \"human\" do not drive the page, call browser_info again later. On hosts without a usable Chromium sandbox the browser runs unsandboxed: check `sandbox` in the result and avoid untrusted pages when it is false.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,39}$", "maxLength": 40, "description": "Browser name (lowercase letters, digits, dashes). Defaults to \"default\"." }
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+              "maxLength": 40,
+              "description": "Browser name (lowercase letters, digits, dashes). Defaults to \"default\"."
+            }
           }
         }
       },
@@ -36,17 +44,27 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,39}$", "maxLength": 40, "description": "Browser name. Defaults to \"default\"." }
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+              "maxLength": 40,
+              "description": "Browser name. Defaults to \"default\"."
+            }
           }
         }
       },
       {
         "name": "browser_info",
-        "description": "Current state of a running shared browser: CDP endpoint, open tabs, the active tab, and who controls it. Returns a ready-to-run Playwright snippet and the panel path to give the user. Call it before each script: if controller is \"human\" the human has taken over, so do not drive the page until it is \"agent\" again.",
+        "description": "Current state of a running shared browser: CDP endpoint, open tabs, the active tab, and who controls it. Returns a ready-to-run Playwright snippet and the panel path to give the user. Call it before each script: if controller is \"human\" the human has taken over, so do not drive the page until it is \"agent\" again. The browser may run unsandboxed on hosts without a usable sandbox: check `sandbox`.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,39}$", "maxLength": 40, "description": "Browser name. Defaults to \"default\"." }
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,39}$",
+              "maxLength": 40,
+              "description": "Browser name. Defaults to \"default\"."
+            }
           }
         }
       }
