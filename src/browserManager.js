@@ -205,6 +205,17 @@ export function createBrowserManager({
     events.emit('change');
   }
 
+  // Summary plus the open tabs. The active tab is the newest page until the live session tracks it.
+  async function info(name) {
+    const base = summary(name);
+    const entry = running.get(name);
+    if (!entry) throw new CodedError('NOT_RUNNING', `browser '${name}' is stopped; call start_browser first`);
+    const { targetInfos } = await entry.cdp.send('Target.getTargets');
+    const pages = targetInfos.filter((t) => t.type === 'page' && !t.subtype);
+    const tabs = pages.map((t, i) => ({ targetId: t.targetId, url: t.url, title: t.title, active: i === pages.length - 1 }));
+    return { ...base, tabs, activeTargetId: tabs.find((t) => t.active)?.targetId ?? null };
+  }
+
   async function doStop(name) {
     requireProfile(name);
     const entry = running.get(name);
@@ -250,6 +261,7 @@ export function createBrowserManager({
     names,
     list: () => names().map(summary),
     summary,
+    info,
     create,
     ensure,
     start: (name) => withLock(name, () => doStart(name)),
