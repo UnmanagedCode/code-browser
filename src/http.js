@@ -22,6 +22,11 @@ export const SECURITY_HEADERS = {
   'Cache-Control': 'no-store',
 };
 
+// The path of a request target, or null when the target is not a valid URL (`//[`, `http://[` reach us from raw clients).
+export function parsePathname(target) {
+  try { return new URL(target, 'http://localhost').pathname; } catch { return null; }
+}
+
 export function sendText(res, status, text, type = 'text/plain; charset=utf-8') {
   if (res.headersSent) return res.end();
   res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': type });

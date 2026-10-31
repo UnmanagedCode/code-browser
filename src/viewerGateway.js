@@ -2,6 +2,7 @@ import { WebSocketServer } from 'ws';
 import { assertName } from './browserManager.js';
 import { CodedError } from './errors.js';
 import { MAX_FRAME_DIM, WS_MAX_PAYLOAD } from './limits.js';
+import { parsePathname } from './http.js';
 import { requestRefusal } from './requestGuard.js';
 
 const VIEWER_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
@@ -179,7 +180,7 @@ export function createViewerGateway({ manager, log = console, pingMs = PING_MS }
       const refuse = (status, text) => {
         socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
       };
-      if (new URL(req.url, 'http://localhost').pathname !== WS_PATH) return refuse(404, 'Not Found');
+      if (parsePathname(req.url) !== WS_PATH) return refuse(404, 'Not Found');
       if (requestRefusal(req.headers, { requireOrigin: true })) return refuse(403, 'Forbidden');
       wss.handleUpgrade(req, socket, head, onConnection);
     },

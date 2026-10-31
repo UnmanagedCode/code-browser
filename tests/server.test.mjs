@@ -7,7 +7,7 @@ import { createApp } from '../src/app.js';
 import { CodedError } from '../src/errors.js';
 import { CSP } from '../src/http.js';
 import { buildRoutes } from '../src/routes.js';
-import { JSON_HEADERS, listen, request, tmpDir } from './helpers.mjs';
+import { JSON_HEADERS, listen, rawExchange, request, tmpDir } from './helpers.mjs';
 
 const MUTATORS = ['create', 'start', 'stop', 'delete'];
 
@@ -196,4 +196,27 @@ test('every GET route leaves the mutating manager methods uncalled', async () =>
     await request(port, { path: p });
   }
   for (const m of MUTATORS) assert.ok(!manager.calls.includes(m), `${m} was called by a GET`);
+});
+
+// Invariant: a request target that is not a valid URL is a 400, not an unhandled throw (the guard still comes first).
+test('malformed request targets answer 400', async () => {
+  const { port, host } = await boot();
+  for (const target of ['//[', 'http://[']) {
+    const answer = await rawExchange(port, `GET ${target} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+    assert.match(answer, /^HTTP\/1\.1 400 /, target);
+    assert.match(answer, /content-security-policy/i);
+  }
+  const foreign = await rawExchange(port, `GET //[ HTTP/1.1\r\nHost: ${host}\r\nOrigin: http://evil.test\r\nConnection: close\r\n\r\n`);
+  assert.match(foreign, /^HTTP\/1\.1 403 /, 'a foreign Origin is refused before the target is looked at');
+  assert.equal((await request(port, { path: '/api/health' })).status, 200);
+});
+
+// Invariant: whatever the upgrade handler does, even throwing, the socket is destroyed and the process survives.
+test('an upgrade handler that throws cannot take the process down', async () => {
+  const server = createApp({ manager: fakeManager(), mcp: { handle: async () => ({}) }, distDir: tmpDir(), onUpgrade: () => { throw new Error('boom'); } });
+  const port = await listen(server);
+  servers.push(server);
+  const answer = await rawExchange(port, `GET /api/ws HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nOrigin: http://127.0.0.1:${port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`);
+  assert.equal(answer, '');
+  assert.equal((await request(port, { path: '/api/health' })).status, 200);
 });

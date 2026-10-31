@@ -1,8 +1,7 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import net from 'node:net';
 import WebSocket from 'ws';
-import { liveStack, sleep, waitFor } from './helpers.mjs';
+import { liveStack, rawExchange, sleep, waitFor } from './helpers.mjs';
 
 let stack;
 afterEach(async () => { await stack?.close(); stack = null; });
@@ -233,15 +232,28 @@ test('stopping a browser tells its viewers', async () => {
   await v.waitFor((x) => x.last('browsers').list[0].status === 'stopped', 'browsers list updated');
 });
 
-// Invariant: a raw TCP client sending garbage to the upgrade path cannot crash the server.
-test('garbage upgrade requests do not crash the backend', async () => {
+// Invariant: an upgrade request whose target cannot be parsed as a URL is refused with 400 (before and regardless
+// of any Origin) and never takes the process down; the backend keeps answering afterwards.
+test('malformed upgrade targets are refused with 400 and do not crash the backend', async () => {
   await boot();
-  await new Promise((resolve) => {
-    const s = net.connect(stack.port, '127.0.0.1', () => s.write('GET /api/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'));
-    s.on('data', () => {});
-    s.on('close', resolve);
-    s.on('error', resolve);
-  });
-  const res = await fetch(`http://127.0.0.1:${stack.port}/api/health`);
-  assert.equal(res.status, 200);
+  const targets = ['//[', 'http://[', '//[/api/ws', 'http://[::1'];
+  const origins = [undefined, 'http://evil.test', `http://127.0.0.1:${stack.port}`];
+  for (const target of targets) {
+    for (const origin of origins) {
+      const head = `GET ${target} HTTP/1.1\r\nHost: 127.0.0.1:${stack.port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n`
+        + `Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n${origin ? `Origin: ${origin}\r\n` : ''}\r\n`;
+      const answer = await rawExchange(stack.port, head);
+      assert.match(answer, /^HTTP\/1\.1 400 /, `${target} origin=${origin}: ${JSON.stringify(answer.slice(0, 60))}`);
+      const res = await fetch(`http://127.0.0.1:${stack.port}/api/health`);
+      assert.equal(res.status, 200, `backend died after ${target}`);
+    }
+  }
+});
+
+// Invariant: a well-formed upgrade request that fails the handshake (here: no websocket key) cannot crash it either.
+test('an incomplete websocket handshake does not crash the backend', async () => {
+  await boot();
+  const origin = `http://127.0.0.1:${stack.port}`;
+  await rawExchange(stack.port, `GET /api/ws HTTP/1.1\r\nHost: 127.0.0.1:${stack.port}\r\nOrigin: ${origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`);
+  assert.equal((await fetch(`${origin}/api/health`)).status, 200);
 });

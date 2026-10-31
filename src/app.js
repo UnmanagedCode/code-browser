@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { CodedError, statusFor } from './errors.js';
-import { readJsonBody, requireJson, sendJson, sendText, serveStatic } from './http.js';
+import { parsePathname, readJsonBody, requireJson, sendJson, serveStatic } from './http.js';
 import { requestRefusal } from './requestGuard.js';
 import { buildRoutes } from './routes.js';
 
@@ -12,7 +12,8 @@ export function createApp({ manager, mcp, distDir, onUpgrade }) {
   async function dispatch(req, res) {
     const refusal = requestRefusal(req.headers);
     if (refusal) return sendJson(res, 403, { error: `FORBIDDEN: ${refusal}` });
-    const { pathname } = new URL(req.url, 'http://localhost');
+    const pathname = parsePathname(req.url);
+    if (pathname === null) return sendJson(res, 400, { error: 'BAD_REQUEST: malformed request target' });
     if (req.method === 'GET' && !pathname.startsWith('/api/')) return serveStatic(res, distDir, pathname);
     let allowed = false;
     for (const route of routes) {
@@ -51,7 +52,17 @@ export function createApp({ manager, mcp, distDir, onUpgrade }) {
   if (onUpgrade) {
     server.on('upgrade', (req, socket, head) => {
       socket.on('error', () => {});
-      onUpgrade(req, socket, head);
+      // Nothing an upgrade handler does may take the process down: refuse or drop the socket instead.
+      try {
+        if (parsePathname(req.url) === null) {
+          socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+          return;
+        }
+        onUpgrade(req, socket, head);
+      } catch (err) {
+        console.error('code-browser: upgrade failed:', err);
+        socket.destroy();
+      }
     });
   }
   return server;

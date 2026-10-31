@@ -1,4 +1,5 @@
 import http from 'node:http';
+import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -150,4 +151,16 @@ export function liveStack({ env = {}, leaseMs = 30_000 } = {}) {
     },
   };
   return stack;
+}
+
+// Send raw bytes over TCP and return everything the server answers until it closes the connection.
+export function rawExchange(port, text, { timeout = 2000 } = {}) {
+  return new Promise((resolve) => {
+    const s = net.connect(port, '127.0.0.1', () => s.write(text));
+    let buf = '';
+    s.on('data', (d) => { buf += d; });
+    s.on('close', () => resolve(buf));
+    s.on('error', () => resolve(buf));
+    setTimeout(() => { s.destroy(); }, timeout).unref();
+  });
 }
