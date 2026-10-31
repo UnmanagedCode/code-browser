@@ -75,3 +75,14 @@ test('a take cancels a pending lease', () => {
   clock.advance(5000);
   assert.ok(c.isHolder('v2'));
 });
+
+// Invariant: reporting the holder as gone again does not extend the lease (the gateway reports on every change).
+test('repeated viewerGone does not restart the lease', () => {
+  const { c, clock } = make(1000);
+  c.take('v1');
+  c.viewerGone('v1');
+  clock.advance(600);
+  c.viewerGone('v1');
+  clock.advance(500);
+  assert.equal(c.kind(), 'agent');
+});

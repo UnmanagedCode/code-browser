@@ -1,7 +1,7 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import WebSocket from 'ws';
-import { liveStack, rawExchange, sleep, waitFor } from './helpers.mjs';
+import { fakeClock, liveStack, rawExchange, sleep, waitFor } from './helpers.mjs';
 
 let stack;
 afterEach(async () => { await stack?.close(); stack = null; });
@@ -201,25 +201,87 @@ test('an oversized message closes the connection', async () => {
   assert.equal(await closed, 1009);
 });
 
-// Invariant: control reverts to the agent when the holder stays away past the lease, and survives a quick reconnect.
-test('lease: control reverts after the holder disconnects', async () => {
-  await boot({ leaseMs: 120 });
-  const holder = await stack.viewer({ viewerId: 'holder-1234' });
+// The lease starts when the holder no longer *views* the browser, whatever the reason; it is tested with a fake clock.
+const LEASE = 1000;
+async function holderOf(clock, { viewerId = 'holder-1234' } = {}) {
+  await boot({ clock, leaseMs: LEASE });
+  const holder = await stack.viewer({ viewerId });
   await view(holder);
   holder.send({ msg: 'control', action: 'take' });
   await holder.waitFor((x) => x.last('state').controller.you, 'control');
-  holder.ws.terminate();
-  await waitFor(() => stack.manager.summary('a').controller === 'agent', { what: 'lease expiry', timeout: 3000 });
+  return holder;
+}
+const kind = () => stack.manager.summary('a').controller;
+const settle = () => sleep(60); // let the gateway process the message
 
-  const again = await stack.viewer({ viewerId: 'holder-5678' });
-  await view(again);
-  again.send({ msg: 'control', action: 'take' });
-  await again.waitFor((x) => x.last('state').controller.you, 'control');
-  again.ws.terminate();
+// Invariant: a holder that pauses its view (hidden panel: view null, socket stays open) loses control after the lease.
+test('lease: pausing the view starts the lease; viewing again in time keeps control', async () => {
+  const clock = fakeClock();
+  const holder = await holderOf(clock);
+  holder.send({ msg: 'view', name: null });
+  await settle();
+  clock.advance(LEASE - 1);
+  assert.equal(kind(), 'human');
+  const before = holder.of('state').length;
+  holder.send({ msg: 'view', name: 'a', maxWidth: 800, maxHeight: 600 });
+  await holder.waitFor((x) => x.of('state').length > before, 'rejoined (a fresh state message)');
+  assert.equal(holder.last('state').controller.you, true);
+  clock.advance(LEASE * 5);
+  assert.equal(kind(), 'human', 'viewing again cancelled the lease');
+
+  holder.send({ msg: 'view', name: null });
+  await settle();
+  clock.advance(LEASE + 1);
+  assert.equal(kind(), 'agent');
+});
+
+// Invariant: switching to another browser (or the list) is "no longer viewing" the first one.
+test('lease: switching to another browser starts the lease on the first', async () => {
+  const clock = fakeClock();
+  const holder = await holderOf(clock);
+  await stack.start('b');
+  holder.send({ msg: 'view', name: 'b', maxWidth: 800, maxHeight: 600 });
+  await waitFor(() => holder.last('state')?.name === 'b', { what: 'viewing b' });
+  clock.advance(LEASE - 1);
+  assert.equal(kind(), 'human');
+  clock.advance(2);
+  assert.equal(kind(), 'agent');
+  assert.equal(stack.manager.summary('b').controller, 'agent', 'taking control of a never gave control of b');
+});
+
+// Invariant: another socket of the same viewer that still views the browser keeps control alive.
+test('lease: a second socket of the holder that still views the browser keeps control', async () => {
+  const clock = fakeClock();
+  const holder = await holderOf(clock);
+  const twin = await stack.viewer({ viewerId: 'holder-1234' });
+  await view(twin);
+  holder.send({ msg: 'view', name: null });
+  await settle();
+  clock.advance(LEASE * 3);
+  assert.equal(kind(), 'human');
+  twin.ws.terminate();
+  await waitFor(() => clock.pending() > 0, { what: 'lease to start once no socket views a' });
+  clock.advance(LEASE + 1);
+  assert.equal(kind(), 'agent');
+});
+
+// Invariant: control also reverts when the holder's socket closes, and a reconnect that views again in time keeps it.
+test('lease: socket close starts the lease; reconnecting and viewing in time keeps control', async () => {
+  const clock = fakeClock();
+  const holder = await holderOf(clock, { viewerId: 'holder-5678' });
+  holder.ws.terminate();
+  await waitFor(() => clock.pending() > 0, { what: 'lease to start' });
   const back = await stack.viewer({ viewerId: 'holder-5678' });
-  await sleep(250);
+  clock.advance(LEASE - 1);
   await view(back);
   assert.equal(back.last('state').controller.you, true, 'reconnecting within the lease keeps control');
+  clock.advance(LEASE * 5);
+  assert.equal(kind(), 'human');
+
+  back.ws.terminate();
+  await waitFor(() => clock.pending() > 0, { what: 'second lease to start' });
+  clock.advance(LEASE + 1);
+  assert.equal(kind(), 'agent');
 });
 
 // Invariant: when a browser stops its viewers are told, rather than left watching a frozen frame.

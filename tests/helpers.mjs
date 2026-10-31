@@ -93,7 +93,7 @@ export function decodeFrame(buf) {
 
 export const FAKE_CHROMIUM = new URL('./fakes/fakeChromium.mjs', import.meta.url).pathname;
 
-export function liveStack({ env = {}, leaseMs = 30_000 } = {}) {
+export function liveStack({ env = {}, leaseMs = 30_000, clock = null } = {}) {
   const dataDir = tmpDir();
   const manager = createBrowserManager({
     dataDir,
@@ -101,7 +101,7 @@ export function liveStack({ env = {}, leaseMs = 30_000 } = {}) {
     log: { warn() {}, error() {} },
     timeouts: { launch: 4000, stopGrace: 1500, killGrace: 200, shutdownGrace: 500 },
     createSession: (entry) => createBrowserSession({
-      name: entry.name, cdp: entry.cdp, sandbox: entry.sandbox, log: { warn() {} }, controllerOptions: { leaseMs },
+      name: entry.name, cdp: entry.cdp, sandbox: entry.sandbox, log: { warn() {} }, controllerOptions: { leaseMs, ...(clock ? { schedule: clock.schedule } : {}) },
     }),
   });
   const gateway = createViewerGateway({ manager, log: { error() {} }, pingMs: 60_000 });

@@ -18,7 +18,6 @@ const dim = (v) => (Number.isFinite(v) ? Math.min(MAX_FRAME_DIM, Math.max(0, Mat
 export function createViewerGateway({ manager, log = console, pingMs = PING_MS }) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD, perMessageDeflate: false });
   const conns = new Set();
-  const socketsOf = new Map(); // viewerId -> open socket count
   let nextConnId = 0;
 
   const send = (conn, obj) => { if (conn.ws.readyState === 1) conn.ws.send(JSON.stringify(obj)); };
@@ -39,14 +38,24 @@ export function createViewerGateway({ manager, log = console, pingMs = PING_MS }
     };
   };
 
+  // The holder keeps control while at least one of its sockets views the browser; otherwise its lease runs.
+  function refreshHolder(session) {
+    const holder = session.controller.holder();
+    if (!holder) return;
+    const viewing = [...conns].some((c) => c.viewerId === holder && c.session === session);
+    if (viewing) session.controller.viewerBack(holder); else session.controller.viewerGone(holder);
+  }
+
   function leave(conn) {
-    if (!conn.session) return;
-    conn.session.screencast.removeViewer(conn.id);
-    for (const [event, fn] of conn.handlers) conn.session.events.off(event, fn);
+    const session = conn.session;
+    if (!session) return;
+    session.screencast.removeViewer(conn.id);
+    for (const [event, fn] of conn.handlers) session.events.off(event, fn);
     conn.handlers = [];
     conn.session = null;
     conn.name = null;
     delete conn.last.state;
+    refreshHolder(session);
   }
 
   function join(conn, name, maxWidth, maxHeight) {
@@ -68,6 +77,7 @@ export function createViewerGateway({ manager, log = console, pingMs = PING_MS }
       bufferedAmount: () => conn.ws.bufferedAmount,
       maxWidth, maxHeight,
     });
+    refreshHolder(session);
   }
 
   function requireControl(conn) {
@@ -76,16 +86,11 @@ export function createViewerGateway({ manager, log = console, pingMs = PING_MS }
     return conn.session;
   }
 
-  const sessions = () => manager.list().filter((b) => b.status === 'running').map((b) => manager.session(b.name)).filter(Boolean);
-
   const handlers = {
     hello(conn, msg) {
       if (conn.viewerId) throw new CodedError('BAD_REQUEST', 'already said hello');
       if (typeof msg.viewerId !== 'string' || !VIEWER_ID_RE.test(msg.viewerId)) throw new CodedError('BAD_REQUEST', 'invalid viewerId');
       conn.viewerId = msg.viewerId;
-      const n = (socketsOf.get(conn.viewerId) ?? 0) + 1;
-      socketsOf.set(conn.viewerId, n);
-      if (n === 1) for (const s of sessions()) s.controller.viewerBack(conn.viewerId);
       sendIfChanged(conn, 'browsers', { type: 'browsers', list: manager.list() });
     },
     view(conn, msg) {
@@ -142,11 +147,6 @@ export function createViewerGateway({ manager, log = console, pingMs = PING_MS }
     ws.on('close', () => {
       conns.delete(conn);
       leave(conn);
-      if (!conn.viewerId) return;
-      const n = socketsOf.get(conn.viewerId) - 1;
-      if (n > 0) { socketsOf.set(conn.viewerId, n); return; }
-      socketsOf.delete(conn.viewerId);
-      for (const s of sessions()) s.controller.viewerGone(conn.viewerId);
     });
   }
 

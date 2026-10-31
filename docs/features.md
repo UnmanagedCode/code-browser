@@ -51,7 +51,7 @@ Open it from cc's **Browser** nav entry, or from the `panelPath` link an agent g
 
 - Three states per viewer: **Agent has control** (*Take control*), **You have control** (*Hand back*), **Another viewer has control** (*Take control*, which takes it over).
 - Only the holder can send input, navigate, open or close tabs, or answer dialogs. Anyone can watch and switch the viewed tab. The backend refuses everything else with `NOT_CONTROLLER`.
-- Control belongs to a viewer id kept per browser tab. If the holder has no open socket for `CONTROL_LEASE_MS` (`src/limits.js`) it reverts to the agent, so a phone that went to sleep does not lock the agent out. A quick reconnect keeps control.
+- Control belongs to a viewer id kept per browser tab. If none of the holder's sockets *views* that browser for `CONTROL_LEASE_MS` (`src/limits.js`), control reverts to the agent: the panel was backgrounded (it pauses its view), the holder opened another browser or the list, or the socket closed (a phone that went to sleep). Viewing the browser again before the lease expires keeps control.
 
 ### Tab following
 
