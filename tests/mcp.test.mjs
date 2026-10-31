@@ -6,20 +6,26 @@ import { createMcp } from '../src/mcp.js';
 
 const manifest = JSON.parse(fs.readFileSync(new URL('../conductor.plugin.json', import.meta.url), 'utf8'));
 
-function fakeManager({ controller = 'agent', sandbox = true } = {}) {
+function fakeManager({ controller = 'agent', sandbox = true, refuse = false } = {}) {
   const state = new Map();
+  const grants = [];
   return {
+    grants,
+    setAllowUnsandboxed: async (...a) => { grants.push(a); },
     list: () => [...state.values()],
     ensure: (n) => { if (!state.has(n)) state.set(n, { name: n, status: 'stopped' }); },
-    start: async (n) => { state.get(n).status = 'running'; },
+    start: async (n) => {
+      if (refuse) throw new CodedError('SANDBOX_UNAVAILABLE', `Chromium has no usable sandbox on this host, and browser '${n}' is not allowed to run without one`);
+      state.get(n).status = 'running';
+    },
     stop: async (n) => { if (!state.has(n)) throw new CodedError('NOT_FOUND', 'no such browser'); state.get(n).status = 'stopped'; },
     info: async (n) => {
       if (state.get(n)?.status !== 'running') throw new CodedError('NOT_RUNNING', `browser '${n}' is stopped`);
-      return { name: n, status: 'running', cdpEndpoint: 'http://127.0.0.1:9333', controller, sandbox, tabs: [{ targetId: 'T1', url: 'about:blank', title: '', active: true }], activeTargetId: 'T1' };
+      return { name: n, status: 'running', cdpEndpoint: 'http://127.0.0.1:9333', controller, sandbox, allowUnsandboxed: false, tabs: [{ targetId: 'T1', url: 'about:blank', title: '', active: true }], activeTargetId: 'T1' };
     },
   };
 }
-const make = (opts) => createMcp({ manager: fakeManager(opts), pluginDir: '/plug', pluginId: 'code-browser' });
+const make = (opts, manager = fakeManager(opts)) => createMcp({ manager, pluginDir: '/plug', pluginId: 'code-browser' });
 
 // Invariant: the manifest advertises exactly the tools the handler serves, so no tool is declared but dead.
 test('manifest tool names equal the handler keys', () => {
@@ -93,4 +99,38 @@ test('sandbox false adds a one-line warning; sandbox true does not', async () =>
       }
     }
   }
+});
+
+// Invariant: a refused start tells the agent what happened, where the human grants it, and that only the human can;
+// the code stays machine-readable.
+test('start_browser refused for want of a sandbox points at the panel and says to ask the user', async () => {
+  const r = await make({ refuse: true }).handle({ tool: 'start_browser', arguments: { name: 'e2e' } });
+  assert.match(r.error, /^SANDBOX_UNAVAILABLE: /);
+  assert.ok(r.error.includes('/#plugin/code-browser/?browser=e2e'));
+  assert.match(r.error, /Allow without sandbox/);
+  assert.match(r.error, /do not add a host/);
+  assert.match(r.error, /ask the user/);
+  assert.equal(r.text, undefined);
+});
+
+// Invariant: no tool argument can grant the opt-in: unknown arguments are ignored and the manager's setter is never reached.
+test('an allowUnsandboxed argument changes nothing', async () => {
+  const manager = fakeManager({ refuse: true });
+  const mcp = make({}, manager);
+  for (const tool of ['start_browser', 'browser_info', 'stop_browser', 'list_browsers']) {
+    await mcp.handle({ tool, arguments: { name: 'a', allowUnsandboxed: true, allow: true } });
+  }
+  assert.deepEqual(manager.grants, []);
+  assert.deepEqual(mcp.toolNames.sort(), ['browser_info', 'list_browsers', 'start_browser', 'stop_browser']);
+});
+
+// Invariant: the read-only opt-in state is visible to the agent in browser_info and list_browsers.
+test('browser_info meta carries allowUnsandboxed and list_browsers passes it through', async () => {
+  const manager = fakeManager();
+  const mcp = make({}, manager);
+  manager.ensure('a');
+  manager.list()[0].allowUnsandboxed = true;
+  await mcp.handle({ tool: 'start_browser', arguments: { name: 'a' } });
+  assert.equal((await mcp.handle({ tool: 'browser_info', arguments: { name: 'a' } })).meta.allowUnsandboxed, false);
+  assert.equal((await mcp.handle({ tool: 'list_browsers' })).result[0].allowUnsandboxed, true);
 });

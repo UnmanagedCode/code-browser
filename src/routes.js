@@ -2,6 +2,7 @@ import { CodedError } from './errors.js';
 
 // REST table. Every GET handler is read-only: <img> tags and simple requests from any page can reach them.
 // `mutating` routes require a JSON body (the guard enforces it before the handler runs).
+// `requireOrigin` routes are for the panel only: a request with no Origin (cc's MCP bridge, curl) is refused.
 export function buildRoutes({ manager, mcp }) {
   const name = '([^/]+)';
   return [
@@ -22,6 +23,14 @@ export function buildRoutes({ manager, mcp }) {
     {
       method: 'POST', path: new RegExp(`^/api/browsers/${name}/stop$`), mutating: true,
       handler: async ({ params }) => { await manager.stop(params[0]); return { browser: manager.summary(params[0]) }; },
+    },
+    {
+      method: 'POST', path: new RegExp(`^/api/browsers/${name}/allow-unsandboxed$`), mutating: true, requireOrigin: true,
+      handler: async ({ params, body }) => {
+        if (typeof body?.allow !== 'boolean') throw new CodedError('BAD_REQUEST', 'allow must be a boolean');
+        await manager.setAllowUnsandboxed(params[0], body.allow);
+        return { browser: manager.summary(params[0]) };
+      },
     },
     {
       method: 'DELETE', path: new RegExp(`^/api/browsers/${name}$`), mutating: true,

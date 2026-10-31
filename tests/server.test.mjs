@@ -9,7 +9,7 @@ import { CSP } from '../src/http.js';
 import { buildRoutes } from '../src/routes.js';
 import { JSON_HEADERS, listen, rawExchange, request, tmpDir } from './helpers.mjs';
 
-const MUTATORS = ['create', 'start', 'stop', 'delete'];
+const MUTATORS = ['create', 'start', 'stop', 'delete', 'setAllowUnsandboxed'];
 
 // A manager double that records every call; `hang` makes every method never resolve.
 function fakeManager({ hang = false } = {}) {
@@ -32,6 +32,10 @@ function fakeManager({ hang = false } = {}) {
     }),
     start: rec('start', (n) => { browsers.get(n).status = 'running'; }),
     stop: rec('stop', (n) => { browsers.get(n).status = 'stopped'; }),
+    setAllowUnsandboxed: rec('setAllowUnsandboxed', (n, allow) => {
+      if (!browsers.has(n)) throw new CodedError('NOT_FOUND', 'no such browser');
+      browsers.get(n).allowUnsandboxed = allow;
+    }),
     delete: rec('delete', (n) => {
       if (!browsers.delete(n)) throw new CodedError('NOT_FOUND', 'no such browser');
     }),
@@ -130,6 +134,7 @@ const MUTATING = [
   { method: 'POST', path: '/api/browsers', body: '{"name":"x"}' },
   { method: 'POST', path: '/api/browsers/x/start', body: '{}' },
   { method: 'POST', path: '/api/browsers/x/stop', body: '{}' },
+  { method: 'POST', path: '/api/browsers/x/allow-unsandboxed', body: '{"allow":true}', panelOnly: true },
   { method: 'DELETE', path: '/api/browsers/x', body: undefined },
 ];
 
@@ -143,9 +148,9 @@ test('non-JSON content types are refused with 415 and run nothing', async () => 
         const headers = {};
         if (type) headers['content-type'] = type;
         if (origin) headers.origin = origin;
-        const r = await request(port, { ...route, headers });
-        // A foreign Origin is refused first (403); otherwise the content type is (415).
-        assert.equal(r.status, origin ? 403 : 415, `${route.method} ${route.path} ${type} ${origin}`);
+        const r = await request(port, { method: route.method, path: route.path, body: route.body, headers });
+        // A foreign Origin is refused first (403), and so is a panel-only route with no Origin; otherwise the content type is (415).
+        assert.equal(r.status, origin || route.panelOnly ? 403 : 415, `${route.method} ${route.path} ${type} ${origin}`);
       }
     }
   }
@@ -158,12 +163,49 @@ test('a foreign or mismatched Origin is refused with 403 even with JSON', async 
   const { port, manager, mcp } = await boot();
   for (const route of MUTATING) {
     for (const origin of ['http://evil.test', 'http://127.0.0.1:1']) {
-      const r = await request(port, { ...route, headers: { ...JSON_HEADERS, origin } });
+      const r = await request(port, { method: route.method, path: route.path, body: route.body, headers: { ...JSON_HEADERS, origin } });
       assert.equal(r.status, 403, `${route.method} ${route.path} ${origin}`);
     }
   }
   assert.deepEqual(manager.calls, []);
   assert.deepEqual(mcp.calls, []);
+});
+
+// Invariant: the opt-in route is the panel's alone: it needs the page's own Origin (a bridge or script that sends
+// none gets 403 before any handler runs), JSON, and a boolean; a good request returns the summary.
+test('allow-unsandboxed needs the same Origin, JSON and a boolean', async () => {
+  const { port, host, manager } = await boot();
+  await request(port, { method: 'POST', path: '/api/browsers', headers: { ...JSON_HEADERS, host, origin: `http://${host}` }, body: '{"name":"a"}' });
+  manager.calls.length = 0;
+  const path = '/api/browsers/a/allow-unsandboxed';
+  const same = { ...JSON_HEADERS, host, origin: `http://${host}` };
+
+  const noOrigin = await request(port, { method: 'POST', path, headers: JSON_HEADERS, body: '{"allow":true}' });
+  assert.equal(noOrigin.status, 403);
+  assert.match(noOrigin.json.error, /^FORBIDDEN: .*Origin/);
+  assert.equal((await request(port, { method: 'POST', path, headers: { ...JSON_HEADERS, origin: 'http://evil.test' }, body: '{"allow":true}' })).status, 403);
+  assert.equal((await request(port, { method: 'POST', path, headers: { ...same, 'content-type': 'text/plain' }, body: '{"allow":true}' })).status, 415);
+  for (const bad of ['{"allow":"yes"}', '{}', '{"allow":1}']) {
+    assert.equal((await request(port, { method: 'POST', path, headers: same, body: bad })).status, 400, bad);
+  }
+  assert.deepEqual(manager.calls, [], 'nothing reached the manager');
+
+  const ok = await request(port, { method: 'POST', path, headers: same, body: '{"allow":true}' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json.browser.allowUnsandboxed, true);
+  const off = await request(port, { method: 'POST', path, headers: same, body: '{"allow":false}' });
+  assert.equal(off.json.browser.allowUnsandboxed, false);
+  assert.equal((await request(port, { method: 'POST', path: '/api/browsers/ghost/allow-unsandboxed', headers: same, body: '{"allow":true}' })).status, 404);
+});
+
+// Invariant: a start refused for want of a sandbox is a 409 carrying its code, so the panel can tell it from a failure.
+test('start refused with SANDBOX_UNAVAILABLE answers 409 with that code', async () => {
+  const manager = fakeManager();
+  manager.start = async () => { throw new CodedError('SANDBOX_UNAVAILABLE', 'no sandbox'); };
+  const { port, host } = await boot({ manager });
+  const r = await request(port, { method: 'POST', path: '/api/browsers/x/start', headers: { ...JSON_HEADERS, host, origin: `http://${host}` }, body: '{}' });
+  assert.equal(r.status, 409);
+  assert.match(r.json.error, /^SANDBOX_UNAVAILABLE: /);
 });
 
 // Invariant: cc's server-side MCP call (no Origin, JSON) is accepted on api/mcp.
@@ -228,7 +270,7 @@ test('a rebound Host on the backend port is refused with 403 on every route but 
   const host = `rebound.evil.test:${port}`;
   const headers = { ...JSON_HEADERS, host, origin: `http://${host}` };
   for (const route of MUTATING) {
-    const r = await request(port, { ...route, headers });
+    const r = await request(port, { method: route.method, path: route.path, body: route.body, headers });
     assert.equal(r.status, 403, `${route.method} ${route.path}`);
     assert.match(r.json.error, /loopback/);
   }

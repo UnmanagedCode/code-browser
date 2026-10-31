@@ -75,8 +75,10 @@ export function App({ socket }: { socket: ViewerSocket }) {
           socket={socket}
           state={shownState}
           dialogs={dialogs}
+          summary={summary}
+          onError={setError}
           onBack={() => open(null)}
-          onStart={() => { api.startBrowser(name).catch((e: Error) => setError(e.message)); }}
+          onStart={() => { api.startBrowser(name).catch((e: Error) => { if (!api.isSandboxRefusal(e)) setError(e.message); }); }}
         />
       )}
     </>

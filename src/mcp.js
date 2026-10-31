@@ -10,6 +10,9 @@ const HUMAN_NOTE = 'A human currently has control of this browser. Do not drive 
 const UNSANDBOXED_NOTE = "WARNING: this browser runs without Chromium's sandbox (the host has no usable one), so a compromised page could "
   + 'run code as the host user. Do not browse untrusted pages in it, especially with logged-in profiles.';
 
+const sandboxUnavailable = (err, path) => new CodedError(err.code, `${err.message}. A human must enable "Allow without sandbox" for this browser in the code-browser panel: ${path} `
+  + '(relative to the address the user opens cc at; do not add a host). You cannot enable it yourself: ask the user, then call start_browser again.');
+
 // cc POSTs {tool, arguments, caller} and expects HTTP 200 with {result}, {error} or {text, meta?}.
 export function createMcp({ manager, pluginDir, pluginId }) {
   const nameOf = (args) => assertName(args?.name ?? DEFAULT_BROWSER_NAME);
@@ -23,6 +26,7 @@ export function createMcp({ manager, pluginDir, pluginId }) {
       cdpEndpoint: info.cdpEndpoint,
       controller: info.controller,
       sandbox: info.sandbox,
+      allowUnsandboxed: info.allowUnsandboxed,
       tabs: info.tabs,
       panelPath: path,
     };
@@ -48,7 +52,11 @@ export function createMcp({ manager, pluginDir, pluginId }) {
     start_browser: async (args) => {
       const name = nameOf(args);
       manager.ensure(name);
-      await manager.start(name);
+      try {
+        await manager.start(name);
+      } catch (err) {
+        throw err.code === 'SANDBOX_UNAVAILABLE' ? sandboxUnavailable(err, panelPath(name, pluginId)) : err;
+      }
       return browserInfo(name);
     },
     stop_browser: async (args) => {
