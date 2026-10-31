@@ -31,3 +31,20 @@ export function request(port, { method = 'GET', path: p = '/', headers = {}, bod
 }
 
 export const JSON_HEADERS = { 'content-type': 'application/json' };
+
+export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Poll until `fn` returns truthy. Short steps and a hard cap keep failures fast.
+export async function waitFor(fn, { timeout = 3000, step = 25, what = 'condition' } = {}) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await sleep(step);
+  }
+}
+
+export function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; }
+}

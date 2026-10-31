@@ -23,3 +23,8 @@ export const SHUTDOWN_GRACE_MS = 2_000;
 // HTTP / WebSocket
 export const MAX_BODY_BYTES = 64 * 1024;
 export const WS_MAX_PAYLOAD = 64 * 1024;
+
+// CDP client and launch polling
+export const CDP_MAX_PAYLOAD = 64 * 1024 * 1024;
+export const POLL_MS = 25;
+export const LOG_TAIL_CHARS = 2000;
