@@ -129,6 +129,8 @@ export function Screen({ socket, hasControl, keyboardRequest }: Props) {
       sendInput({ kind: 'wheel', x: p.x, y: p.y, deltaX: e.deltaX * unit, deltaY: e.deltaY * unit, modifiers: modifiersOf(e) });
     };
     const noMenu = (e: Event) => e.preventDefault();
+    // A press on the (unfocusable) canvas would otherwise move focus off the keyboard sink.
+    const keepFocus = (e: MouseEvent) => e.preventDefault();
 
     canvas.addEventListener('pointerdown', onDown);
     canvas.addEventListener('pointermove', onMove);
@@ -136,6 +138,7 @@ export function Screen({ socket, hasControl, keyboardRequest }: Props) {
     canvas.addEventListener('pointercancel', onCancel);
     canvas.addEventListener('wheel', onWheel, { passive: false });
     canvas.addEventListener('contextmenu', noMenu);
+    canvas.addEventListener('mousedown', keepFocus);
     return () => {
       cancelAnimationFrame(raf);
       canvas.removeEventListener('pointerdown', onDown);
@@ -144,6 +147,7 @@ export function Screen({ socket, hasControl, keyboardRequest }: Props) {
       canvas.removeEventListener('pointercancel', onCancel);
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('contextmenu', noMenu);
+      canvas.removeEventListener('mousedown', keepFocus);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handlers read refs; the socket is stable
   }, [socket]);

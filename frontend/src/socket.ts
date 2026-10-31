@@ -36,6 +36,10 @@ export function createViewerSocket({ url, viewerId, createSocket = (u) => new We
   let backoff = BACKOFF_START_MS;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
+  // A frame that arrives while nothing is subscribed (the screen has not mounted yet: a late joiner's cached
+  // frame comes right after `state`) is held for the next subscriber. Dropping it would leave it un-acked,
+  // and the backend sends no further frame to a viewer with one in flight.
+  let held: { header: FrameHeader; jpeg: Uint8Array } | null = null;
 
   const status = (s: SocketStatus) => statusFns.forEach((fn) => fn(s));
   const isOpen = () => ws !== null && ws.readyState === 1;
@@ -68,7 +72,8 @@ export function createViewerSocket({ url, viewerId, createSocket = (u) => new We
         messageFns.forEach((fn) => fn(msg));
       } else {
         const { header, jpeg } = decodeFrame(ev.data as ArrayBuffer);
-        frameFns.forEach((fn) => fn(header, jpeg));
+        if (frameFns.size === 0) held = { header, jpeg };
+        else frameFns.forEach((fn) => fn(header, jpeg));
       }
     };
     ws.onclose = () => {
@@ -87,14 +92,26 @@ export function createViewerSocket({ url, viewerId, createSocket = (u) => new We
   const subscribe = <T>(set: Set<T>, fn: T) => { set.add(fn); return () => { set.delete(fn); }; };
   return {
     send: rawSend,
-    setView(view) { desired = view; syncView(); },
+    setView(view) {
+      if ((view?.name ?? null) !== (desired?.name ?? null)) held = null; // a frame of the previous browser is stale
+      desired = view;
+      syncView();
+    },
     setViewport(maxWidth, maxHeight) {
       if (!desired) return;
       desired = { ...desired, maxWidth, maxHeight };
       if (effective()) rawSend({ msg: 'viewport', maxWidth, maxHeight });
     },
     onMessage: (fn) => subscribe(messageFns, fn),
-    onFrame: (fn) => subscribe(frameFns, fn),
+    onFrame(fn) {
+      const off = subscribe(frameFns, fn);
+      if (held) {
+        const { header, jpeg } = held;
+        held = null;
+        fn(header, jpeg);
+      }
+      return off;
+    },
     onStatus: (fn) => subscribe(statusFns, fn),
     close() {
       closed = true;

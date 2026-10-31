@@ -16,6 +16,8 @@ if (!profile) { console.error('fake chromium: no --user-data-dir'); process.exit
 
 if (process.env.FAKE_CHROMIUM_REQUIRE_NO_SANDBOX && !args.includes('--no-sandbox')) {
   console.error('[1:1:0101/000000.000000:FATAL:zygote_host_impl_linux.cc(130)] No usable sandbox! (fake)');
+  // Real Chromium follows the message with a long crash dump, which pushes it out of any log tail.
+  for (let i = 0; i < 80; i++) console.error(`#${i} 0x${i.toString(16).padStart(12, '0')} (/fake/chrome+0x${(i * 4096).toString(16)})`);
   process.exit(134);
 }
 

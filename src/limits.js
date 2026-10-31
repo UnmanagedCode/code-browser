@@ -28,3 +28,4 @@ export const WS_MAX_PAYLOAD = 64 * 1024;
 export const CDP_MAX_PAYLOAD = 64 * 1024 * 1024;
 export const POLL_MS = 25;
 export const LOG_TAIL_CHARS = 2000;
+export const LOG_SCAN_CHARS = 256 * 1024;

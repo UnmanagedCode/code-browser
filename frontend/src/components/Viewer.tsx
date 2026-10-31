@@ -62,6 +62,7 @@ export function Viewer({ name, socket, state, dialogs, onBack, onStart }: Props)
               key={dialog.tabId}
               dialog={dialog}
               hasControl={hasControl}
+              onTake={() => socket.send({ msg: 'control', action: 'take' })}
               onAnswer={(action, promptText) => socket.send({ msg: 'dialog', tabId: dialog.tabId, action, ...(promptText === undefined ? {} : { promptText }) })}
             />
           )}

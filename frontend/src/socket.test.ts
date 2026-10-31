@@ -148,6 +148,51 @@ describe('viewer socket', () => {
     expect(frames).toEqual([[4, 3]]);
   });
 
+  const frameBuffer = (seq: number) => {
+    const head = new TextEncoder().encode(JSON.stringify({ seq, tabId: 't', width: 1, height: 1, meta: {} }));
+    const buf = new Uint8Array(4 + head.length + 1);
+    new DataView(buf.buffer).setUint32(0, head.length);
+    buf.set(head, 4);
+    return buf.buffer;
+  };
+
+  // Invariant: a frame that arrives before anything subscribed (the screen mounts just after `state`) is delivered
+  // once to the first subscriber, so it is drawn and acked instead of leaving the backend waiting forever.
+  it('holds a frame that arrives with no subscriber and delivers it once', () => {
+    const s = make();
+    last().open();
+    last().onmessage?.({ data: frameBuffer(1) });
+    last().onmessage?.({ data: frameBuffer(2) });
+    const seen: number[] = [];
+    s.onFrame((h) => seen.push(h.seq))();
+    s.onFrame((h) => seen.push(h.seq));
+    expect(seen).toEqual([2]);
+  });
+
+  // Invariant: with a subscriber present frames are delivered directly and never held.
+  it('does not hold frames while subscribed', () => {
+    const s = make();
+    last().open();
+    const seen: number[] = [];
+    const off = s.onFrame((h) => seen.push(h.seq));
+    last().onmessage?.({ data: frameBuffer(1) });
+    off();
+    s.onFrame((h) => seen.push(h.seq));
+    expect(seen).toEqual([1]);
+  });
+
+  // Invariant: a held frame of a previous browser is discarded when the view changes.
+  it('drops a held frame when the viewed browser changes', () => {
+    const s = make();
+    s.setView({ name: 'a', maxWidth: 0, maxHeight: 0 });
+    last().open();
+    last().onmessage?.({ data: frameBuffer(1) });
+    s.setView({ name: 'b', maxWidth: 0, maxHeight: 0 });
+    const seen: number[] = [];
+    s.onFrame((h) => seen.push(h.seq));
+    expect(seen).toEqual([]);
+  });
+
   // Invariant: close() stops reconnecting.
   it('close stops reconnection', () => {
     const s = make();

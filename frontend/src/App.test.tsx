@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import type { BrowserState, BrowserSummary, ClientMessage, FrameHeader, ServerMessage } from './protocol';
@@ -215,6 +215,14 @@ describe('dialogs', () => {
     expect(f.sent).toContainEqual({ msg: 'dialog', tabId: 'T1', action: 'accept' });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(f.sent).toContainEqual({ msg: 'dialog', tabId: 'T1', action: 'dismiss' });
+  });
+
+  // Invariant: a viewer without control can take it from the dialog itself (the backdrop covers the controller bar).
+  it('the dialog offers Take control when the viewer lacks it', async () => {
+    await openViewer({ kind: 'agent' });
+    await f.emit({ type: 'dialog', tabId: 'T1', dialogType: 'alert', message: 'hi', defaultPrompt: '' });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Take control' }));
+    expect(f.sent).toContainEqual({ msg: 'control', action: 'take' });
   });
 
   it('a prompt sends its text with accept, and dialogClosed removes it', async () => {

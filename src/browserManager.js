@@ -9,7 +9,7 @@ import { buildArgs, isSandboxFailure } from './chromium/args.js';
 import { locateChromium } from './chromium/locate.js';
 import { pluginDir } from './config.js';
 import { CodedError } from './errors.js';
-import { CDP_TIMEOUT_MS, KILL_GRACE_MS, LAUNCH_TIMEOUT_MS, LOG_TAIL_CHARS, NAME_RE, POLL_MS, SHUTDOWN_GRACE_MS, STOP_GRACE_MS } from './limits.js';
+import { CDP_TIMEOUT_MS, KILL_GRACE_MS, LAUNCH_TIMEOUT_MS, LOG_SCAN_CHARS, LOG_TAIL_CHARS, NAME_RE, POLL_MS, SHUTDOWN_GRACE_MS, STOP_GRACE_MS } from './limits.js';
 import { pidAlive, reap, removeRun, runNames, writeRun } from './runState.js';
 
 const KEEPER = path.join(pluginDir, 'src', 'chromium', 'keeper.js');
@@ -97,8 +97,9 @@ export function createBrowserManager({
     return profileExists(name) ? { name } : create(name);
   }
 
-  const readLogTail = (logFile) => {
-    try { return fs.readFileSync(logFile, 'utf8').slice(-LOG_TAIL_CHARS); } catch { return ''; }
+  // The sandbox message opens a long crash dump, so detection reads the head of the log, not its tail.
+  const readLog = (logFile) => {
+    try { return fs.readFileSync(logFile, 'utf8').slice(0, LOG_SCAN_CHARS); } catch { return ''; }
   };
 
   function spawnKeeper(chrome, args, logFile) {
@@ -155,8 +156,8 @@ export function createBrowserManager({
     if (found) return { handle, ...found, sandbox };
     const timedOut = found === undefined;
     if (timedOut) await killHandle(handle);
-    const tail = readLogTail(logFile);
-    return { failed: { timedOut, tail, sandboxFailure: !timedOut && sandbox && isSandboxFailure(tail) } };
+    const log = readLog(logFile);
+    return { failed: { timedOut, tail: log.slice(-LOG_TAIL_CHARS), sandboxFailure: !timedOut && sandbox && isSandboxFailure(log) } };
   }
 
   async function doStart(name) {

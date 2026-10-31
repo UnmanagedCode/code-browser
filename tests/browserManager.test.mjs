@@ -125,7 +125,8 @@ test('launch timeout gives LAUNCH_FAILED with the log tail and kills the browser
   assert.equal(manager.summary('a').status, 'stopped');
 });
 
-// Invariant: an unusable sandbox is a logged, visible degradation (sandbox:false), not a silent one.
+// Invariant: an unusable sandbox is a logged, visible degradation (sandbox:false), not a silent one, even when the
+// message opens a crash dump much longer than the reported log tail (as real Chromium's does).
 test('sandbox failure relaunches with --no-sandbox and reports sandbox false', async () => {
   const { manager, warns, profile } = make({ env: { FAKE_CHROMIUM_REQUIRE_NO_SANDBOX: '1' } });
   manager.create('a');
