@@ -34,6 +34,7 @@ export function createBrowserManager({
   log = console,
   timeouts = {},
   createSession = null,
+  trashFs = { readdirSync: fs.readdirSync, chmodSync: fs.chmodSync }, // seam: boot's trash walk races with deletions
 } = {}) {
   const t = { launch: LAUNCH_TIMEOUT_MS, stopGrace: STOP_GRACE_MS, killGrace: KILL_GRACE_MS, shutdownGrace: SHUTDOWN_GRACE_MS, ...timeouts };
   const events = new EventEmitter();
@@ -257,8 +258,15 @@ export function createBrowserManager({
   async function boot() {
     for (const dir of [dataDir, profilesDir, logsDir, path.join(dataDir, 'run'), trashDir]) ensurePrivateDir(dir);
     for (const name of names()) fs.chmodSync(profileOf(name), PRIVATE_DIR_MODE);
-    for (const entry of fs.readdirSync(trashDir, { withFileTypes: true })) {
-      if (entry.isDirectory()) fs.chmodSync(path.join(trashDir, entry.name), PRIVATE_DIR_MODE);
+    // An old backend's asynchronous rm of a trash entry may still be running (cc's restart overlap): an entry
+    // that vanishes between the listing and the chmod is fine; any other error is not.
+    for (const entry of trashFs.readdirSync(trashDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        trashFs.chmodSync(path.join(trashDir, entry.name), PRIVATE_DIR_MODE);
+      } catch (err) {
+        if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') throw err;
+      }
     }
     const all = new Set([...names(), ...runNames(dataDir)]);
     for (const name of all) {

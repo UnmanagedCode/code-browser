@@ -9,13 +9,14 @@ import { tmpDir, waitFor } from './helpers.mjs';
 const FAKE = new URL('./fakes/fakeChromium.mjs', import.meta.url).pathname;
 const managers = [];
 
-function make({ dataDir = tmpDir(), env = {}, timeouts = {} } = {}) {
+function make({ dataDir = tmpDir(), env = {}, timeouts = {}, trashFs } = {}) {
   const warns = [];
   const manager = createBrowserManager({
     dataDir,
     env: { ...process.env, CODE_BROWSER_CHROMIUM: FAKE, ...env },
     log: { warn: (m) => warns.push(m) },
     timeouts: { launch: 4000, stopGrace: 1500, killGrace: 200, shutdownGrace: 500, ...timeouts },
+    ...(trashFs ? { trashFs } : {}),
   });
   managers.push(manager);
   return { manager, dataDir, warns, profile: (n) => path.join(dataDir, 'profiles', n) };
@@ -202,4 +203,32 @@ test('data tree is 0700 and run files and logs are 0600, including pre-existing 
   assert.equal(modeOf(path.join(dataDir, 'logs', 'a.log')), 0o600, 'a pre-existing log is tightened too');
   await manager.delete('a');
   assert.equal(modeOf(path.join(dataDir, 'trash')), 0o700);
+});
+
+// Invariant: a trash entry that vanishes between the listing and the chmod (an old backend's asynchronous rm during
+// cc's restart overlap) does not fail boot, entries that remain are still tightened, and any other chmod error is not hidden.
+test('boot tolerates a trash entry that vanishes mid-listing but not other errors', async () => {
+  const dataDir = path.join(tmpDir(), '.code-browser');
+  for (const d of ['trash/gone-1', 'trash/kept-1', 'trash/other-1']) fs.mkdirSync(path.join(dataDir, d), { recursive: true, mode: 0o755 });
+  for (const d of ['trash/gone-1', 'trash/kept-1', 'trash/other-1']) fs.chmodSync(path.join(dataDir, d), 0o755);
+  const vanish = (code) => (target, mode) => {
+    if (target.endsWith('gone-1')) {
+      fs.rmSync(target, { recursive: true });
+      return fs.chmodSync(target, mode); // really ENOENT now
+    }
+    if (code && target.endsWith('other-1')) throw Object.assign(new Error('denied'), { code });
+    return fs.chmodSync(target, mode);
+  };
+  for (const code of ['ENOENT', 'ENOTDIR']) {
+    const e = Object.assign(new Error('gone'), { code });
+    const { manager } = make({ dataDir, trashFs: { readdirSync: fs.readdirSync, chmodSync: (t, m) => { if (t.endsWith('gone-1')) throw e; return fs.chmodSync(t, m); } } });
+    await manager.boot();
+    assert.equal(modeOf(path.join(dataDir, 'trash', 'kept-1')), 0o700, `${code}: remaining entries are tightened`);
+  }
+  const real = make({ dataDir, trashFs: { readdirSync: fs.readdirSync, chmodSync: vanish() } });
+  await real.manager.boot();
+  assert.ok(!fs.existsSync(path.join(dataDir, 'trash', 'gone-1')));
+
+  const { manager: strict } = make({ dataDir, trashFs: { readdirSync: fs.readdirSync, chmodSync: vanish('EACCES') } });
+  await assert.rejects(strict.boot(), (err) => err.code === 'EACCES');
 });
