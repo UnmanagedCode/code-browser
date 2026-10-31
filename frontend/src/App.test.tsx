@@ -55,14 +55,14 @@ describe('App routing', () => {
     await openViewer();
     expect(screen.getByRole('tablist')).toBeTruthy();
     expect(f.views.at(-1)).toMatchObject({ name: 'a' });
-    expect(screen.queryByRole('heading', { name: 'Browsers' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Code Browser' })).toBeNull();
   });
 
   it('shows the browser list when no browser is selected', async () => {
     goTo('');
     render(<App socket={f.socket} />);
     await f.emit({ type: 'browsers', list: [running('a'), { ...running('b'), status: 'stopped', controller: 'agent', lastExit: { code: null, signal: 'SIGSEGV', at: 1 } }] });
-    expect(screen.getByRole('heading', { name: 'Browsers' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Code Browser' })).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'Open' })).toHaveLength(2);
     expect(screen.getByText('Crashed')).toBeTruthy();
     expect(f.views.at(-1)).toBeNull();
