@@ -91,14 +91,61 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
     backend = await startBackend(projectsRoot);
     cleanup.push(() => backend.proc.kill('SIGKILL'));
     const port = backend.port;
+    // The harness's own browser (Playwright's default headless shell), separate from the shared one under test.
+    panel = await chromium.launch({ chromiumSandbox: false });
+    cleanup.push(() => panel.close().catch(() => {}));
+    const newPage = async () => (await panel.newContext({ viewport: { width: 1000, height: 800 } })).newPage();
+    const listed = async (name = 'e2e') => (await tool(backend.port, 'list_browsers')).result.find((b) => b.name === name);
+    const modeOf = (f) => fs.statSync(f).mode & 0o777;
+    const settingsFile = path.join(dataDir, 'settings', 'e2e.json');
+    const profileDir = path.join(dataDir, 'profiles', 'e2e');
+    const procsFor = (needle) => spawnSync('pgrep', ['-af', needle], { encoding: 'utf8' }).stdout.split('\n').filter((l) => l && !l.includes('pgrep'));
 
     await t.test('1. health answers', async () => {
       const res = await fetch(`http://127.0.0.1:${port}/api/health`);
       assert.deepEqual(await res.json(), { ok: true });
     });
 
+    // Where Chromium's sandbox cannot start, a start is refused until a human allows it in the panel (2, 2b).
+    let refused = false;
+    await t.test('2. start_browser over MCP is refused without the opt-in', async () => {
+      const result = await tool(port, 'start_browser', { name: 'e2e' });
+      if (!result.error?.startsWith('SANDBOX_UNAVAILABLE')) {
+        assert.ok(!result.error, result.error);
+        t.diagnostic('sandbox usable on this host: opt-in path not exercised');
+        return;
+      }
+      refused = true;
+      assert.ok(result.error.includes('/#plugin/code-browser/?browser=e2e'), result.error);
+      assert.match(result.error, /Allow without sandbox/);
+      assert.ok(!fs.existsSync(path.join(dataDir, 'run', 'e2e.json')));
+      assert.deepEqual(procsFor(profileDir), [], 'a refused start must leave no Chromium behind');
+      const b = await listed();
+      assert.equal(b.status, 'stopped');
+      assert.equal(b.allowUnsandboxed, false);
+      assert.equal(b.sandboxUnavailable, true);
+
+      const grant = (headers) => fetch(`http://127.0.0.1:${port}/api/browsers/e2e/allow-unsandboxed`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{"allow":true}' });
+      assert.equal((await grant({})).status, 403, 'no Origin');
+      assert.equal((await grant({ origin: 'http://evil.test' })).status, 403, 'foreign Origin');
+      assert.ok(!fs.existsSync(settingsFile), 'a refused grant must not write the opt-in');
+    });
+
+    await t.test('2b. a human grants it in the panel UI and starts the browser', { skip: !refused && 'sandbox usable on this host' }, async () => {
+      const page = await newPage();
+      await page.goto(`http://127.0.0.1:${port}/?browser=e2e`);
+      await page.getByRole('heading', { name: 'Not started: no usable sandbox' }).waitFor({ timeout: 20_000 });
+      await page.getByRole('button', { name: 'Allow without sandbox…' }).click();
+      await page.getByRole('button', { name: 'Allow', exact: true }).click();
+      await page.getByRole('button', { name: 'Start', exact: true }).click();
+      await waitFor(async () => (await listed()).status === 'running', { what: 'e2e to run after the human allowed it', timeout: 20_000 });
+      assert.equal(modeOf(settingsFile), 0o600);
+      assert.equal(modeOf(path.dirname(settingsFile)), 0o700);
+      await page.close();
+    });
+
     let started;
-    await t.test('2. start_browser over MCP: endpoint, panel path, snippet, loopback only, guards', async () => {
+    await t.test('2c. start_browser result: endpoint, panel path, snippet, loopback only, guards', async () => {
       started = await tool(port, 'start_browser', { name: 'e2e' });
       assert.ok(!started.error, started.error);
       const cdpPort = Number(new URL(started.meta.cdpEndpoint).port);
@@ -106,6 +153,11 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
       assert.equal(started.meta.panelPath, '/#plugin/code-browser/?browser=e2e');
       assert.match(started.text, /connectOverCDP/);
       assert.equal(typeof started.meta.sandbox, 'boolean');
+      if (refused) {
+        assert.equal(started.meta.sandbox, false);
+        assert.equal(started.meta.allowUnsandboxed, true);
+        assert.equal(started.text.split('\n').filter((l) => l.startsWith('WARNING')).length, 1);
+      }
 
       const listening = spawnSync('ss', ['-ltnH', `sport = :${cdpPort}`], { encoding: 'utf8' }).stdout;
       const locals = listening.trim().split('\n').map((line) => line.trim().split(/\s+/)[3]); // Local Address:Port column
@@ -149,12 +201,9 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
     };
 
     await t.test('4. two panel viewers get frames; a human click and typing reach the page', async () => {
-      // The harness's own browser (Playwright's default headless shell), separate from the shared one under test.
-      panel = await chromium.launch({ chromiumSandbox: false });
-      cleanup.push(() => panel.close().catch(() => {}));
       // Separate contexts: pages in one context hide each other, and a hidden panel page pauses its view.
-      p1 = await (await panel.newContext({ viewport: { width: 1000, height: 800 } })).newPage();
-      p2 = await (await panel.newContext({ viewport: { width: 1000, height: 800 } })).newPage();
+      p1 = await newPage();
+      p2 = await newPage();
       const errors = [];
       const consoleLog = [];
       p1.on('pageerror', (e) => errors.push(e.message));
@@ -244,6 +293,7 @@ console.log(await page.textContent('#result'));`);
       cleanup.push(() => backend.proc.kill('SIGKILL'));
       const list = (await tool(backend.port, 'list_browsers')).result;
       assert.deepEqual(list.map((b) => [b.name, b.status]), [['e2e', 'stopped']]);
+      assert.equal(list[0].allowUnsandboxed, refused, 'the opt-in survives a backend restart');
       assert.ok(fs.existsSync(path.join(dataDir, 'profiles', 'e2e')));
 
       const rest = (method, p) => fetch(`http://127.0.0.1:${backend.port}/api/browsers/${p}`, { method, headers: { 'content-type': 'application/json' }, body: method === 'DELETE' ? undefined : '{}' });
@@ -253,9 +303,26 @@ console.log(await page.textContent('#result'));`);
       assert.equal((await rest('POST', 'e2e/stop')).status, 200);
       assert.equal((await rest('POST', 'e2e/start')).status, 200);
       assert.equal(await agent(`console.log((await context.cookies('http://example.test/')).length);`), '1');
+    });
+
+    await t.test('9. a human revokes in the panel (stopping the browser), then delete removes profile and opt-in', async () => {
+      if (refused) {
+        assert.equal((await listed()).status, 'running');
+        const page = await newPage();
+        await page.goto(`http://127.0.0.1:${backend.port}/`);
+        page.once('dialog', (d) => d.accept());
+        await page.getByRole('button', { name: 'Disallow without sandbox' }).click();
+        await waitFor(async () => { const b = await listed(); return b.status === 'stopped' && b.allowUnsandboxed === false; }, { what: 'revoke to stop the browser', timeout: 20_000 });
+        assert.equal((await listed()).lastExit, null, 'a revoke is a deliberate stop, not a crash');
+        assert.ok(!fs.existsSync(settingsFile));
+        assert.match((await tool(backend.port, 'start_browser', { name: 'e2e' })).error, /^SANDBOX_UNAVAILABLE/);
+        await page.close();
+      }
+      const rest = (method, p) => fetch(`http://127.0.0.1:${backend.port}/api/browsers/${p}`, { method, headers: { 'content-type': 'application/json' }, body: method === 'DELETE' ? undefined : '{}' });
       assert.equal((await rest('POST', 'e2e/stop')).status, 200);
       assert.equal((await rest('DELETE', 'e2e')).status, 200);
-      assert.ok(!fs.existsSync(path.join(dataDir, 'profiles', 'e2e')));
+      assert.ok(!fs.existsSync(profileDir));
+      assert.ok(!fs.existsSync(settingsFile));
     });
   } finally {
     for (const fn of cleanup.reverse()) await fn();
