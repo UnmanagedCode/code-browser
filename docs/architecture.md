@@ -23,6 +23,7 @@ src/app.js               HTTP server: guard order, dispatch, clientError, upgrad
 src/mcp.js               the tools; always answers {result}|{error}|{text,meta}
 src/snippet.js           the Playwright snippet; src/panelLink.js the shell link
 src/browserManager.js    profiles, launch/stop/delete, run state, one entry per running browser
+src/browserSettings.js   settings/<name>.json: the per-browser unsandboxed opt-in
 src/chromium/{locate,args,keeper}.js
 src/runState.js          run/<name>.json, pid checks, reap
 src/cdp.js               CDP client over ws
@@ -40,10 +41,11 @@ One responsibility each: `browserManager` owns processes and files, `browserSess
 |---|---|
 | `profiles/<name>/` | the persistent Chromium profile |
 | `run/<name>.json` | `{keeperPid, chromiumPid, startedAt}` while running |
+| `settings/<name>.json` | `{"allowUnsandboxed":true}`; exists only while the opt-in is on (revoking deletes it) |
 | `logs/<name>.log` | Chromium output, truncated on each launch |
 | `trash/<name>-<ts>/` | a deleted profile, removed asynchronously |
 
-Permissions (`src/fsPrivate.js`): the data dir, its top-level dirs (`profiles`, `run`, `logs`, `trash`), each profile root and each trash entry are `0700`; the plugin's run files and logs are `0600`. Existing paths are tightened by chmod at boot, create and start. Files nested inside a profile are Chrome's own; the `0700` profile root shields them. The log holds visited URLs and a profile's `DevToolsActivePort` exposes CDP.
+Permissions (`src/fsPrivate.js`): the data dir, its top-level dirs (`profiles`, `run`, `settings`, `logs`, `trash`), each profile root and each trash entry are `0700`; the plugin's run files, settings files and logs are `0600`. Existing paths are tightened by chmod at boot, create and start. Files nested inside a profile are Chrome's own; the `0700` profile root shields them. The log holds visited URLs and a profile's `DevToolsActivePort` exposes CDP.
 
 `NAME_RE` is the single name check for REST, MCP and the socket (the panel imports it from `src/limits.js`). A new profile is seeded with `session.restore_on_startup = 1` so session cookies (and the previous tabs) survive a stop; an existing profile's `Preferences` is never rewritten.
 
@@ -55,14 +57,16 @@ Permissions (`src/fsPrivate.js`): the data dir, its top-level dirs (`profiles`, 
 2. Remove stale `Singleton*` and `DevToolsActivePort` from the profile.
 3. Spawn the **keeper** (`src/chromium/keeper.js`), detached, with stdio `[pipe, pipe, ignore]`. It spawns Chromium detached (its own process group), logs its output, and prints `{"chromiumPid":N}` then `{"exit":{code,signal}}` on stdout.
 4. Chromium launches with `--remote-debugging-port=0` bound to `127.0.0.1`; the manager polls `DevToolsActivePort` (port, then the browser WebSocket path) within `LAUNCH_TIMEOUT_MS`. Port 0 avoids the race of picking a port first.
-5. Sandboxed first. If Chromium exits during launch and its log carries the sandbox failure (`SANDBOX_FAILURE_PATTERNS` in `src/chromium/args.js`), it relaunches with `--no-sandbox`, logs a warning and reports `sandbox: false`. Detection reads the **head** of the log: the message opens a long crash dump.
+5. Sandboxed first. If Chromium exits during launch and its log carries the sandbox failure (`SANDBOX_FAILURE_PATTERNS` in `src/chromium/args.js`), the start is **refused** with `SANDBOX_UNAVAILABLE` unless `settings/<name>.json` holds the opt-in. The refusal launches nothing, records the name for the summary's `sandboxUnavailable` and emits `change`. With the opt-in it relaunches with `--no-sandbox`, logs a warning and reports `sandbox: false`. Detection reads the **head** of the log: the message opens a long crash dump.
 6. Write the run file, connect CDP, create the `browserSession`.
 
 Launch failures are `LAUNCH_FAILED` with the log tail; a timeout kills the browser first.
 
 **Stop:** `Browser.close` over CDP (flushes the profile), wait `STOP_GRACE_MS`, then `stop` to the keeper, then SIGKILL of both process groups. The run file goes; the profile stays.
 
-**Delete:** stop, then rename the profile into `trash/`.
+**Delete:** stop, remove `settings/<name>.json`, then rename the profile into `trash/`. The settings file goes first so a crash in between leaves the profile without an opt-in, never an opt-in without a profile. **Create** removes any leftover `settings/<name>.json`, so a recreated name never inherits a grant.
+
+**Opt-in** (`browserManager.setAllowUnsandboxed`, serialised per name with start, so a start already in flight cannot slip past a revoke): writes or removes the settings file. Revoking while the browser runs with `sandbox: false` stops it at once (profile kept, `lastExit` unset: a deliberate stop); revoking while it runs sandboxed changes no process. Boot tightens existing `settings/*.json`.
 
 **Unexpected exit:** the keeper reports it; the browser becomes `stopped` with `lastExit` (the panel shows *Crashed*). It is not restarted.
 
@@ -110,15 +114,17 @@ Chromium runs on the cc host and browses untrusted pages. Those pages can send r
 - DNS rebinding onto **cc's own port**: cc has no `Host` allowlist, so a rebound hostname arrives with matching `Origin` and `Host`, and a request through cc's proxy is indistinguishable from a visit to cc. This is a cc-level gap; rebinding onto the backend's own port is blocked (above).
 - **No loopback blocking, by design.** There is no `--host-resolver-rules` and no proxy, because agents legitimately browse local apps (`src/chromium/args.js`, `buildArgs`; `tests/args.test.mjs` asserts their absence).
 
+**The unsandboxed opt-in is a human-intent gate, not a defence against a malicious agent.** The only writer is `POST api/browsers/:name/allow-unsandboxed`, which no MCP tool reaches and which requires an `Origin` header, so a script or the MCP bridge that hits it by accident fails with `403`. An agent with shell access as the same user can still add the header or edit `settings/<name>.json`; the data dir is private to the host user, not to the agent.
+
 Related: an agent reading untrusted pages in a logged-in shared profile can be prompt-injected.
 
 ## Testing
 
 Run: `npm test` (backend `node --test` + panel Vitest), `npm run typecheck`, and gated `RUN_REAL_CHROMIUM=1 npm run test:e2e`.
 
-- **Fake Chromium** (`tests/fakes/fakeChromium.mjs`): a Node script injected through `CODE_BROWSER_CHROMIUM`, run through the real keeper and launch path. It serves a CDP subset (targets, attach, screencast with ack-paced frames, navigation and history, dialogs, recorded `Input.*`) plus test-only `Fake.*` methods. Env knobs: `FAKE_CHROMIUM_REQUIRE_NO_SANDBOX`, `FAKE_CHROMIUM_NO_PORT`, `FAKE_CHROMIUM_IGNORE_CLOSE`.
+- **Fake Chromium** (`tests/fakes/fakeChromium.mjs`): a Node script injected through `CODE_BROWSER_CHROMIUM`, run through the real keeper and launch path. It serves a CDP subset (targets, attach, screencast with ack-paced frames, navigation and history, dialogs, recorded `Input.*`) plus test-only `Fake.*` methods. Env knobs: `FAKE_CHROMIUM_REQUIRE_NO_SANDBOX` (the fake writes `fake-argv.json` and `fake-pid` only after its sandbox check, so their absence proves no unsandboxed launch), `FAKE_CHROMIUM_NO_PORT`, `FAKE_CHROMIUM_IGNORE_CLOSE`.
 - **Live stack** (`liveStack` in `tests/helpers.mjs`): real manager, session and gateway over the fake, with a second CDP client standing in for an agent.
 - **Fake clock** (`fakeClock`): screencast pacing and the control lease are tested without real waits.
 - **Panel tests** mock `fetch` with a tripwire (`frontend/src/test/setup.ts`); `tests/frontend-source.test.mjs` scans panel sources for banned sinks and root-relative URLs and checks the built `index.html`.
-- **E2E** (`tests/e2e.real.test.mjs`): real Chromium as the shared browser, a real backend process, and Playwright's headless shell as the panel's browser (one context per viewer: pages in one context hide each other, and a hidden panel page pauses its view). It also asserts that no process for its data dir survives.
+- **E2E** (`tests/e2e.real.test.mjs`): real Chromium as the shared browser, a real backend process, and Playwright's headless shell as the panel's browser (one context per viewer: pages in one context hide each other, and a hidden panel page pauses its view). Where the host has no usable sandbox it also walks the refusal, a human granting the opt-in in the panel UI, persistence across a backend restart and a revoke from the browser list; where the sandbox works those steps are skipped with a diagnostic. It also asserts that no process for its data dir survives.
 - Tests must not block the event loop of a process that hosts fixture servers: use async `spawn`, not `spawnSync`.

@@ -13,11 +13,13 @@ Applied by `src/app.js` to every HTTP request, in this order; no handler runs be
 | 0 | A request target that is not a valid URL | `400` (after the Origin check, so a foreign Origin still gets `403`) |
 | 1 | A request that carries an `Origin` must have the same host:port as `Host`; and a `Host` that names the backend's own port must be a loopback name (`127.0.0.1`, `localhost`, `[::1]`). `api/health` skips the loopback rule. (`src/requestGuard.js`, `requestRefusal`) | `403` |
 | 2 | Route lookup | `404` unknown path, `405` wrong method |
+| 2b | A route marked `requireOrigin` (the opt-in route, below) needs an `Origin` header | `403` |
 | 3 | Every state-changing route (`POST`, `DELETE`), `api/mcp` included, needs `Content-Type: application/json` | `415` |
 | 4 | Body read: size cap `MAX_BODY_BYTES` (`src/limits.js`), valid JSON; an empty body reads as `{}` | `413`, `400` |
 
 - A request with **no** `Origin` skips only check 1. cc calls `api/mcp` server-side without one.
 - A foreign `Origin` is refused on `api/mcp` too, and a `text/plain` or form body is refused with `415` whatever the `Origin`.
+- A **panel-only route** (`requireOrigin` in `src/routes.js`: `POST api/browsers/:name/allow-unsandboxed`) additionally refuses a request with **no** `Origin` (`403`, before the content-type check). A browser always sends `Origin` on a `fetch` POST and cc's proxy passes it through, so the panel is unaffected; cc's MCP bridge and plain scripts send none. This is not a defence against a client that adds the header.
 - A WebSocket upgrade must carry an `Origin` (see below).
 - Every response carries the CSP and `nosniff`, `no-referrer`, `no-store` (`src/http.js`, `SECURITY_HEADERS`), including `404`, `503` and the reply to a malformed request (`clientError`).
 
@@ -30,12 +32,13 @@ Applied by `src/app.js` to every HTTP request, in this order; no handler runs be
 | `POST api/browsers` | `{name}` | `201 {browser: summary}`: creates the profile and starts it; `409 EXISTS` when the name is taken |
 | `POST api/browsers/:name/start` | `{}` | `{browser: summary}`; no-op when running |
 | `POST api/browsers/:name/stop` | `{}` | `{browser: summary}`; the profile is kept |
+| `POST api/browsers/:name/allow-unsandboxed` | `{allow: boolean}` | `{browser: summary}`; panel-only (needs `Origin`); `allow: false` stops the browser if it runs unsandboxed; `400 BAD_REQUEST` when `allow` is not a boolean |
 | `DELETE api/browsers/:name` | — | `{ok:true}`; stops the browser and moves the profile to the trash dir |
 | `POST api/mcp` | `{tool, arguments, caller}` | see MCP |
 
-`summary` = `{name, status: "running"|"stopped", controller: "agent"|"human", sandbox: boolean|null, lastExit: {code, signal, at}|null, cdpEndpoint: string|null}`. `lastExit` is set only after an unexpected exit.
+`summary` = `{name, status: "running"|"stopped", controller: "agent"|"human", sandbox: boolean|null, allowUnsandboxed: boolean, sandboxUnavailable: boolean, lastExit: {code, signal, at}|null, cdpEndpoint: string|null}`. `lastExit` is set only after an unexpected exit. `allowUnsandboxed` is the human's per-browser opt-in to run without Chromium's sandbox. `sandboxUnavailable` is true after a start was refused for want of a sandbox, until a start succeeds or the browser is deleted; it is held in memory and does not survive a backend restart.
 
-Errors are `{error: "<CODE>: <message>"}` with the status from `src/errors.js` (`statusFor`): `INVALID_NAME`/`BAD_REQUEST` 400, `FORBIDDEN` 403, `NOT_FOUND` 404, `EXISTS`/`NOT_RUNNING` 409, `PAYLOAD_TOO_LARGE` 413, `UNSUPPORTED_MEDIA_TYPE` 415, anything else 500 (`CHROMIUM_NOT_FOUND`, `LAUNCH_FAILED`).
+Errors are `{error: "<CODE>: <message>"}` with the status from `src/errors.js` (`statusFor`): `INVALID_NAME`/`BAD_REQUEST` 400, `FORBIDDEN` 403, `NOT_FOUND` 404, `EXISTS`/`NOT_RUNNING`/`SANDBOX_UNAVAILABLE` 409, `PAYLOAD_TOO_LARGE` 413, `UNSUPPORTED_MEDIA_TYPE` 415, anything else 500 (`CHROMIUM_NOT_FOUND`, `LAUNCH_FAILED`).
 
 `GET` routes have no side effects: `<img>` tags and simple requests from any page can reach them.
 
@@ -56,17 +59,17 @@ cc POSTs `{tool, arguments, caller}` to `api/mcp` and expects HTTP `200` with on
 | Tool | Arguments | Returns |
 |---|---|---|
 | `list_browsers` | — | `{result: [summary]}` |
-| `start_browser` | `name?` | as `browser_info`; creates the profile when the name is new; no-op when running |
+| `start_browser` | `name?` | as `browser_info`; creates the profile when the name is new; no-op when running; `SANDBOX_UNAVAILABLE` error when the host has no usable sandbox and the browser is not allowed to run without one |
 | `stop_browser` | `name?` | `{result: {name, status: "stopped"}}` |
 | `browser_info` | `name?` | `{text, meta}` |
 
 `name` defaults to `default` and must match `NAME_RE` (`src/limits.js`).
 
-`browser_info.meta`: `{name, status, cdpEndpoint, controller, sandbox, tabs: [{targetId, url, title, active}], panelPath}`.
+`browser_info.meta`: `{name, status, cdpEndpoint, controller, sandbox, allowUnsandboxed, tabs: [{targetId, url, title, active}], panelPath}`.
 
 `browser_info.text` (raw text, not escaped): the do-not-drive note when `controller` is `human`; a one-line `WARNING` when `sandbox` is `false`; the panel path with its relative-address note; the two Playwright rules; the ready-to-run snippet in a `js` fence (`src/snippet.js`).
 
-Error codes: `UNKNOWN_TOOL`, `INVALID_NAME`, `NOT_FOUND`, `NOT_RUNNING`, `CHROMIUM_NOT_FOUND` (lists every path tried and the install command), `LAUNCH_FAILED` (carries the Chromium log tail), `CDP_TIMEOUT`, `CDP_ERROR`, `CDP_CLOSED`, `INTERNAL`.
+Error codes: `UNKNOWN_TOOL`, `INVALID_NAME`, `NOT_FOUND`, `NOT_RUNNING`, `SANDBOX_UNAVAILABLE` (the text names the panel path and says only a human can enable *Allow without sandbox*; unknown tool arguments such as `allowUnsandboxed` are ignored), `CHROMIUM_NOT_FOUND` (lists every path tried and the install command), `LAUNCH_FAILED` (carries the Chromium log tail), `CDP_TIMEOUT`, `CDP_ERROR`, `CDP_CLOSED`, `INTERNAL`.
 
 ## Panel shell link
 

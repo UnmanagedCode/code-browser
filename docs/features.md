@@ -17,6 +17,7 @@ code-browser gives an agent and a person one shared headless Chromium. The agent
 - The snippet's page selection picks the tab the person is looking at (the active tab).
 - Give the user the `panelPath` as is. It is relative to the address they open cc at; do not add a host.
 - A browser **name** is a persistent profile: the same name keeps logins and cookies across stops, including session cookies.
+- **No usable sandbox:** `start_browser` fails with `SANDBOX_UNAVAILABLE`. The error carries the `panelPath`. Tell the user to open it and enable *Allow without sandbox* for that browser, then call `start_browser` again. The agent cannot enable it: no tool or argument does. A running browser with `sandbox: false` must not browse untrusted pages.
 
 ### Tools
 
@@ -24,10 +25,10 @@ Arguments and return shapes: [protocol.md → MCP wire format](protocol.md#mcp-w
 
 | Tool | Does |
 |---|---|
-| `list_browsers` | name, status, controller, CDP endpoint of every profile |
+| `list_browsers` | name, status, controller, CDP endpoint, sandbox state and the read-only `allowUnsandboxed` of every profile |
 | `start_browser` | starts (creating on first use) a browser; idempotent |
 | `stop_browser` | stops it; the profile is kept |
-| `browser_info` | CDP endpoint, tabs, active tab, controller, panel path, snippet |
+| `browser_info` | CDP endpoint, tabs, active tab, controller, `sandbox`, read-only `allowUnsandboxed`, panel path, snippet |
 
 ### The controller is advisory for the agent
 
@@ -37,13 +38,14 @@ The agent talks to Chromium over its own CDP connection; the backend is not on t
 
 Open it from cc's **Browser** nav entry, or from the `panelPath` link an agent gives you.
 
-- **Browser list:** each browser with its status, who controls it, a *no sandbox* badge when Chromium had to run without its sandbox, and *Crashed* after an unexpected exit. Open, Start/Stop, Delete (asks first). **New browser** creates and starts a profile; the name field takes `a-z`, `0-9` and `-`.
+- **Browser list:** each browser with its status, who controls it, a *no sandbox* badge while Chromium runs without its sandbox, *allowed without sandbox* (with **Disallow without sandbox**) for a browser a human allowed, *not started: no sandbox* after a refused start, and *Crashed* after an unexpected exit. Open, Start/Stop, Delete (asks first). **Disallow without sandbox** on a browser that is running unsandboxed asks first, because it stops that browser now (the profile and, through session restore, the tabs and logins are kept); on any other browser it takes effect without a prompt. A Start (or New browser) that is refused for want of a sandbox opens that browser's viewer instead of showing an error. **New browser** creates and starts a profile; the name field takes `a-z`, `0-9` and `-`.
 - **Viewer:** toolbar (back to the list, ← → ⟳, address bar, ⌨), tab strip, controller bar, the live screen.
 - **Address bar:** Enter navigates; a bare host gets `https://`; only `http`, `https` and `about:blank` are accepted.
 - **Tab strip:** each tab shows its title as plain text; selecting one switches the shared view for everyone; × and + need control.
 - **Screen:** a live screencast scaled to fit. Without control it shows *Take control to interact* and sends nothing.
 - **Dialogs:** a JavaScript `alert`, `confirm`, `prompt` or `beforeunload` shows as a modal with its message as text. OK and Cancel need control; the dialog offers *Take control* itself because it covers the controller bar. A dialog open before you joined is shown on arrival.
 - **Stopped browsers:** the viewer shows *This browser is stopped* with a Start button.
+- **Refused start (no sandbox):** the viewer shows *Not started: no usable sandbox*, the risks (the profile keeps logins and cookies, pages reach loopback and LAN services, a compromised page runs code as the host user), and **Allow without sandbox…**. That opens a confirmation step with **Allow** and **Cancel**; nothing is sent before **Allow**. Once allowed, the notice offers **Start**. The notice appears for whoever opens the browser, including after an agent's refused start.
 - **Hidden page:** while the page is hidden it pauses its view, so a background tab costs the host no screencast.
 - **Reconnect:** the panel reconnects with backoff and rejoins its view. While disconnected it forgets the tabs and any open dialog; the rejoin shows only what is still open.
 

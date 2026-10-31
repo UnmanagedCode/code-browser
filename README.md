@@ -16,19 +16,21 @@ npm run install-browser     # one-time Chromium download (or set CODE_BROWSER_CH
 
 Enable the plugin in code-conductor; the backend starts on the first tool call or panel visit. Standalone: `PROJECTS_ROOT=<dir> PORT=7470 node server.js`, then open `http://127.0.0.1:7470/?browser=<name>`.
 
+On a host where Chromium's sandbox cannot start (containers, restricted user namespaces), the first start is refused with `SANDBOX_UNAVAILABLE`. Open the panel, read the risk, and allow that browser to run without the sandbox.
+
 Tests: `npm test`; real Chromium end to end: `RUN_REAL_CHROMIUM=1 npm run test:e2e`.
 
 ## Key defaults
 
 - Data: `$PROJECTS_ROOT/.code-browser/` (profiles, run state, logs).
-- Chromium: headless, 1280×800, CDP on a random loopback port, sandboxed unless the host cannot (see *Runs unsandboxed* below).
+- Chromium: headless, 1280×800, CDP on a random loopback port, sandboxed; unsandboxed only for a browser a human allowed (see *Runs unsandboxed* below).
 - The controller lock is advisory for agents and enforced for people (see below).
 
 ## Known limitations
 
 - **Controller is advisory for the agent.** Agents drive Chromium over their own CDP connection, which the backend cannot pause. They are told who controls the browser; a script that ignores it can still act.
 - **Network position.** Pages the shared browser visits run on the cc host and can reach loopback and LAN services. GET and simple-request side effects on other local services are exposed, DNS rebinding onto cc's port is a cc-level gap, and loopback is deliberately not blocked. See [docs/architecture.md → Threat model](docs/architecture.md#threat-model-the-shared-browsers-network-position).
-- **Runs unsandboxed where the host has no usable sandbox.** Containers and hosts that restrict unprivileged user namespaces cannot start Chromium's sandbox, so the backend relaunches it with `--no-sandbox` (logged; `sandbox: false` in `browser_info`, a *no sandbox* badge in the panel, and a warning line in the `start_browser`/`browser_info` text). A renderer compromise by a hostile page then becomes code execution as the host user, in a browser that holds logged-in profiles and can reach loopback. Treat such a host as trusting every page the browser visits.
+- **Runs unsandboxed only where a human allowed it.** Containers and hosts that restrict unprivileged user namespaces cannot start Chromium's sandbox. There the start is refused with `SANDBOX_UNAVAILABLE` until a human turns on *Allow without sandbox* for that browser in the panel; an agent cannot. Once allowed, the browser runs with `--no-sandbox` (`sandbox: false` in `browser_info`, a *no sandbox* badge, a warning line in the `start_browser`/`browser_info` text), and a renderer compromise by a hostile page becomes code execution as the host user in a browser that holds logged-in profiles and can reach loopback. Treat such a browser as trusting every page it visits. The opt-in is a **human-intent gate, not a defence against a malicious agent**: an agent with shell access as the same user can edit `settings/` or call the route with an `Origin` header.
 - **Prompt injection.** An agent browsing untrusted pages in a logged-in shared profile can be steered by them.
 - Native `<select>` popups, file pickers and permission prompts do not appear in the screencast; no audio.
 - Tab following is heuristic: an agent's `page.bringToFront()` is invisible to other CDP clients.
