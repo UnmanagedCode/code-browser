@@ -49,7 +49,7 @@ One responsibility each: `browserManager` owns processes and files, `browserSess
 
 **Start** (`browserManager.start`, serialised per name; a no-op when running):
 
-1. `reap`: kill leftovers recorded in the run file. A pid is killed only if `/proc/<pid>/cmdline` still names this profile (and, for the keeper, the keeper script), so a recycled pid is left alone.
+1. `reap`: kill leftovers recorded in the run file. A pid is killed only if its `/proc/<pid>/cmdline` argv still carries this profile's `--user-data-dir=<dir>` as a whole token (and, for the keeper, the keeper script as a whole token), so a recycled pid, or profile `ab` when reaping `a`, is left alone.
 2. Remove stale `Singleton*` and `DevToolsActivePort` from the profile.
 3. Spawn the **keeper** (`src/chromium/keeper.js`), detached, with stdio `[pipe, pipe, ignore]`. It spawns Chromium detached (its own process group), logs its output, and prints `{"chromiumPid":N}` then `{"exit":{code,signal}}` on stdout.
 4. Chromium launches with `--remote-debugging-port=0` bound to `127.0.0.1`; the manager polls `DevToolsActivePort` (port, then the browser WebSocket path) within `LAUNCH_TIMEOUT_MS`. Port 0 avoids the race of picking a port first.

@@ -27,15 +27,34 @@ test('reap kills a live pid with a matching cmdline', async () => {
   assert.equal(readRun(dataDir, 'a'), null);
 });
 
-// Invariant: a recycled pid (live, but a different cmdline) is never killed.
-test('reap leaves a live pid with a mismatched cmdline alone', async () => {
+// Invariant: a recycled pid is never killed: the cmdline must carry exactly this profile's --user-data-dir token,
+// so profile `ab` (a prefix extension of `a`) is not mistaken for `a`.
+test('reap leaves a live Chromium of a prefix-colliding profile alone', async () => {
   const dataDir = tmpDir();
   const profileDir = path.join(dataDir, 'profiles', 'a');
-  const p = startProc('--user-data-dir=/somewhere/else');
-  writeRun(dataDir, 'a', { keeperPid: p.pid, chromiumPid: p.pid, startedAt: 1 });
+  const other = startProc(`--user-data-dir=${path.join(dataDir, 'profiles', 'ab')}`);
+  writeRun(dataDir, 'a', { keeperPid: null, chromiumPid: other.pid, startedAt: 1 });
   assert.deepEqual(await reap(dataDir, 'a', { profileDir, keeperPath: KEEPER }), []);
-  assert.ok(pidAlive(p.pid));
+  assert.ok(pidAlive(other.pid));
   assert.equal(readRun(dataDir, 'a'), null, 'the stale run file is still cleared');
+});
+
+// Invariant: the same exactness holds for the keeper: profile `ab`'s keeper, and a different script path that merely
+// starts with the keeper's, are left alone; the real keeper of `a` is killed.
+test('reap matches the keeper by whole argv tokens', async () => {
+  const dataDir = tmpDir();
+  const profileDir = path.join(dataDir, 'profiles', 'a');
+  const userDir = (n) => `--user-data-dir=${path.join(dataDir, 'profiles', n)}`;
+  const wrongProfile = startProc(KEEPER, userDir('ab'));
+  const wrongScript = startProc(`${KEEPER}.bak`, userDir('a'));
+  const right = startProc(KEEPER, userDir('a'));
+  for (const [p, expected] of [[wrongProfile, []], [wrongScript, []], [right, [right.pid]]]) {
+    writeRun(dataDir, 'a', { keeperPid: p.pid, chromiumPid: null, startedAt: 1 });
+    assert.deepEqual(await reap(dataDir, 'a', { profileDir, keeperPath: KEEPER }), expected);
+  }
+  await waitFor(() => !pidAlive(right.pid), { what: 'the real keeper to die' });
+  assert.ok(pidAlive(wrongProfile.pid));
+  assert.ok(pidAlive(wrongScript.pid));
 });
 
 // Invariant: the keeper is only killed when its cmdline names the keeper script as well as the profile.

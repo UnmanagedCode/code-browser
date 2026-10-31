@@ -26,8 +26,9 @@ export function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; }
 }
 
-const cmdlineOf = (pid) => {
-  try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' '); } catch { return ''; }
+// The process's argv, one token per entry.
+const argvOf = (pid) => {
+  try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean); } catch { return []; }
 };
 
 async function waitDead(pid, ms) {
@@ -35,19 +36,20 @@ async function waitDead(pid, ms) {
   while (pidAlive(pid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, POLL_MS));
 }
 
-// Kill whatever a previous backend left behind for `name`. A recorded pid is only killed when its
-// /proc cmdline still names this profile (and, for the keeper, the keeper script): a recycled pid is left alone.
+// Kill whatever a previous backend left behind for `name`. A recorded pid is only killed when its argv
+// still carries this profile's --user-data-dir token (and, for the keeper, the keeper script) as a whole
+// token: a recycled pid, or the profile `ab` when reaping `a`, is left alone.
 export async function reap(dataDir, name, { profileDir, keeperPath }) {
   const state = readRun(dataDir, name);
   const killed = [];
   if (state) {
     const userDir = `--user-data-dir=${profileDir}`;
     const targets = [
-      [state.keeperPid, (cmd) => cmd.includes(keeperPath) && cmd.includes(userDir)],
-      [state.chromiumPid, (cmd) => cmd.includes(userDir)],
+      [state.keeperPid, (argv) => argv.includes(keeperPath) && argv.includes(userDir)],
+      [state.chromiumPid, (argv) => argv.includes(userDir)],
     ];
     for (const [pid, matches] of targets) {
-      if (!pidAlive(pid) || !matches(cmdlineOf(pid))) continue;
+      if (!pidAlive(pid) || !matches(argvOf(pid))) continue;
       try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
       killed.push(pid);
       await waitDead(pid, 2000);
