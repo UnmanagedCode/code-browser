@@ -4,6 +4,8 @@ export interface BrowserSummary {
   status: 'running' | 'stopped';
   controller: 'agent' | 'human';
   sandbox: boolean | null;
+  allowUnsandboxed: boolean;
+  sandboxUnavailable: boolean;
   lastExit: { code: number | null; signal: string | null; at: number } | null;
 }
 

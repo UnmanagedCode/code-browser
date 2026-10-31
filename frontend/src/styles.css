@@ -65,6 +65,10 @@ input { background: var(--card); border: 1px solid var(--border); border-radius:
 .keyboard-sink { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; }
 .screen-hint { position: absolute; bottom: 0.5rem; left: 50%; transform: translateX(-50%); background: var(--card); color: var(--muted-foreground); padding: 0.25rem 0.75rem; border-radius: 999px; pointer-events: none; }
 .stopped { padding: 2rem; text-align: center; }
+.sandbox-notice { padding: 1.5rem; max-width: 40rem; margin: 0 auto; }
+.sandbox-notice h2 { color: var(--warning); margin-top: 0; }
+.sandbox-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.75rem; border: 1px solid var(--warning); border-radius: calc(var(--radius) / 2); }
+.sandbox-confirm p { flex-basis: 100%; margin: 0; }
 .dialog-backdrop { position: fixed; inset: 0; display: grid; place-items: center; background: rgb(0 0 0 / 0.4); }
 .dialog { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; min-width: min(20rem, 90vw); max-width: 90vw; }
 .dialog-message { white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -26,7 +26,7 @@ function fakeSocket() {
   };
 }
 
-const running = (name: string, controller: BrowserSummary['controller'] = 'agent'): BrowserSummary => ({ name, status: 'running', controller, sandbox: true, lastExit: null });
+const running = (name: string, controller: BrowserSummary['controller'] = 'agent'): BrowserSummary => ({ name, status: 'running', controller, sandbox: true, allowUnsandboxed: false, sandboxUnavailable: false, lastExit: null });
 const state = (over: Partial<BrowserState> = {}): BrowserState => ({
   type: 'state', name: 'a', status: 'running', sandbox: true, controller: { kind: 'agent' },
   tabs: [{ targetId: 'T1', url: 'https://one.test/', title: 'One' }], activeTabId: 'T1', canGoBack: false, canGoForward: false, ...over,
@@ -393,5 +393,148 @@ describe('messages that beat the first render', () => {
     await waitFor(() => expect(screen.getByRole('tablist')).toBeTruthy());
     expect(screen.queryByText('Connecting…')).toBeNull();
     socket.close();
+  });
+});
+
+describe('sandbox opt-in', () => {
+  const stopped = (over: Partial<BrowserSummary> = {}): BrowserSummary => ({ ...running('a'), status: 'stopped', sandbox: null, ...over });
+  const reply = (status: number, body: unknown) => vi.fn(async () => new Response(JSON.stringify(body), { status }));
+  const refusal = { error: 'SANDBOX_UNAVAILABLE: Chromium has no usable sandbox' };
+  const post = (fetchMock: ReturnType<typeof vi.fn>, url: string) => (fetchMock.mock.calls as unknown as [string, RequestInit][]).filter(([u]) => u === url);
+
+  async function openRefused(over: Partial<BrowserSummary> = {}) {
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [stopped({ sandboxUnavailable: true, ...over })] });
+  }
+
+  // Invariant: a refused start is explained where the human lands, with the way to allow it; nothing is sent yet.
+  it('a refused browser shows the notice with Allow without sandbox…', async () => {
+    const fetchMock = reply(200, {});
+    vi.stubGlobal('fetch', fetchMock);
+    await openRefused();
+    const notice = screen.getByRole('region', { name: /no usable sandbox/i });
+    expect(within(notice).getByRole('button', { name: /Allow without sandbox/ })).toBeTruthy();
+    expect(within(notice).queryByRole('button', { name: 'Start' })).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // Invariant: consent needs a second explicit step; Cancel sends nothing, Allow posts {allow:true} to the relative route.
+  it('Allow needs a confirmation step; Cancel sends nothing, Allow posts JSON', async () => {
+    const fetchMock = reply(200, { browser: stopped({ allowUnsandboxed: true }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await openRefused();
+    fireEvent.click(screen.getByRole('button', { name: /Allow without sandbox/ }));
+    expect(fetchMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Allow' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Allow without sandbox/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('api/browsers/a/allow-unsandboxed');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ allow: true });
+  });
+
+  // Invariant: once allowed, the notice offers Start, which starts the browser.
+  it('with the opt-in on the notice offers Start', async () => {
+    const fetchMock = reply(200, {});
+    vi.stubGlobal('fetch', fetchMock);
+    await openRefused({ allowUnsandboxed: true });
+    const notice = screen.getByRole('region', { name: /no usable sandbox/i });
+    expect(within(notice).queryByRole('button', { name: /Allow without sandbox/ })).toBeNull();
+    fireEvent.click(within(notice).getByRole('button', { name: 'Start' }));
+    await waitFor(() => expect(post(fetchMock, 'api/browsers/a/start')).toHaveLength(1));
+  });
+
+  // Invariant: a refusal is shown as the notice, never as an error toast, whichever message arrives first.
+  it('a viewer Start refused with SANDBOX_UNAVAILABLE shows no toast', async () => {
+    const fetchMock = reply(409, refusal);
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [stopped()] });
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    await f.emit({ type: 'browsers', list: [stopped({ sandboxUnavailable: true })] });
+    expect(screen.getByRole('region', { name: /no usable sandbox/i })).toBeTruthy();
+  });
+
+  it('other start failures still show a toast', async () => {
+    vi.stubGlobal('fetch', reply(500, { error: 'LAUNCH_FAILED: boom' }));
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [stopped()] });
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('LAUNCH_FAILED'));
+  });
+
+  // Invariant: a refused Start from the list or New browser takes the human to that browser's viewer, not a toast.
+  it('a refused row Start and a refused New browser open the viewer', async () => {
+    goTo('');
+    vi.stubGlobal('fetch', reply(409, refusal));
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [stopped()] });
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    await waitFor(() => expect(location.search).toBe('?browser=a'));
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    goTo('');
+    act(() => { window.dispatchEvent(new PopStateEvent('popstate')); });
+    fireEvent.change(screen.getByLabelText('New browser name'), { target: { value: 'fresh' } });
+    fireEvent.submit(screen.getByLabelText('New browser name').closest('form')!);
+    await waitFor(() => expect(location.search).toBe('?browser=fresh'));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  describe('browser list', () => {
+    beforeEach(() => goTo(''));
+
+    // Invariant: an allowed browser is marked in the list and can be disallowed; one not allowed has no Disallow.
+    it('shows the allowed badge and Disallow only with the opt-in', async () => {
+      render(<App socket={f.socket} />);
+      await f.emit({ type: 'browsers', list: [stopped({ allowUnsandboxed: true }), stopped({ name: 'b' })] });
+      expect(screen.getAllByRole('button', { name: 'Disallow without sandbox' })).toHaveLength(1);
+      expect(screen.getByText('allowed without sandbox')).toBeTruthy();
+    });
+
+    it('marks a refused, not-allowed browser', async () => {
+      render(<App socket={f.socket} />);
+      await f.emit({ type: 'browsers', list: [stopped({ sandboxUnavailable: true })] });
+      expect(screen.getByText('not started: no sandbox')).toBeTruthy();
+    });
+
+    // Invariant: disallowing a browser that runs unsandboxed asks first (it stops now); declining sends nothing.
+    it('Disallow on a running unsandboxed browser confirms first', async () => {
+      const fetchMock = reply(200, {});
+      vi.stubGlobal('fetch', fetchMock);
+      const confirm = vi.fn(() => false);
+      vi.stubGlobal('confirm', confirm);
+      render(<App socket={f.socket} />);
+      await f.emit({ type: 'browsers', list: [running('a', 'agent'), ].map((b) => ({ ...b, sandbox: false, allowUnsandboxed: true })) });
+      fireEvent.click(screen.getByRole('button', { name: 'Disallow without sandbox' }));
+      expect(confirm).toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+      confirm.mockReturnValue(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Disallow without sandbox' }));
+      await waitFor(() => expect(post(fetchMock, 'api/browsers/a/allow-unsandboxed')).toHaveLength(1));
+      expect(JSON.parse(post(fetchMock, 'api/browsers/a/allow-unsandboxed')[0][1].body as string)).toEqual({ allow: false });
+    });
+
+    // Invariant: disallowing where nothing is running unsandboxed changes no process, so it needs no confirmation.
+    it('Disallow on a stopped browser posts {allow:false} without a confirm', async () => {
+      const fetchMock = reply(200, {});
+      vi.stubGlobal('fetch', fetchMock);
+      const confirm = vi.fn(() => true);
+      vi.stubGlobal('confirm', confirm);
+      render(<App socket={f.socket} />);
+      await f.emit({ type: 'browsers', list: [stopped({ allowUnsandboxed: true })] });
+      fireEvent.click(screen.getByRole('button', { name: 'Disallow without sandbox' }));
+      await waitFor(() => expect(post(fetchMock, 'api/browsers/a/allow-unsandboxed')).toHaveLength(1));
+      expect(confirm).not.toHaveBeenCalled();
+      expect(JSON.parse(post(fetchMock, 'api/browsers/a/allow-unsandboxed')[0][1].body as string)).toEqual({ allow: false });
+    });
   });
 });

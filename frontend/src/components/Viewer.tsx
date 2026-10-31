@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import type { BrowserState, DialogInfo } from '../protocol';
+import type { BrowserState, BrowserSummary, DialogInfo } from '../protocol';
 import type { ViewerSocket } from '../socket';
 import { ControllerBar } from './ControllerBar';
 import { DialogPrompt } from './DialogPrompt';
+import { SandboxNotice } from './SandboxNotice';
 import { Screen } from './Screen';
 import { TabStrip } from './TabStrip';
 import { UrlBar } from './UrlBar';
@@ -12,11 +13,13 @@ interface Props {
   socket: ViewerSocket;
   state: BrowserState | null;
   dialogs: DialogInfo[];
+  summary?: BrowserSummary;
+  onError(message: string): void;
   onBack(): void;
   onStart(): void;
 }
 
-export function Viewer({ name, socket, state, dialogs, onBack, onStart }: Props) {
+export function Viewer({ name, socket, state, dialogs, summary, onError, onBack, onStart }: Props) {
   const [keyboardRequest, setKeyboardRequest] = useState(0);
   const running = state?.status === 'running';
   const controller = state?.controller ?? { kind: 'agent' as const };
@@ -36,7 +39,9 @@ export function Viewer({ name, socket, state, dialogs, onBack, onStart }: Props)
         <UrlBar url={activeTab?.url ?? ''} hasControl={hasControl} onGo={(url) => socket.send({ msg: 'nav', action: 'goto', url })} />
         <button type="button" aria-label="Show keyboard" disabled={!hasControl} onClick={() => setKeyboardRequest((n) => n + 1)}>⌨</button>
       </div>
-      {!running ? (
+      {!running && state?.status === 'stopped' && summary?.sandboxUnavailable ? (
+        <SandboxNotice summary={summary} onError={onError} />
+      ) : !running ? (
         <div className="stopped" role="status" data-status={state?.status ?? 'connecting'}>
           <p>{state?.status === 'stopped' ? 'This browser is stopped.' : 'Connecting…'}</p>
           {state?.status === 'stopped' && <button type="button" onClick={onStart}>Start</button>}
