@@ -43,7 +43,7 @@ One responsibility each: `browserManager` owns processes and files, `browserSess
 | `logs/<name>.log` | Chromium output, truncated on each launch |
 | `trash/<name>-<ts>/` | a deleted profile, removed asynchronously |
 
-Permissions (`src/fsPrivate.js`): the data dir and every directory under it are `0700`, run files and logs `0600`, enforced with chmod at boot, create and start so existing paths are tightened. The log holds visited URLs and a profile's `DevToolsActivePort` exposes CDP.
+Permissions (`src/fsPrivate.js`): the data dir, its top-level dirs (`profiles`, `run`, `logs`, `trash`), each profile root and each trash entry are `0700`; the plugin's run files and logs are `0600`. Existing paths are tightened by chmod at boot, create and start. Files nested inside a profile are Chrome's own; the `0700` profile root shields them. The log holds visited URLs and a profile's `DevToolsActivePort` exposes CDP.
 
 `NAME_RE` is the single name check for REST, MCP and the socket (the panel imports it from `src/limits.js`). A new profile is seeded with `session.restore_on_startup = 1` so session cookies (and the previous tabs) survive a stop; an existing profile's `Preferences` is never rewritten.
 

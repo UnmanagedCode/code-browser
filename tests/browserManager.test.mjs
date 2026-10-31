@@ -177,17 +177,19 @@ test('shutdown stops every running browser', async () => {
 
 const modeOf = (p) => fs.statSync(p).mode & 0o777;
 
-// Invariant: everything under the data dir is private to the host user: directories 0700 (enforced on ones that
-// already exist, at boot), run files and logs 0600. The log holds visited URLs and the profile exposes CDP.
+// Invariant: what the plugin writes under the data dir is private to the host user: the data dir, its top-level dirs,
+// each profile root and each trash entry are 0700 (enforced on ones that already exist, at boot), run files and logs
+// 0600. Files nested inside a profile are Chrome's own; the 0700 profile root shields them. The log holds visited URLs and the profile exposes CDP.
 test('data tree is 0700 and run files and logs are 0600, including pre-existing ones', async () => {
   const dataDir = path.join(tmpDir(), '.code-browser');
-  for (const d of ['', 'profiles', 'profiles/old', 'logs', 'run']) fs.mkdirSync(path.join(dataDir, d), { recursive: true, mode: 0o755 });
-  for (const d of ['', 'profiles', 'profiles/old', 'logs', 'run']) fs.chmodSync(path.join(dataDir, d), 0o755);
+  const preexisting = ['', 'profiles', 'profiles/old', 'logs', 'run', 'trash', 'trash/old-1'];
+  for (const d of preexisting) fs.mkdirSync(path.join(dataDir, d), { recursive: true, mode: 0o755 });
+  for (const d of preexisting) fs.chmodSync(path.join(dataDir, d), 0o755);
   fs.writeFileSync(path.join(dataDir, 'logs', 'a.log'), 'old log', { mode: 0o644 });
   fs.chmodSync(path.join(dataDir, 'logs', 'a.log'), 0o644);
   const { manager, profile } = make({ dataDir });
   await manager.boot();
-  for (const d of ['', 'profiles', 'profiles/old', 'logs', 'run']) assert.equal(modeOf(path.join(dataDir, d)), 0o700, `boot: ${d || '.code-browser'}`);
+  for (const d of preexisting) assert.equal(modeOf(path.join(dataDir, d)), 0o700, `boot: ${d || '.code-browser'}`);
 
   manager.create('a');
   await manager.start('a');

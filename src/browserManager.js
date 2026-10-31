@@ -255,8 +255,11 @@ export function createBrowserManager({
 
   // Backend boot: nothing outlives the previous backend, so every leftover is killed.
   async function boot() {
-    for (const dir of [dataDir, profilesDir, logsDir, path.join(dataDir, 'run')]) ensurePrivateDir(dir);
+    for (const dir of [dataDir, profilesDir, logsDir, path.join(dataDir, 'run'), trashDir]) ensurePrivateDir(dir);
     for (const name of names()) fs.chmodSync(profileOf(name), PRIVATE_DIR_MODE);
+    for (const entry of fs.readdirSync(trashDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) fs.chmodSync(path.join(trashDir, entry.name), PRIVATE_DIR_MODE);
+    }
     const all = new Set([...names(), ...runNames(dataDir)]);
     for (const name of all) {
       if (NAME_RE.test(name)) await reap(dataDir, name, { profileDir: profileOf(name), keeperPath: KEEPER });
