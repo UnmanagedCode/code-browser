@@ -1,5 +1,6 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { MAX_PROMPT_TEXT } from '../src/limits.js';
 import { liveStack, waitFor } from './helpers.mjs';
 
 let stack;
@@ -121,4 +122,21 @@ test('dialog open, pending replay and answer', async () => {
   const handled = (await agent.send('Fake.getRecorded')).recorded.find((r) => r.method === 'Page.handleJavaScriptDialog');
   assert.deepEqual(handled.params, { accept: true, promptText: 'bob' });
   await assert.rejects(session.answerDialog(tabId, 'accept'), (e) => e.code === 'NO_DIALOG');
+});
+
+// Invariant: a dialog answer's promptText is bounded: longer (or non-string) text is INVALID_INPUT, the dialog stays
+// open and nothing reaches the page; text exactly at the cap is accepted.
+test('promptText is capped', async () => {
+  const { session, agent } = await boot();
+  const tabId = session.snapshot().activeTabId;
+  await waitFor(async () => (await state(agent)).sessions.length >= 1, { what: 'attached' });
+  await agent.send('Fake.openDialog', { targetId: tabId, type: 'prompt', message: 'q' });
+  await waitFor(() => session.pendingDialogs().length === 1, { what: 'dialog' });
+  for (const bad of ['x'.repeat(MAX_PROMPT_TEXT + 1), 5, { a: 1 }]) {
+    await assert.rejects(session.answerDialog(tabId, 'accept', bad), (e) => e.code === 'INVALID_INPUT');
+  }
+  assert.equal(session.pendingDialogs().length, 1);
+  assert.equal((await agent.send('Fake.getRecorded')).recorded.filter((r) => r.method === 'Page.handleJavaScriptDialog').length, 0);
+  await session.answerDialog(tabId, 'accept', 'y'.repeat(MAX_PROMPT_TEXT));
+  await waitFor(() => session.pendingDialogs().length === 0, { what: 'dialog answered' });
 });

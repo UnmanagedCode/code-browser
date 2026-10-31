@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { createController } from './controller.js';
 import { CodedError } from './errors.js';
 import { inputToCdp, normalizeUrl } from './input.js';
+import { MAX_PROMPT_TEXT } from './limits.js';
 import { createScreencast } from './screencast.js';
 import { emptyTabs, reduceTabs } from './tabs.js';
 
@@ -186,7 +187,10 @@ export function createBrowserSession({ name, cdp, sandbox, log = console, contro
     async answerDialog(tabId, action, promptText) {
       if (!dialogs.has(tabId)) throw new CodedError('NO_DIALOG', 'no dialog is open on that tab');
       if (action !== 'accept' && action !== 'dismiss') throw new CodedError('INVALID_INPUT', 'dialog action must be accept or dismiss');
-      await callOn(tabId, 'Page.handleJavaScriptDialog', { accept: action === 'accept', ...(typeof promptText === 'string' ? { promptText } : {}) });
+      if (promptText !== undefined && (typeof promptText !== 'string' || promptText.length > MAX_PROMPT_TEXT)) {
+        throw new CodedError('INVALID_INPUT', `promptText must be a string of at most ${MAX_PROMPT_TEXT} characters`);
+      }
+      await callOn(tabId, 'Page.handleJavaScriptDialog', { accept: action === 'accept', ...(promptText === undefined ? {} : { promptText }) });
     },
   };
 }

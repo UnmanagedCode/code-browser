@@ -20,6 +20,9 @@ export const STOP_GRACE_MS = 5_000;
 export const KILL_GRACE_MS = 1_500;
 export const SHUTDOWN_GRACE_MS = 2_000;
 
+// Longest promptText a viewer may answer a JavaScript prompt() dialog with
+export const MAX_PROMPT_TEXT = 8192;
+
 // HTTP / WebSocket
 export const MAX_BODY_BYTES = 64 * 1024;
 export const WS_MAX_PAYLOAD = 64 * 1024;
