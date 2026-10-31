@@ -18,7 +18,8 @@ if (sep !== 1 || argv.length < 3) {
 const [logFile] = argv;
 const [command, ...args] = argv.slice(sep + 1);
 
-const log = fs.openSync(logFile, 'w');
+const log = fs.openSync(logFile, 'w', 0o600);
+fs.fchmodSync(log, 0o600); // an existing log keeps its old mode otherwise
 const child = spawn(command, args, { detached: true, stdio: ['ignore', log, log] });
 const emit = (obj) => { try { process.stdout.write(`${JSON.stringify(obj)}\n`); } catch { /* backend gone */ } };
 process.stdout.on('error', () => {});

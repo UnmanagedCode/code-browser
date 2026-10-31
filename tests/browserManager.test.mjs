@@ -174,3 +174,30 @@ test('shutdown stops every running browser', async () => {
   await manager.shutdown();
   for (const pid of pids) await waitFor(() => !pidAlive(pid), { what: 'chromium to exit' });
 });
+
+const modeOf = (p) => fs.statSync(p).mode & 0o777;
+
+// Invariant: everything under the data dir is private to the host user: directories 0700 (enforced on ones that
+// already exist, at boot), run files and logs 0600. The log holds visited URLs and the profile exposes CDP.
+test('data tree is 0700 and run files and logs are 0600, including pre-existing ones', async () => {
+  const dataDir = path.join(tmpDir(), '.code-browser');
+  for (const d of ['', 'profiles', 'profiles/old', 'logs', 'run']) fs.mkdirSync(path.join(dataDir, d), { recursive: true, mode: 0o755 });
+  for (const d of ['', 'profiles', 'profiles/old', 'logs', 'run']) fs.chmodSync(path.join(dataDir, d), 0o755);
+  fs.writeFileSync(path.join(dataDir, 'logs', 'a.log'), 'old log', { mode: 0o644 });
+  fs.chmodSync(path.join(dataDir, 'logs', 'a.log'), 0o644);
+  const { manager, profile } = make({ dataDir });
+  await manager.boot();
+  for (const d of ['', 'profiles', 'profiles/old', 'logs', 'run']) assert.equal(modeOf(path.join(dataDir, d)), 0o700, `boot: ${d || '.code-browser'}`);
+
+  manager.create('a');
+  await manager.start('a');
+  for (const d of ['', 'profiles', 'logs', 'run', 'trash']) {
+    if (fs.existsSync(path.join(dataDir, d))) assert.equal(modeOf(path.join(dataDir, d)), 0o700, d || '.code-browser');
+  }
+  assert.equal(modeOf(profile('a')), 0o700);
+  assert.equal(modeOf(path.join(profile('a'), 'Default')), 0o700);
+  assert.equal(modeOf(path.join(dataDir, 'run', 'a.json')), 0o600);
+  assert.equal(modeOf(path.join(dataDir, 'logs', 'a.log')), 0o600, 'a pre-existing log is tightened too');
+  await manager.delete('a');
+  assert.equal(modeOf(path.join(dataDir, 'trash')), 0o700);
+});

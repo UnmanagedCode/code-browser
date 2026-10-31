@@ -43,6 +43,8 @@ One responsibility each: `browserManager` owns processes and files, `browserSess
 | `logs/<name>.log` | Chromium output, truncated on each launch |
 | `trash/<name>-<ts>/` | a deleted profile, removed asynchronously |
 
+Permissions (`src/fsPrivate.js`): the data dir and every directory under it are `0700`, run files and logs `0600`, enforced with chmod at boot, create and start so existing paths are tightened. The log holds visited URLs and a profile's `DevToolsActivePort` exposes CDP.
+
 `NAME_RE` is the single name check for REST, MCP and the socket (the panel imports it from `src/limits.js`). A new profile is seeded with `session.restore_on_startup = 1` so session cookies (and the previous tabs) survive a stop; an existing profile's `Preferences` is never rewritten.
 
 ## Browser lifecycle

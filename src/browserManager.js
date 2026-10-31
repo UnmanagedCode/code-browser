@@ -8,6 +8,7 @@ import { CdpConnection } from './cdp.js';
 import { buildArgs, isSandboxFailure } from './chromium/args.js';
 import { locateChromium } from './chromium/locate.js';
 import { pluginDir } from './config.js';
+import { ensurePrivateDir, PRIVATE_DIR_MODE } from './fsPrivate.js';
 import { CodedError } from './errors.js';
 import { CDP_TIMEOUT_MS, KILL_GRACE_MS, LAUNCH_TIMEOUT_MS, LOG_SCAN_CHARS, LOG_TAIL_CHARS, NAME_RE, POLL_MS, SHUTDOWN_GRACE_MS, STOP_GRACE_MS } from './limits.js';
 import { pidAlive, reap, removeRun, runNames, writeRun } from './runState.js';
@@ -81,12 +82,14 @@ export function createBrowserManager({
 
   function create(name) {
     assertName(name);
-    fs.mkdirSync(profilesDir, { recursive: true });
-    try { fs.mkdirSync(profileOf(name)); } catch (err) {
+    ensurePrivateDir(dataDir);
+    ensurePrivateDir(profilesDir);
+    try { fs.mkdirSync(profileOf(name), { mode: PRIVATE_DIR_MODE }); } catch (err) {
       if (err.code === 'EEXIST') throw new CodedError('EXISTS', `a browser named '${name}' already exists`);
       throw err;
     }
-    fs.mkdirSync(path.join(profileOf(name), 'Default'));
+    fs.chmodSync(profileOf(name), PRIVATE_DIR_MODE);
+    ensurePrivateDir(path.join(profileOf(name), 'Default'));
     fs.writeFileSync(path.join(profileOf(name), 'Default', 'Preferences'), JSON.stringify(NEW_PROFILE_PREFS));
     events.emit('change');
     return { name };
@@ -165,7 +168,7 @@ export function createBrowserManager({
     if (running.has(name)) return;
     const profileDir = profileOf(name);
     const chrome = locate(env);
-    fs.mkdirSync(logsDir, { recursive: true });
+    ensurePrivateDir(logsDir);
     await reap(dataDir, name, { profileDir, keeperPath: KEEPER });
     let result = await launch(name, chrome, true);
     if (result.failed?.sandboxFailure) {
@@ -242,7 +245,7 @@ export function createBrowserManager({
   async function doDelete(name) {
     requireProfile(name);
     await doStop(name);
-    fs.mkdirSync(trashDir, { recursive: true });
+    ensurePrivateDir(trashDir);
     const dest = path.join(trashDir, `${name}-${Date.now()}`);
     fs.renameSync(profileOf(name), dest);
     lastExit.delete(name);
@@ -252,6 +255,8 @@ export function createBrowserManager({
 
   // Backend boot: nothing outlives the previous backend, so every leftover is killed.
   async function boot() {
+    for (const dir of [dataDir, profilesDir, logsDir, path.join(dataDir, 'run')]) ensurePrivateDir(dir);
+    for (const name of names()) fs.chmodSync(profileOf(name), PRIVATE_DIR_MODE);
     const all = new Set([...names(), ...runNames(dataDir)]);
     for (const name of all) {
       if (NAME_RE.test(name)) await reap(dataDir, name, { profileDir: profileOf(name), keeperPath: KEEPER });

@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { ensurePrivateDir, writePrivateFile } from './fsPrivate.js';
 import { POLL_MS } from './limits.js';
 
 export const runFile = (dataDir, name) => path.join(dataDir, 'run', `${name}.json`);
 
 export function writeRun(dataDir, name, state) {
-  fs.mkdirSync(path.join(dataDir, 'run'), { recursive: true });
-  fs.writeFileSync(runFile(dataDir, name), JSON.stringify(state));
+  ensurePrivateDir(path.join(dataDir, 'run'));
+  writePrivateFile(runFile(dataDir, name), JSON.stringify(state));
 }
 
 export function readRun(dataDir, name) {
