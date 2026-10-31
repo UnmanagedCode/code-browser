@@ -287,7 +287,72 @@ describe('view changes clear per-run state', () => {
     expect(screen.getByRole('dialog')).toBeTruthy();
     await f.emit({ type: 'browsers', list: [{ ...running('a'), status: 'stopped' }] });
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.getByText('This browser is stopped.')).toBeTruthy();
+    expect(screen.getByRole('status').getAttribute('data-status')).toBe('stopped');
+    expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
+  });
+});
+
+describe('reconnect', () => {
+  class FakeWs {
+    static all: FakeWs[] = [];
+    readyState = 0; binaryType = '';
+    onopen: (() => void) | null = null; onmessage: ((e: { data: unknown }) => void) | null = null; onclose: (() => void) | null = null;
+    constructor() { FakeWs.all.push(this); }
+    send() {}
+    close() {}
+    open() { this.readyState = 1; this.onopen?.(); }
+    drop() { this.readyState = 3; this.onclose?.(); }
+    deliver(m: unknown) { act(() => { this.onmessage?.({ data: JSON.stringify(m) }); }); }
+  }
+  const dialogMsg = { type: 'dialog', tabId: 'T1', dialogType: 'alert', message: 'pending', defaultPrompt: '' };
+  const boot = () => {
+    vi.useFakeTimers();
+    FakeWs.all = [];
+    goTo('?browser=a');
+    const socket = createViewerSocket({ url: 'ws://x/api/ws', viewerId: 'viewer-123456', createSocket: () => new FakeWs() as unknown as WebSocket });
+    render(<App socket={socket} />);
+    const first = FakeWs.all[0];
+    act(() => first.open());
+    first.deliver({ type: 'browsers', list: [running('a')] });
+    first.deliver(state());
+    first.deliver(dialogMsg);
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    return { socket, first };
+  };
+  const reconnect = (first: FakeWs) => {
+    act(() => first.drop());
+    act(() => { vi.advanceTimersByTime(500); });
+    const second = FakeWs.all[1];
+    act(() => second.open());
+    return second;
+  };
+  afterEach(() => { vi.useRealTimers(); });
+
+  // Invariant: a dialog that was closed while the panel was disconnected does not survive the reconnect: the
+  // modal goes when the socket drops and only dialogs the server still reports are shown again.
+  it('a dialog closed while disconnected is gone after reconnect', () => {
+    const { socket, first } = boot();
+    act(() => first.drop());
+    expect(screen.queryByRole('dialog')).toBeNull();
+    act(() => { vi.advanceTimersByTime(500); });
+    const second = FakeWs.all[1];
+    act(() => second.open());
+    second.deliver({ type: 'browsers', list: [running('a')] });
+    second.deliver(state()); // the server replays state and open dialogs: none are open now
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('tablist')).toBeTruthy();
+    socket.close();
+  });
+
+  // Invariant: a dialog that is still open on the server is shown again after reconnect (the replay repopulates it).
+  it('a dialog still open on the server reappears after reconnect', () => {
+    const { socket, first } = boot();
+    const second = reconnect(first);
+    second.deliver({ type: 'browsers', list: [running('a')] });
+    second.deliver(state());
+    second.deliver(dialogMsg);
+    expect(screen.getByRole('dialog').textContent).toContain('pending');
+    socket.close();
   });
 });
 

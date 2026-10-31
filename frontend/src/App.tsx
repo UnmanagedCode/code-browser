@@ -30,6 +30,15 @@ export function App({ socket }: { socket: ViewerSocket }) {
     }
   }), [socket]);
 
+  // A dropped socket means we no longer know which dialogs are open or what the tabs are. Forget both; the
+  // rejoin on reconnect makes the server replay its state and any dialog that is still open.
+  useEffect(() => socket.onStatus((status) => {
+    if (status === 'closed') {
+      setState(null);
+      setDialogs([]);
+    }
+  }), [socket]);
+
   // The view follows the route, and only while that browser runs; a browser that stops is un-viewed
   // so that its next start is joined again.
   const summary = useMemo(() => browsers.find((b) => b.name === name), [browsers, name]);

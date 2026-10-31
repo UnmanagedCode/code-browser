@@ -37,7 +37,7 @@ export function Viewer({ name, socket, state, dialogs, onBack, onStart }: Props)
         <button type="button" aria-label="Show keyboard" disabled={!hasControl} onClick={() => setKeyboardRequest((n) => n + 1)}>⌨</button>
       </div>
       {!running ? (
-        <div className="stopped">
+        <div className="stopped" role="status" data-status={state?.status ?? 'connecting'}>
           <p>{state?.status === 'stopped' ? 'This browser is stopped.' : 'Connecting…'}</p>
           {state?.status === 'stopped' && <button type="button" onClick={onStart}>Start</button>}
         </div>

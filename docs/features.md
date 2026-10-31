@@ -45,7 +45,7 @@ Open it from cc's **Browser** nav entry, or from the `panelPath` link an agent g
 - **Dialogs:** a JavaScript `alert`, `confirm`, `prompt` or `beforeunload` shows as a modal with its message as text. OK and Cancel need control; the dialog offers *Take control* itself because it covers the controller bar. A dialog open before you joined is shown on arrival.
 - **Stopped browsers:** the viewer shows *This browser is stopped* with a Start button.
 - **Hidden page:** while the page is hidden it pauses its view, so a background tab costs the host no screencast.
-- **Reconnect:** the panel reconnects with backoff and rejoins its view.
+- **Reconnect:** the panel reconnects with backoff and rejoins its view. While disconnected it forgets the tabs and any open dialog; the rejoin shows only what is still open.
 
 ### Control
 
