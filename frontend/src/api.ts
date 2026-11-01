@@ -1,4 +1,4 @@
-import type { BrowserSummary } from './protocol';
+import type { AttachVia, BrowserSummary } from './protocol';
 
 // A failed request: `code` is the backend's "CODE: message" prefix, when it sent one.
 export class ApiError extends Error {
@@ -29,3 +29,5 @@ export const startBrowser = (name: string) => call('POST', `api/browsers/${enc(n
 export const stopBrowser = (name: string) => call('POST', `api/browsers/${enc(name)}/stop`, {});
 export const deleteBrowser = (name: string) => call('DELETE', `api/browsers/${enc(name)}`);
 export const setAllowUnsandboxed = (name: string, allow: boolean) => call('POST', `api/browsers/${enc(name)}/allow-unsandboxed`, { allow });
+export const attachBrowser = (name: string, address: string, via: AttachVia) => call('POST', `api/browsers/${enc(name)}/attach`, { address, via });
+export const connectBrowser = (name: string) => call('POST', `api/browsers/${enc(name)}/connect`, {});

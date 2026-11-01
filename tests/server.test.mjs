@@ -4,12 +4,13 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { createApp } from '../src/app.js';
+import { parseAttachTarget } from '../src/attachStore.js';
 import { CodedError } from '../src/errors.js';
 import { CSP } from '../src/http.js';
 import { buildRoutes } from '../src/routes.js';
 import { JSON_HEADERS, listen, rawExchange, request, tmpDir } from './helpers.mjs';
 
-const MUTATORS = ['create', 'start', 'stop', 'delete', 'setAllowUnsandboxed'];
+const MUTATORS = ['create', 'start', 'stop', 'delete', 'setAllowUnsandboxed', 'attach', 'connect'];
 
 // A manager double that records every call; `hang` makes every method never resolve.
 function fakeManager({ hang = false } = {}) {
@@ -38,6 +39,17 @@ function fakeManager({ hang = false } = {}) {
     }),
     delete: rec('delete', (n) => {
       if (!browsers.delete(n)) throw new CodedError('NOT_FOUND', 'no such browser');
+    }),
+    // Like the real manager: validates synchronously, then returns the connect's promise (which may fail later).
+    attach: rec('attach', (n, body) => {
+      const target = parseAttachTarget(body);
+      browsers.set(n, { name: n, kind: 'attached', status: 'connecting', attached: { address: target.address, via: target.via } });
+      return Promise.reject(new CodedError('ATTACH_FAILED', 'nobody allowed it'));
+    }),
+    connect: rec('connect', (n) => {
+      if (browsers.get(n)?.kind !== 'attached') throw new CodedError('BAD_REQUEST', 'not attached');
+      browsers.get(n).status = 'connecting';
+      return new Promise(() => {});
     }),
   };
 }
@@ -135,6 +147,8 @@ const MUTATING = [
   { method: 'POST', path: '/api/browsers/x/start', body: '{}' },
   { method: 'POST', path: '/api/browsers/x/stop', body: '{}' },
   { method: 'POST', path: '/api/browsers/x/allow-unsandboxed', body: '{"allow":true}', panelOnly: true },
+  { method: 'POST', path: '/api/browsers/x/attach', body: '{"address":"127.0.0.1:9222","via":"proxy"}', panelOnly: true },
+  { method: 'POST', path: '/api/browsers/x/connect', body: '{}', panelOnly: true },
   { method: 'DELETE', path: '/api/browsers/x', body: undefined },
 ];
 
@@ -290,4 +304,51 @@ test('loopback Hosts on the backend port and proxied Hosts are accepted', async 
     assert.equal(r.status, 200, host);
   }
   assert.equal(mcp.calls.length, 5);
+});
+
+// Invariant: attach and connect are the panel's alone (no Origin or a foreign one is 403, before any handler),
+// need JSON, refuse a bad address with 400 BAD_ENDPOINT, and otherwise answer 202 with the connecting summary at
+// once; a connect that later fails does not affect the answer or the process.
+test('attach and connect: panel-only, JSON, validated, 202', async () => {
+  const { port, host, manager } = await boot();
+  const same = { ...JSON_HEADERS, host, origin: `http://${host}` };
+  const body = '{"address":"127.0.0.1:9222","via":"proxy"}';
+  for (const p of ['/api/browsers/mine/attach', '/api/browsers/mine/connect']) {
+    const noOrigin = await request(port, { method: 'POST', path: p, headers: JSON_HEADERS, body });
+    assert.equal(noOrigin.status, 403, p);
+    assert.match(noOrigin.json.error, /Origin/);
+    assert.equal((await request(port, { method: 'POST', path: p, headers: { ...JSON_HEADERS, origin: 'http://evil.test' }, body })).status, 403);
+    assert.equal((await request(port, { method: 'POST', path: p, headers: { ...same, 'content-type': 'text/plain' }, body })).status, 415);
+  }
+  assert.deepEqual(manager.calls, []);
+  for (const bad of ['{"address":"10.0.0.1:9222","via":"proxy"}', '{"address":"127.0.0.1:9222","via":"lan"}', '{}']) {
+    const r = await request(port, { method: 'POST', path: '/api/browsers/mine/attach', headers: same, body: bad });
+    assert.equal(r.status, 400, bad);
+    assert.match(r.json.error, /^BAD_ENDPOINT: /);
+  }
+  const ok = await request(port, { method: 'POST', path: '/api/browsers/mine/attach', headers: same, body });
+  assert.equal(ok.status, 202);
+  assert.equal(ok.json.browser.status, 'connecting');
+  assert.deepEqual(ok.json.browser.attached, { address: '127.0.0.1:9222', via: 'proxy' });
+  const again = await request(port, { method: 'POST', path: '/api/browsers/mine/connect', headers: same, body: '{}' });
+  assert.equal(again.status, 202);
+  assert.equal((await request(port, { method: 'POST', path: '/api/browsers/ghost/connect', headers: same, body: '{}' })).status, 400);
+  assert.equal((await request(port, { path: '/api/health' })).status, 200);
+});
+
+// Invariant: the REST start route refuses an attached browser with 409 ATTACHED, and the opt-in route refuses it with
+// 400; stop and delete need no Origin and reach the manager.
+test('start, opt-in, stop and delete on an attached browser', async () => {
+  const manager = fakeManager();
+  manager.start = async () => { throw new CodedError('ATTACHED', "the user's own browser"); };
+  manager.setAllowUnsandboxed = async () => { throw new CodedError('BAD_REQUEST', 'an attached browser'); };
+  const { port, host } = await boot({ manager });
+  const same = { ...JSON_HEADERS, host, origin: `http://${host}` };
+  await request(port, { method: 'POST', path: '/api/browsers/mine/attach', headers: same, body: '{"address":"127.0.0.1:9222","via":"direct"}' });
+  const started = await request(port, { method: 'POST', path: '/api/browsers/mine/start', headers: same, body: '{}' });
+  assert.equal(started.status, 409);
+  assert.match(started.json.error, /^ATTACHED: /);
+  assert.equal((await request(port, { method: 'POST', path: '/api/browsers/mine/allow-unsandboxed', headers: same, body: '{"allow":true}' })).status, 400);
+  assert.equal((await request(port, { method: 'POST', path: '/api/browsers/mine/stop', headers: JSON_HEADERS, body: '{}' })).status, 200);
+  assert.equal((await request(port, { method: 'DELETE', path: '/api/browsers/mine', headers: JSON_HEADERS })).status, 200);
 });

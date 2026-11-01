@@ -11,11 +11,19 @@ export class CdpConnection extends EventEmitter {
   #pending = new Map();
   closed = false;
 
-  static connect(url, { timeoutMs = CDP_TIMEOUT_MS } = {}) {
+  // `signal` aborts a connection still in its opening handshake (one waiting on Chrome's approval dialog).
+  static connect(url, { timeoutMs = CDP_TIMEOUT_MS, signal } = {}) {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) { reject(signal.reason); return; }
       const ws = new WebSocket(url, { maxPayload: CDP_MAX_PAYLOAD, perMessageDeflate: false, handshakeTimeout: timeoutMs });
-      ws.once('error', reject);
-      ws.once('open', () => { ws.off('error', reject); resolve(new CdpConnection(ws)); });
+      const onAbort = () => { ws.removeAllListeners('error'); ws.on('error', () => {}); ws.terminate(); reject(signal.reason); };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      ws.once('error', (err) => { signal?.removeEventListener('abort', onAbort); reject(err); });
+      ws.once('open', () => {
+        signal?.removeEventListener('abort', onAbort);
+        ws.removeAllListeners('error');
+        resolve(new CdpConnection(ws));
+      });
     });
   }
 

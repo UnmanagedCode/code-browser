@@ -9,8 +9,10 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { locateChromium } from '../src/chromium/locate.js';
+import { PROTOCOL } from '../src/proxyProtocol.js';
 import { pidAlive } from '../src/runState.js';
-import { sleep, tmpDir, waitFor } from './helpers.mjs';
+import { sleep, startProxy, tmpDir, waitFor } from './helpers.mjs';
 
 const root = new URL('..', import.meta.url).pathname;
 const { chromium } = createRequire(path.join(root, 'package.json'))('playwright-core');
@@ -46,8 +48,10 @@ function serve(html) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port })));
 }
 
+// CODE_BROWSER_PROXY_DIAL_HOST: in a container the backend dials a loopback proxy as host.docker.internal; here the
+// proxy runs beside the backend, so it is dialled on 127.0.0.1 (the documented test seam).
 function startBackend(projectsRoot) {
-  const proc = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PROJECTS_ROOT: projectsRoot, PORT: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PROJECTS_ROOT: projectsRoot, PORT: '0', CODE_BROWSER_PROXY_DIAL_HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   proc.stdout.on('data', (d) => { out += d; });
   proc.stderr.on('data', (d) => { out += d; });
@@ -60,6 +64,15 @@ async function post(port, body, headers = { 'content-type': 'application/json' }
 }
 const tool = async (port, name, args = {}) => (await post(port, { tool: name, arguments: args })).json;
 
+// A Chromium the user runs themselves, outside code-browser. Resolves {proc, port} once it publishes DevToolsActivePort,
+// or {proc, port: null} when it publishes none within `waitMs`.
+async function launchOwnChromium(userDataDir, args, waitMs = 15_000) {
+  const proc = spawn(locateChromium(), ['--headless=new', `--user-data-dir=${userDataDir}`, '--no-first-run', '--no-default-browser-check', ...args, 'about:blank'], { stdio: 'ignore' });
+  const file = path.join(userDataDir, 'DevToolsActivePort');
+  const port = await waitFor(() => { try { return Number(fs.readFileSync(file, 'utf8').split('\n')[0]) || null; } catch { return null; } }, { what: 'DevToolsActivePort', timeout: waitMs }).catch(() => null);
+  return { proc, port, kill: () => new Promise((r) => { if (proc.exitCode !== null || proc.signalCode !== null) r(); else { proc.once('exit', r); proc.kill('SIGKILL'); } }) };
+}
+
 test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' && 'set RUN_REAL_CHROMIUM=1 to run', timeout: 240_000 }, async (t) => {
   const projectsRoot = tmpDir('code-browser-e2e-');
   const dataDir = path.join(projectsRoot, '.code-browser');
@@ -71,8 +84,8 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
   const cleanup = [];
 
   // Runs `steps` through the snippet that browser_info hands out, exactly as an agent would.
-  async function agent(steps) {
-    const info = await tool(backend.port, 'browser_info', { name: 'e2e' });
+  async function agent(steps, name = 'e2e') {
+    const info = await tool(backend.port, 'browser_info', { name });
     const code = /```js\n([\s\S]*?)```/.exec(info.text)[1].replace('// … your steps …', steps);
     const file = path.join(projectsRoot, `agent-${Date.now()}.mjs`);
     fs.writeFileSync(file, code);
@@ -323,6 +336,124 @@ console.log(await page.textContent('#result'));`);
       assert.equal((await rest('DELETE', 'e2e')).status, 200);
       assert.ok(!fs.existsSync(profileDir));
       assert.ok(!fs.existsSync(settingsFile));
+    });
+
+    // ---- 10–11: the user's own browser, attached by a human in the panel ----
+    const listedIn = async (name) => (await tool(backend.port, 'list_browsers')).result.find((b) => b.name === name);
+    const secretOf = () => JSON.parse(fs.readFileSync(path.join(dataDir, 'proxy', PROTOCOL.rendezvous.backendFile), 'utf8')).secret;
+    const noSandbox = refused ? ['--no-sandbox'] : [];
+
+    await t.test('10. a human attaches their own Chromium through the real proxy; agents use it; only sockets close', async () => {
+      const own = await launchOwnChromium(path.join(projectsRoot, 'external'), ['--remote-debugging-port=0', ...noSandbox]);
+      cleanup.push(() => own.kill());
+      assert.ok(own.port, 'the external Chromium published its port');
+      let proxy = await startProxy({ projectsRoot, ports: [own.port] });
+      cleanup.push(() => proxy.kill());
+      const page = await newPage();
+      await page.goto(`http://127.0.0.1:${backend.port}/`);
+      const form = page.getByRole('form', { name: 'Attach a browser' });
+      await form.getByRole('textbox', { name: 'Name' }).fill('mine');
+      await form.getByRole('textbox', { name: 'Debug address' }).fill(`127.0.0.1:${own.port}`);
+      await form.getByRole('radio', { name: /On the Docker host/ }).check();
+      await form.getByRole('button', { name: 'Attach' }).click();
+      await waitFor(async () => (await listedIn('mine'))?.status === 'running', { what: 'the attached browser to run', timeout: 20_000 });
+      const row = page.locator('li', { hasText: 'mine' });
+      await row.getByText('attached', { exact: true }).waitFor();
+
+      // The agent: cannot start or reconnect it; gets a tunnel endpoint without the secret; works in its own tab.
+      assert.match((await tool(backend.port, 'start_browser', { name: 'mine' })).error, /^ATTACHED: /);
+      const info = await tool(backend.port, 'browser_info', { name: 'mine' });
+      assert.equal(info.meta.kind, 'attached');
+      assert.deepEqual(info.meta.attached, { address: `127.0.0.1:${own.port}`, via: 'proxy', asksApproval: false });
+      const endpoint = new URL(info.meta.cdpEndpoint);
+      assert.equal(endpoint.hostname, '127.0.0.1');
+      assert.notEqual(Number(endpoint.port), own.port, 'agents reach the browser through the backend tunnel');
+      assert.equal(info.meta.sandbox, null);
+      for (const text of [JSON.stringify(info), JSON.stringify(await tool(backend.port, 'list_browsers'))]) assert.ok(!text.includes(secretOf()));
+      assert.match(info.text, /your own tab/);
+      await agent(`await page.goto(${JSON.stringify(fixtureUrl)});`, 'mine');
+
+      // The panel watches it, a human takes control and clicks, the agent sees the click and the controller.
+      const viewer = await newPage();
+      await viewer.goto(`http://127.0.0.1:${backend.port}/?browser=mine`);
+      await viewer.waitForSelector('canvas[data-frame-seq]', { timeout: 20_000 });
+      await viewer.getByRole('button', { name: 'Take control' }).click();
+      await viewer.getByText('You have control').waitFor();
+      const btn = await clientPoint(viewer, 200, 140);
+      await viewer.mouse.click(btn.x, btn.y);
+      assert.equal((await tool(backend.port, 'browser_info', { name: 'mine' })).meta.controller, 'human');
+      assert.equal(await agent(`console.log(await page.textContent('#count'));`, 'mine'), '1');
+      await viewer.getByRole('button', { name: 'Hand back' }).click();
+      await viewer.close();
+
+      // stop_browser only disconnects: Chromium and every tab (the agent's included) are still there.
+      assert.deepEqual((await tool(backend.port, 'stop_browser', { name: 'mine' })).result, { name: 'mine', status: 'stopped' });
+      assert.ok(pidAlive(own.proc.pid));
+      const tabs = await (await fetch(`http://127.0.0.1:${own.port}/json/list`)).json();
+      assert.ok(tabs.some((x) => x.url === fixtureUrl), 'the tabs are untouched');
+      await row.getByRole('button', { name: 'Connect' }).click();
+      await waitFor(async () => (await listedIn('mine')).status === 'running', { what: 'Connect to reconnect', timeout: 20_000 });
+
+      // Losing the proxy is a disconnect; with the proxy back, Connect works again.
+      await proxy.kill();
+      await waitFor(async () => { const b = await listedIn('mine'); return b.status === 'stopped' && b.lastExit; }, { what: 'Disconnected', timeout: 10_000 });
+      await row.getByText('Disconnected').waitFor();
+      proxy = await startProxy({ projectsRoot, ports: [own.port] });
+      cleanup.push(() => proxy.kill());
+      await row.getByRole('button', { name: 'Connect' }).click();
+      await waitFor(async () => (await listedIn('mine')).status === 'running', { what: 'Connect after the proxy came back', timeout: 20_000 });
+
+      // Forget removes the record only.
+      page.once('dialog', (d) => d.accept());
+      await row.getByRole('button', { name: 'Forget' }).click();
+      await waitFor(async () => !(await listedIn('mine')), { what: 'the record to go', timeout: 10_000 });
+      assert.ok(!fs.existsSync(path.join(dataDir, 'attached', 'mine.json')));
+      await sleep(200);
+      assert.ok(pidAlive(own.proc.pid), 'forgetting never closes the browser');
+      await page.close();
+    });
+
+    await t.test('11. best effort: Chrome approval mode is discovered by its empty 404; its connect is held (then cancelled) or refused', async () => {
+      const dir = path.join(projectsRoot, 'approval');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'Local State'), JSON.stringify({ devtools: { remote_debugging: { 'user-enabled': true } } }));
+      const own = await launchOwnChromium(dir, noSandbox, 8000);
+      cleanup.push(() => own.kill());
+      if (!own.port) {
+        const version = spawnSync(locateChromium(), ['--version'], { encoding: 'utf8' }).stdout.trim();
+        t.diagnostic(`${version} published no DevToolsActivePort from the remote-debugging pref: approval mode not exercised`);
+        return;
+      }
+      const res = await fetch(`http://127.0.0.1:${own.port}/json/version`);
+      assert.equal(res.status, 404);
+      assert.equal(await res.text(), '');
+      const page = await newPage();
+      await page.goto(`http://127.0.0.1:${backend.port}/`);
+      const form = page.getByRole('form', { name: 'Attach a browser' });
+      await form.getByRole('textbox', { name: 'Name' }).fill('approval');
+      await form.getByRole('textbox', { name: 'Debug address' }).fill(`127.0.0.1:${own.port}`);
+      await form.getByRole('radio', { name: /On this machine/ }).check();
+      await form.getByRole('button', { name: 'Attach' }).click();
+      const settled = await waitFor(async () => { const b = await listedIn('approval'); return b && b.status !== 'connecting' && b; }, { what: 'the approval connect to settle', timeout: 15_000 }).catch(() => null);
+      if (settled) {
+        assert.equal(settled.status, 'stopped');
+        assert.match(settled.attachError, /refused|Allow remote debugging/);
+        assert.equal(settled.attached.asksApproval, true);
+      }
+      const row = page.locator('li', { hasText: 'approval' });
+      if (!settled) {
+        t.diagnostic('Chrome held the connection for its approval dialog: refusal not observed; disconnecting');
+        const b = await listedIn('approval');
+        assert.equal(b.status, 'connecting');
+        assert.equal(b.attached.asksApproval, true);
+        await row.getByText(/click Allow/).waitFor();
+        await row.getByText('asks approval').waitFor();
+      }
+      if (!settled) await row.getByRole('button', { name: 'Disconnect' }).click();
+      page.once('dialog', (d) => d.accept());
+      await row.getByRole('button', { name: 'Forget' }).click();
+      await waitFor(async () => !(await listedIn('approval')), { what: 'the record to go', timeout: 10_000 });
+      await page.close();
     });
   } finally {
     for (const fn of cleanup.reverse()) await fn();

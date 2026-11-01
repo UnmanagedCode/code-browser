@@ -12,12 +12,18 @@ const isPage = (ti) => ti.type === 'page' && !ti.subtype;
 // The live side of one running browser: tabs and the shared active tab, dialogs, navigation state,
 // input dispatch, the controller lease and the screencast. Emits 'change' (any visible state),
 // 'dialog' ({tabId, type, message, defaultPrompt}) and 'dialogClosed' ({tabId}).
-export function createBrowserSession({ name, cdp, sandbox, log = console, controllerOptions = {}, screencastOptions = {} }) {
+//
+// `attached`: the browser is a person's own (attached in the panel). Its existing tabs are seeded without
+// becoming active, a tab is brought to the front only when someone starts watching it, and closing the last
+// tab opens nothing.
+export function createBrowserSession({ name, cdp, sandbox, attached = false, log = console, controllerOptions = {}, screencastOptions = {} }) {
   const events = new EventEmitter();
   const controller = createController({ ...controllerOptions, onChange: () => events.emit('change') });
+  const warn = (what) => (err) => { if (!disposed) log.warn(`code-browser: '${name}' ${what}: ${err.message}`); };
   const screencast = createScreencast({
     send: (method, params, sessionId) => cdp.send(method, params, { sessionId }),
     onError: (err) => log.warn(`code-browser: '${name}' screencast: ${err.message}`),
+    ...(attached ? { onStart: (tabId) => { cdp.send('Target.activateTarget', { targetId: tabId }).catch(warn('activateTarget')); } } : {}),
     ...screencastOptions,
   });
   let tabs = emptyTabs();
@@ -26,11 +32,12 @@ export function createBrowserSession({ name, cdp, sandbox, log = console, contro
   let current = null; // the screencast target {sessionId, tabId}
   const sessionOfTab = new Map();
   const tabOfSession = new Map();
+  const attaching = new Map(); // targetId -> promise of its page session id (null when the attach failed)
   const dialogs = new Map();
 
-  const warn = (what) => (err) => { if (!disposed) log.warn(`code-browser: '${name}' ${what}: ${err.message}`); };
-  const callOn = (tabId, method, params) => {
-    const sessionId = sessionOfTab.get(tabId);
+  // A listed tab may still be attaching: an action on it waits for its page session rather than failing.
+  const callOn = async (tabId, method, params) => {
+    const sessionId = sessionOfTab.get(tabId) ?? await attaching.get(tabId);
     if (!sessionId) throw new CodedError('NO_TAB', 'that tab is not attached');
     return cdp.send(method, params, { sessionId });
   };
@@ -64,25 +71,32 @@ export function createBrowserSession({ name, cdp, sandbox, log = console, contro
     if (tabs.activeId !== before) {
       syncScreencast();
       if (tabs.activeId) {
-        cdp.send('Target.activateTarget', { targetId: tabs.activeId }).catch(warn('activateTarget'));
+        if (!attached) cdp.send('Target.activateTarget', { targetId: tabs.activeId }).catch(warn('activateTarget'));
         refreshNav().catch(warn('navigation state'));
       }
     }
     events.emit('change');
   }
 
-  async function attach(targetId) {
-    try {
-      const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
-      if (!tabs.tabs.some((t) => t.targetId === targetId)) return; // closed while attaching
-      sessionOfTab.set(targetId, sessionId);
-      tabOfSession.set(sessionId, targetId);
-      await cdp.send('Page.enable', {}, { sessionId });
-      syncScreencast();
-      if (targetId === tabs.activeId) refreshNav().catch(warn('navigation state'));
-    } catch (err) {
-      warn(`attach ${targetId}`)(err);
-    }
+  function attach(targetId) {
+    const done = (async () => {
+      try {
+        const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
+        if (!tabs.tabs.some((t) => t.targetId === targetId)) return null; // closed while attaching
+        sessionOfTab.set(targetId, sessionId);
+        tabOfSession.set(sessionId, targetId);
+        await cdp.send('Page.enable', {}, { sessionId });
+        syncScreencast();
+        if (targetId === tabs.activeId) refreshNav().catch(warn('navigation state'));
+        return sessionId;
+      } catch (err) {
+        warn(`attach ${targetId}`)(err);
+        return sessionOfTab.get(targetId) ?? null;
+      } finally {
+        attaching.delete(targetId);
+      }
+    })();
+    attaching.set(targetId, done);
   }
 
   function forgetTab(targetId) {
@@ -95,9 +109,11 @@ export function createBrowserSession({ name, cdp, sandbox, log = console, contro
   function onEvent({ method, params, sessionId }) {
     switch (method) {
       case 'Target.targetCreated':
-        if (!isPage(params.targetInfo)) return;
-        apply({ type: 'created', targetId: params.targetInfo.targetId, url: params.targetInfo.url, title: params.targetInfo.title });
+        if (!isPage(params.targetInfo) || tabs.tabs.some((t) => t.targetId === params.targetInfo.targetId)) return;
+        // The attach is registered before the tab is listed, so anything the listing triggers (the nav refresh of a
+        // newly active tab) waits for it.
         attach(params.targetInfo.targetId);
+        apply({ type: 'created', targetId: params.targetInfo.targetId, url: params.targetInfo.url, title: params.targetInfo.title });
         return;
       case 'Target.targetInfoChanged':
         if (isPage(params.targetInfo)) apply({ type: 'changed', targetId: params.targetInfo.targetId, url: params.targetInfo.url, title: params.targetInfo.title });
@@ -106,7 +122,7 @@ export function createBrowserSession({ name, cdp, sandbox, log = console, contro
         if (!tabs.tabs.some((t) => t.targetId === params.targetId)) return;
         forgetTab(params.targetId);
         apply({ type: 'destroyed', targetId: params.targetId });
-        if (tabs.tabs.length === 0 && !disposed) cdp.send('Target.createTarget', { url: 'about:blank' }).catch(warn('open blank tab'));
+        if (tabs.tabs.length === 0 && !disposed && !attached) cdp.send('Target.createTarget', { url: 'about:blank' }).catch(warn('open blank tab'));
         return;
       case 'Page.screencastFrame':
         screencast.onFrame(sessionId, params);
@@ -141,6 +157,13 @@ export function createBrowserSession({ name, cdp, sandbox, log = console, contro
     screencast,
     async start() {
       cdp.on('event', onEventBound);
+      if (attached) {
+        const { targetInfos } = await cdp.send('Target.getTargets');
+        for (const ti of targetInfos.filter(isPage)) {
+          attach(ti.targetId);
+          apply({ type: 'created', background: true, targetId: ti.targetId, url: ti.url, title: ti.title });
+        }
+      }
       await cdp.send('Target.setDiscoverTargets', { discover: true });
     },
     dispose() {

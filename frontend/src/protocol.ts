@@ -1,12 +1,18 @@
 // Panel <-> backend messages (docs/protocol.md → Panel WebSocket). Client messages carry `msg`, server messages `type`.
+export type AttachVia = 'proxy' | 'direct';
+
 export interface BrowserSummary {
   name: string;
-  status: 'running' | 'stopped';
+  // launched: a headless Chromium code-browser runs; attached: a person's own browser, attached in this panel.
+  kind: 'launched' | 'attached';
+  status: 'running' | 'stopped' | 'connecting';
   controller: 'agent' | 'human';
   sandbox: boolean | null;
   allowUnsandboxed: boolean;
   sandboxUnavailable: boolean;
   lastExit: { code: number | null; signal: string | null; at: number } | null;
+  attached: { address: string; via: AttachVia; asksApproval: boolean | null } | null;
+  attachError: string | null;
 }
 
 export interface Tab { targetId: string; url: string; title: string }

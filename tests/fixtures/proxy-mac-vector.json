@@ -1,0 +1,8 @@
+{
+  "secret": "ssssssssssssssssecret-vector-0123456789abcdef",
+  "nonceProxy": "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
+  "nonceClient": "ccccccccccccccccccccccccccccccccccccccccccc",
+  "port": 9222,
+  "clientMac": "76f68cdabd160cd94a9df2710f7499533cff747cfc80fd4014190c60ea299ad8",
+  "proxyMac": "87ebefc07d9c4ce043a65008cca73cd11b3a3656ebebb268e1d51cd8fa24ed68"
+}

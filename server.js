@@ -9,7 +9,7 @@ import { createViewerGateway } from './src/viewerGateway.js';
 const config = loadConfig();
 const manager = createBrowserManager({
   dataDir: config.dataDir,
-  createSession: (entry) => createBrowserSession({ name: entry.name, cdp: entry.cdp, sandbox: entry.sandbox }),
+  createSession: (entry) => createBrowserSession({ name: entry.name, cdp: entry.cdp, sandbox: entry.sandbox, attached: entry.kind === 'attached' }),
 });
 const mcp = createMcp({ manager, pluginDir: config.pluginDir, pluginId: config.pluginId });
 

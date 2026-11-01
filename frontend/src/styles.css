@@ -48,6 +48,14 @@ input { background: var(--card); border: 1px solid var(--border); border-radius:
 .new-browser { display: flex; gap: 0.5rem; margin-top: 1rem; }
 .new-browser input { flex: 1; }
 .hint { color: var(--muted-foreground); }
+.hint[data-warn='true'], .row-note[data-warn='true'] { color: var(--warning); }
+.row-note { flex-basis: 100%; margin: 0; font-size: 0.85rem; color: var(--muted-foreground); }
+.attach-browser { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1.5rem; max-width: 40rem; }
+.attach-browser h2 { margin: 0; font-size: 1.1rem; }
+.attach-browser label { display: flex; flex-direction: column; gap: 0.25rem; }
+.attach-browser fieldset { display: flex; flex-direction: column; gap: 0.25rem; border: 1px solid var(--border); border-radius: 0.4rem; }
+.attach-browser fieldset label { flex-direction: row; align-items: center; gap: 0.4rem; }
+.attach-browser button { align-self: flex-start; }
 
 .viewer { display: flex; flex-direction: column; height: 100%; }
 .toolbar { display: flex; align-items: center; gap: 0.35rem; padding: 0.35rem; border-bottom: 1px solid var(--border); }

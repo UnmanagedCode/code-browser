@@ -5,6 +5,11 @@ import { CodedError } from './errors.js';
 // `requireOrigin` routes are for the panel only: a request with no Origin (cc's MCP bridge, curl) is refused.
 export function buildRoutes({ manager, mcp }) {
   const name = '([^/]+)';
+  // A connect's failure is kept in the browser's summary (`attachError`), not thrown here.
+  const accepted = (connecting, n) => {
+    connecting.catch(() => {});
+    return { status: 202, body: { browser: manager.summary(n) } };
+  };
   return [
     { method: 'GET', path: /^\/api\/health$/, handler: () => ({ ok: true }) },
     { method: 'GET', path: /^\/api\/browsers$/, handler: () => ({ browsers: manager.list() }) },
@@ -31,6 +36,17 @@ export function buildRoutes({ manager, mcp }) {
         await manager.setAllowUnsandboxed(params[0], body.allow);
         return { browser: manager.summary(params[0]) };
       },
+    },
+    // Attach and Connect are the panel's alone: only a person connects code-browser to their own browser.
+    // Both validate before answering, then connect in the background: in Chrome's approval mode the connection
+    // waits on a click in Chrome. The outcome arrives as `change` (the panel's `browsers` message).
+    {
+      method: 'POST', path: new RegExp(`^/api/browsers/${name}/attach$`), mutating: true, requireOrigin: true,
+      handler: ({ params, body }) => accepted(manager.attach(params[0], body), params[0]),
+    },
+    {
+      method: 'POST', path: new RegExp(`^/api/browsers/${name}/connect$`), mutating: true, requireOrigin: true,
+      handler: ({ params }) => accepted(manager.connect(params[0]), params[0]),
     },
     {
       method: 'DELETE', path: new RegExp(`^/api/browsers/${name}$`), mutating: true,

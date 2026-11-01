@@ -9,8 +9,9 @@
     "noEmit": true,
     "skipLibCheck": true,
     "allowJs": true,
+    "resolveJsonModule": true,
     "checkJs": false,
     "types": ["vite/client"]
   },
-  "include": ["src", "../src/limits.js"]
+  "include": ["src", "../src/limits.js", "../proxy/protocol.json"]
 }

@@ -1,5 +1,7 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { createBrowserSession } from '../src/browserSession.js';
 import { MAX_PROMPT_TEXT } from '../src/limits.js';
 import { liveStack, waitFor } from './helpers.mjs';
 
@@ -69,7 +71,6 @@ test('input is dispatched on the active tab', async () => {
   const { session, agent } = await boot();
   const { targetId } = await agent.send('Target.createTarget', { url: 'about:blank' });
   await waitFor(() => session.snapshot().activeTabId === targetId, { what: 'second active' });
-  await waitFor(async () => (await state(agent)).sessions.length >= 2, { what: 'both tabs attached' });
   await session.input({ kind: 'mouse', action: 'down', x: 5, y: 6, button: 'left', clickCount: 1 });
   const rec = (await agent.send('Fake.getRecorded')).recorded;
   assert.equal(rec.length, 1);
@@ -82,7 +83,6 @@ test('input is dispatched on the active tab', async () => {
 test('navigation: goto, back, forward and history flags', async () => {
   const { session, agent } = await boot();
   const id = session.snapshot().activeTabId;
-  await waitFor(async () => (await state(agent)).sessions.length >= 1, { what: 'attached' });
   await session.navigate('goto', 'example.com');
   await waitFor(() => session.snapshot().tabs[0].url === 'https://example.com/', { what: 'navigation' });
   await waitFor(() => session.snapshot().canGoBack, { what: 'canGoBack' });
@@ -139,4 +139,83 @@ test('promptText is capped', async () => {
   assert.equal((await agent.send('Fake.getRecorded')).recorded.filter((r) => r.method === 'Page.handleJavaScriptDialog').length, 0);
   await session.answerDialog(tabId, 'accept', 'y'.repeat(MAX_PROMPT_TEXT));
   await waitFor(() => session.pendingDialogs().length === 0, { what: 'dialog answered' });
+});
+
+// A CDP double whose Target.attachToTarget answers only when the test releases it, so the window between a tab being
+// listed and its page session existing is held open deterministically.
+function slowAttachCdp({ targets = [], failAttach = false } = {}) {
+  const cdp = new EventEmitter();
+  cdp.calls = [];
+  const waiting = [];
+  cdp.release = () => { for (const fn of waiting.splice(0)) fn(); };
+  cdp.send = (method, params, { sessionId } = {}) => {
+    cdp.calls.push({ method, params, sessionId });
+    switch (method) {
+      case 'Target.attachToTarget':
+        return new Promise((resolve, reject) => waiting.push(() => (failAttach ? reject(new Error('gone')) : resolve({ sessionId: `S-${params.targetId}` }))));
+      case 'Target.getTargets': return Promise.resolve({ targetInfos: targets });
+      case 'Page.getNavigationHistory': return Promise.resolve({ currentIndex: 0, entries: [{ id: 0, url: 'about:blank' }] });
+      default: return Promise.resolve({});
+    }
+  };
+  cdp.created = (targetId) => cdp.emit('event', { method: 'Target.targetCreated', params: { targetInfo: { targetId, type: 'page', url: 'about:blank', title: '' } } });
+  return cdp;
+}
+const click = { kind: 'mouse', action: 'down', x: 1, y: 1, button: 'left', clickCount: 1 };
+
+// Invariant: a tab the session reports as active is usable: input and navigation sent while its page session is still
+// being attached wait for it and then go to that tab's session, never failing with NO_TAB.
+test('input and navigation on a listed tab wait for its attach', async () => {
+  const cdp = slowAttachCdp();
+  const session = createBrowserSession({ name: 'a', cdp, sandbox: true, log: { warn() {} } });
+  await session.start();
+  cdp.created('T1');
+  assert.equal(session.snapshot().activeTabId, 'T1');
+  const input = session.input(click);
+  const nav = session.navigate('goto', 'https://x.test/');
+  await new Promise((r) => setImmediate(r));
+  assert.ok(!cdp.calls.some((c) => c.method === 'Input.dispatchMouseEvent'), 'nothing is sent before the attach');
+  cdp.release();
+  await Promise.all([input, nav]);
+  assert.equal(cdp.calls.find((c) => c.method === 'Input.dispatchMouseEvent').sessionId, 'S-T1');
+  assert.equal(cdp.calls.find((c) => c.method === 'Page.navigate').sessionId, 'S-T1');
+});
+
+// Invariant: in an attached browser the seeded tabs are listed while their attaches are in flight, and selecting one
+// and acting on it waits for its attach too.
+test('a seeded tab of an attached browser is usable as soon as it is selected', async () => {
+  const cdp = slowAttachCdp({ targets: [{ targetId: 'U1', type: 'page', url: 'https://mail.test/', title: 'Mail' }] });
+  const session = createBrowserSession({ name: 'a', cdp, sandbox: null, attached: true, log: { warn() {} } });
+  await session.start();
+  session.activateTab('U1');
+  const input = session.input(click);
+  cdp.release();
+  await input;
+  assert.equal(cdp.calls.find((c) => c.method === 'Input.dispatchMouseEvent').sessionId, 'S-U1');
+});
+
+// Invariant: a tab whose attach fails is reported as NO_TAB to whoever was waiting on it, not left hanging.
+test('a failed attach makes waiting actions NO_TAB', async () => {
+  const cdp = slowAttachCdp({ failAttach: true });
+  const session = createBrowserSession({ name: 'a', cdp, sandbox: true, log: { warn() {} } });
+  await session.start();
+  cdp.created('T1');
+  const input = session.input(click);
+  cdp.release();
+  await assert.rejects(input, (e) => e.code === 'NO_TAB');
+});
+
+// Invariant: the session's own navigation refresh for a new active tab never races that tab's attach: no NO_TAB (or
+// any) warning is logged for a tab the session lists, and the refresh reaches the tab's session once attached.
+test('a new tab logs no warning and its navigation state is read through its session', async () => {
+  const cdp = slowAttachCdp();
+  const warns = [];
+  const session = createBrowserSession({ name: 'a', cdp, sandbox: true, log: { warn: (m) => warns.push(m) } });
+  await session.start();
+  cdp.created('T1');
+  await new Promise((r) => setImmediate(r));
+  cdp.release();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(warns, []);
+  assert.ok(cdp.calls.some((c) => c.method === 'Page.getNavigationHistory' && c.sessionId === 'S-T1'));
 });

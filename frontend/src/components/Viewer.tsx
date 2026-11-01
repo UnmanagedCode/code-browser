@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { BrowserState, BrowserSummary, DialogInfo } from '../protocol';
 import type { ViewerSocket } from '../socket';
+import { ALLOW_HINT } from './BrowserList';
 import { ControllerBar } from './ControllerBar';
 import { DialogPrompt } from './DialogPrompt';
 import { SandboxNotice } from './SandboxNotice';
@@ -17,9 +18,10 @@ interface Props {
   onError(message: string): void;
   onBack(): void;
   onStart(): void;
+  onConnect(): void;
 }
 
-export function Viewer({ name, socket, state, dialogs, summary, onError, onBack, onStart }: Props) {
+export function Viewer({ name, socket, state, dialogs, summary, onError, onBack, onStart, onConnect }: Props) {
   const [keyboardRequest, setKeyboardRequest] = useState(0);
   const running = state?.status === 'running';
   const controller = state?.controller ?? { kind: 'agent' as const };
@@ -39,7 +41,22 @@ export function Viewer({ name, socket, state, dialogs, summary, onError, onBack,
         <UrlBar url={activeTab?.url ?? ''} hasControl={hasControl} onGo={(url) => socket.send({ msg: 'nav', action: 'goto', url })} />
         <button type="button" aria-label="Show keyboard" disabled={!hasControl} onClick={() => setKeyboardRequest((n) => n + 1)}>⌨</button>
       </div>
-      {!running && state?.status === 'stopped' && summary?.sandboxUnavailable ? (
+      {!running && summary?.kind === 'attached' && summary.status !== 'running' ? (
+        <div className="stopped" role="status" data-status={summary.status}>
+          {summary.status === 'connecting' ? (
+            <>
+              <p>Connecting…</p>
+              <p className="hint">{ALLOW_HINT}</p>
+            </>
+          ) : (
+            <>
+              <p>This browser is disconnected.</p>
+              {summary.attachError && <p className="hint" data-warn="true">{summary.attachError}</p>}
+              <button type="button" onClick={onConnect}>Connect</button>
+            </>
+          )}
+        </div>
+      ) : !running && state?.status === 'stopped' && summary?.sandboxUnavailable ? (
         <SandboxNotice summary={summary} onError={onError} />
       ) : !running ? (
         <div className="stopped" role="status" data-status={state?.status ?? 'connecting'}>
@@ -61,7 +78,9 @@ export function Viewer({ name, socket, state, dialogs, summary, onError, onBack,
             onTake={() => socket.send({ msg: 'control', action: 'take' })}
             onRelease={() => socket.send({ msg: 'control', action: 'release' })}
           />
-          <Screen socket={socket} hasControl={hasControl} keyboardRequest={keyboardRequest} />
+          {tabs.length > 0 && !state?.activeTabId
+            ? <p className="stopped" role="status">Select a tab to watch it.</p>
+            : <Screen socket={socket} hasControl={hasControl} keyboardRequest={keyboardRequest} />}
           {dialog && (
             <DialogPrompt
               key={dialog.tabId}

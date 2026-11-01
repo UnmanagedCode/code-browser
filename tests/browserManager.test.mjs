@@ -9,7 +9,7 @@ import { tmpDir, waitFor } from './helpers.mjs';
 const FAKE = new URL('./fakes/fakeChromium.mjs', import.meta.url).pathname;
 const managers = [];
 
-function make({ dataDir = tmpDir(), env = {}, timeouts = {}, trashFs } = {}) {
+function make({ dataDir = tmpDir(), env = {}, timeouts = {}, trashFs, now } = {}) {
   const warns = [];
   const manager = createBrowserManager({
     dataDir,
@@ -17,6 +17,7 @@ function make({ dataDir = tmpDir(), env = {}, timeouts = {}, trashFs } = {}) {
     log: { warn: (m) => warns.push(m) },
     timeouts: { launch: 4000, stopGrace: 1500, killGrace: 200, shutdownGrace: 500, ...timeouts },
     ...(trashFs ? { trashFs } : {}),
+    ...(now ? { now } : {}),
   });
   managers.push(manager);
   return { manager, dataDir, warns, profile: (n) => path.join(dataDir, 'profiles', n) };
@@ -118,9 +119,16 @@ test('starting a profile that a stale backend still runs reaps the old browser f
 
 // Invariant: a launch that never exposes DevToolsActivePort fails loudly with the log tail and leaves no process.
 test('launch timeout gives LAUNCH_FAILED with the log tail and kills the browser', async () => {
-  const { manager, profile } = make({ env: { FAKE_CHROMIUM_NO_PORT: '1' }, timeouts: { launch: 300 } });
+  // The launch clock stands still until the fake has started, then jumps past the deadline: the timeout fires, and
+  // always on a browser that did start. A fake that never starts releases the clock after a real bound instead, and
+  // the pid check below then fails the test.
+  const dataDir = tmpDir();
+  const t0 = Date.now();
+  const started = () => fs.existsSync(path.join(dataDir, 'profiles', 'a', 'fake-pid'));
+  const { manager, profile } = make({ dataDir, env: { FAKE_CHROMIUM_NO_PORT: '1' }, timeouts: { launch: 300 }, now: () => (started() || Date.now() - t0 > 10_000 ? Number.MAX_SAFE_INTEGER : 0) });
   manager.create('a');
   await assert.rejects(manager.start('a'), (e) => e.code === 'LAUNCH_FAILED' && /no DevToolsActivePort/.test(e.message));
+  assert.ok(started(), 'the fake started before the deadline fired');
   const pid = fakePid(profile('a'));
   await waitFor(() => !pidAlive(pid), { what: 'timed-out chromium to be killed' });
   assert.equal(manager.summary('a').status, 'stopped');
@@ -143,7 +151,7 @@ test('sandbox failure without the opt-in is refused and launches nothing unsandb
   assert.equal(fs.existsSync(path.join(profile('a'), 'fake-pid')), false);
   assert.equal(fs.existsSync(path.join(dataDir, 'run', 'a.json')), false);
   assert.ok(!warns.some((w) => w.includes('relaunching')));
-  assert.deepEqual(manager.summary('a'), { name: 'a', status: 'stopped', controller: 'agent', sandbox: null, allowUnsandboxed: false, sandboxUnavailable: true, lastExit: null, cdpEndpoint: null });
+  assert.deepEqual(manager.summary('a'), { name: 'a', kind: 'launched', status: 'stopped', controller: 'agent', sandbox: null, allowUnsandboxed: false, sandboxUnavailable: true, lastExit: null, cdpEndpoint: null, attached: null, attachError: null });
   assert.ok(changes > 0, 'the refusal emits change');
 });
 

@@ -20,6 +20,11 @@ export const STOP_GRACE_MS = 5_000;
 export const KILL_GRACE_MS = 1_500;
 export const SHUTDOWN_GRACE_MS = 2_000;
 
+// Attached browsers: how long a connection waits for a person to click Allow in Chrome's
+// "Allow remote debugging?" dialog, and the largest /json/version answer read
+export const APPROVAL_TIMEOUT_MS = 120_000;
+export const MAX_DISCOVERY_BYTES = 64 * 1024;
+
 // Longest promptText a viewer may answer a JavaScript prompt() dialog with
 export const MAX_PROMPT_TEXT = 8192;
 

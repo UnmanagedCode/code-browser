@@ -17,7 +17,7 @@
     "tools": [
       {
         "name": "list_browsers",
-        "description": "List the shared browsers: name, status (running|stopped), who controls it (agent|human), the CDP endpoint while running, and the read-only allowUnsandboxed (whether a human allowed it to run without the sandbox).",
+        "description": "List the shared browsers: name, kind (launched: a headless Chromium code-browser runs; attached: the user's own browser, which a human attached in the panel), status (running|stopped, or connecting for an attached one), who controls it (agent|human), the CDP endpoint while running, the read-only allowUnsandboxed (whether a human allowed it to run without the sandbox), and for an attached browser `attached` (its debug address, how it is reached, and whether Chrome asks the user to approve each connection).",
         "inputSchema": {
           "type": "object",
           "properties": {}
@@ -25,7 +25,7 @@
       },
       {
         "name": "start_browser",
-        "description": "Start (creating on first use) a persistent headless Chromium that you and the human share. Workflow: start_browser -> read the returned snippet -> run it via Bash as an .mjs script (it connects to the browser over CDP with Playwright; the browser and its tabs keep state between scripts). The project needs no Playwright install. A browser name keeps its logins and cookies across stops. The human watches and can take control in a panel: obey `controller` in the result, and while it is \"human\" do not drive the page, call browser_info again later. When the host has no usable Chromium sandbox the start is refused with SANDBOX_UNAVAILABLE unless a human has turned on \"Allow without sandbox\" for that browser in the panel; you cannot turn it on, so ask the user. Check `sandbox` in the result and do not browse untrusted pages when it is false.",
+        "description": "Start (creating on first use) a persistent headless Chromium that you and the human share. Workflow: start_browser -> read the returned snippet -> run it via Bash as an .mjs script (it connects to the browser over CDP with Playwright; the browser and its tabs keep state between scripts). The project needs no Playwright install. A browser name keeps its logins and cookies across stops. The human watches and can take control in a panel: obey `controller` in the result, and while it is \"human\" do not drive the page, call browser_info again later. When the host has no usable Chromium sandbox the start is refused with SANDBOX_UNAVAILABLE unless a human has turned on \"Allow without sandbox\" for that browser in the panel; you cannot turn it on, so ask the user. Check `sandbox` in the result and do not browse untrusted pages when it is false. An attached browser (the user's own, which a human attached in the panel) cannot be started or reconnected by you: start_browser refuses it with ATTACHED and the panel path, so ask the user to press Connect there.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -40,7 +40,7 @@
       },
       {
         "name": "stop_browser",
-        "description": "Stop a shared browser. Its profile (logins, cookies) is kept; start_browser brings it back.",
+        "description": "Stop a shared browser. Its profile (logins, cookies) is kept; start_browser brings it back. For an attached browser (the user's own) it only disconnects code-browser: the browser and its tabs keep running, and only the user can reconnect it.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -55,7 +55,7 @@
       },
       {
         "name": "browser_info",
-        "description": "Current state of a running shared browser: CDP endpoint, open tabs, the active tab, and who controls it. Returns a ready-to-run Playwright snippet and the panel path to give the user. Call it before each script: if controller is \"human\" the human has taken over, so do not drive the page until it is \"agent\" again. The browser may run unsandboxed where a human allowed it (read-only `allowUnsandboxed`): check `sandbox`.",
+        "description": "Current state of a running shared browser: CDP endpoint, open tabs, the active tab, and who controls it. Returns a ready-to-run Playwright snippet and the panel path to give the user. Call it before each script: if controller is \"human\" the human has taken over, so do not drive the page until it is \"agent\" again. The browser may run unsandboxed where a human allowed it (read-only `allowUnsandboxed`): check `sandbox`. `kind` is attached for the user's own browser: work in your own tab there, and when `attached.asksApproval` is true, Chrome asks the user to allow every script's connection, so tell them before each script.",
         "inputSchema": {
           "type": "object",
           "properties": {

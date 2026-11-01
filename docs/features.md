@@ -2,7 +2,7 @@
 
 > See also: [README](../README.md) · [protocol](protocol.md) · [architecture](architecture.md)
 
-code-browser gives an agent and a person one shared headless Chromium. The agent drives it with its own Playwright scripts; the person watches, and can take over, in the **Code Browser** panel.
+code-browser gives an agent and a person one shared headless Chromium. The agent drives it with its own Playwright scripts; the person watches, and can take over, in the **Code Browser** panel. A person can also attach a browser they run themselves (see [Attach your own browser](#attach-your-own-browser)); agents then use it through the same tools.
 
 ## Agent workflow
 
@@ -25,10 +25,12 @@ Arguments and return shapes: [protocol.md → MCP wire format](protocol.md#mcp-w
 
 | Tool | Does |
 |---|---|
-| `list_browsers` | name, status, controller, CDP endpoint, sandbox state and the read-only `allowUnsandboxed` of every profile |
-| `start_browser` | starts (creating on first use) a browser; idempotent |
-| `stop_browser` | stops it; the profile is kept |
-| `browser_info` | CDP endpoint, tabs, active tab, controller, `sandbox`, read-only `allowUnsandboxed`, panel path, snippet |
+| `list_browsers` | name, `kind`, status, controller, CDP endpoint, sandbox state, the read-only `allowUnsandboxed`, and `attached` for an attached browser |
+| `start_browser` | starts (creating on first use) a browser; idempotent. Refuses an attached browser with `ATTACHED` |
+| `stop_browser` | stops it; the profile is kept. For an attached browser it only disconnects |
+| `browser_info` | CDP endpoint, tabs, active tab, controller, `sandbox`, read-only `allowUnsandboxed`, `kind`, `attached`, panel path, snippet |
+
+No tool attaches or connects a browser: only a person does, in the panel.
 
 ### The controller is advisory for the agent
 
@@ -38,13 +40,14 @@ The agent talks to Chromium over its own CDP connection; the backend is not on t
 
 Open it from cc's **Code Browser** nav entry, or from the `panelPath` link an agent gives you.
 
-- **Browser list:** each browser with its status, who controls it, a *no sandbox* badge while Chromium runs without its sandbox, *allowed without sandbox* (with **Disallow without sandbox**) for a browser a human allowed, *not started: no sandbox* after a refused start, and *Crashed* after an unexpected exit. Open, Start/Stop, Delete (asks first). **Disallow without sandbox** on a browser that is running unsandboxed asks first, because it stops that browser now (the profile and, through session restore, the tabs and logins are kept); on any other browser it takes effect without a prompt. A Start (or New browser) that is refused for want of a sandbox opens that browser's viewer instead of showing an error. **New browser** creates and starts a profile; the name field takes `a-z`, `0-9` and `-`.
+- **Browser list:** each browser with its status (an attached browser's rows are described under [Attach your own browser](#attach-your-own-browser)), who controls it, a *no sandbox* badge while Chromium runs without its sandbox, *allowed without sandbox* (with **Disallow without sandbox**) for a browser a human allowed, *not started: no sandbox* after a refused start, and *Crashed* after an unexpected exit. Open, Start/Stop, Delete (asks first). **Disallow without sandbox** on a browser that is running unsandboxed asks first, because it stops that browser now (the profile and, through session restore, the tabs and logins are kept); on any other browser it takes effect without a prompt. A Start (or New browser) that is refused for want of a sandbox opens that browser's viewer instead of showing an error. **New browser** creates and starts a profile; the name field takes `a-z`, `0-9` and `-`.
 - **Viewer:** toolbar (back to the list, ← → ⟳, address bar, ⌨), tab strip, controller bar, the live screen.
 - **Address bar:** Enter navigates; a bare host gets `https://`; only `http`, `https` and `about:blank` are accepted.
 - **Tab strip:** each tab shows its title as plain text; selecting one switches the shared view for everyone; × and + need control.
 - **Screen:** a live screencast scaled to fit. Without control it shows *Take control to interact* and sends nothing.
 - **Dialogs:** a JavaScript `alert`, `confirm`, `prompt` or `beforeunload` shows as a modal with its message as text. OK and Cancel need control; the dialog offers *Take control* itself because it covers the controller bar. A dialog open before you joined is shown on arrival.
 - **Stopped browsers:** the viewer shows *This browser is stopped* with a Start button.
+- **No active tab** (an attached browser whose tabs nobody has picked yet): the viewer shows *Select a tab to watch it.* instead of the screen.
 - **Refused start (no sandbox):** the viewer shows *Not started: no usable sandbox*, the risks (the profile keeps logins and cookies, pages reach loopback and LAN services, a compromised page runs code as the host user), and **Allow without sandbox…**. That opens a confirmation step with **Allow** and **Cancel**; nothing is sent before **Allow**. Once allowed, the notice offers **Start**. The notice appears for whoever opens the browser, including after an agent's refused start.
 - **Hidden page:** while the page is hidden it pauses its view, so a background tab costs the host no screencast.
 - **Reconnect:** the panel reconnects with backoff and rejoins its view. While disconnected it forgets the tabs and any open dialog; the rejoin shows only what is still open.
@@ -64,7 +67,7 @@ The active tab is one value per browser, shared by every viewer and by the scree
 3. Closing the active tab activates the previously used one.
 4. A viewer's tab selection activates that tab.
 
-Closing the last tab opens `about:blank`. An agent's `page.bringToFront()` is invisible to other CDP clients, so following is heuristic.
+Closing the last tab opens `about:blank`, except in an attached browser. In an attached browser, the person's existing tabs are listed without becoming active (rule 1 applies to tabs opened after it connects). An agent's `page.bringToFront()` is invisible to other CDP clients, so following is heuristic.
 
 ### Input
 
@@ -78,6 +81,67 @@ Closing the last tab opens `about:blank`. An agent's `page.bringToFront()` is in
 | Paste | one text message |
 
 Touch is mapped to mouse and wheel, not to CDP touch events: the shared browser is a desktop Chromium, and touch emulation would change how pages behave for the agent's scripts too. Points on the letterbox bars around the screen are dropped. The ⌨ button focuses a hidden text field to bring up a phone keyboard.
+
+## Attach your own browser
+
+A person can attach a Chrome (or Chromium) they run themselves, with its own tabs and logins. Agents then use it through `browser_info` and their Playwright scripts like any shared browser; the panel watches and controls it the same way.
+
+### 1. Turn on remote debugging in your browser
+
+| Way | How | What you get |
+|---|---|---|
+| **Your normal profile** (Chrome 144 and later) | Open `chrome://inspect/#remote-debugging` and tick *Allow remote debugging for this browser instance*. The page shows *Server running at: 127.0.0.1:<port>*. | Chrome asks *Allow remote debugging?* for **every connection**: code-browser's Connect, and **each agent script**. While any connection is open Chrome shows *Chrome is being controlled by automated test software*. |
+| **A dedicated profile** | Start Chrome with `--remote-debugging-port=9222 --user-data-dir=<a dedicated dir>` (since Chrome 136 the port flag is ignored on the default profile). | No prompts; a separate profile with its own logins. |
+
+Command lines for a dedicated profile:
+
+| OS | Command |
+|---|---|
+| Linux | `google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.chrome-debug"` |
+| macOS | `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9222 --user-data-dir="$HOME/.chrome-debug"` |
+| Windows | `"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir=%LOCALAPPDATA%\chrome-debug` |
+
+Never add `--remote-allow-origins`: Chrome's refusal of WebSocket connections that carry an `Origin` is what keeps web pages away from the debug port.
+
+### 2. Attach it in the panel
+
+In the browser list, **Attach a browser**:
+
+- **Name:** `a-z`, `0-9`, `-`; one namespace with code-browser's own browsers.
+- **Debug address:** `127.0.0.1:<port>` or `localhost:<port>` (default `127.0.0.1:9222`): the *Server running at* address on `chrome://inspect/#remote-debugging`, or your `--remote-debugging-port`. Chrome's debug server listens on loopback only, so nothing else is accepted.
+- **Where the browser runs:**
+  - *On the Docker host — through code-browser's proxy*: code-browser runs in a container and the browser on its Docker host. Start the proxy there first ([proxy.md](proxy.md)). The proxy forwards only to port 9222 unless it was started with `--ports`.
+  - *On this machine — direct*: code-browser runs directly on the machine where the browser runs.
+- **Attach** saves the browser and connects. The row shows *connecting*; if Chrome asks *Allow remote debugging?*, click **Allow**. A failed connect shows its reason on the row as text (for example Chrome's refusal, nothing listening, or the proxy's `--ports` hint).
+
+An attached row shows badges *attached*, *via proxy* or *direct*, the address, *asks approval* when Chrome asks per connection, and *Disconnected* after the connection dropped. Buttons:
+
+| Button | Does |
+|---|---|
+| **Connect** | connects again (stopped rows) |
+| **Disconnect** | closes code-browser's connection; cancels a connect that waits on Chrome's dialog |
+| **Change…** | prefills the form; attaching under the same name re-points it |
+| **Forget** | asks first, disconnects and removes the entry; the browser and its tabs are untouched |
+
+There are no sandbox controls: code-browser did not launch the browser and cannot vouch for its sandbox or profile (`sandbox` is `null`).
+
+The viewer of a disconnected attached browser shows *This browser is disconnected.*, the last error, and **Connect**; while connecting it shows the *click Allow* hint.
+
+### What agents can and cannot do
+
+- **Use it:** `browser_info` gives a loopback CDP endpoint, the tabs, the controller and a snippet. The snippet opens the agent's **own tab** when no tab is active, and the text tells it not to close tabs it did not open.
+- **Disconnect it:** `stop_browser` closes code-browser's connection only.
+- **Never attach or reconnect it:** `start_browser` on an attached browser is refused with `ATTACHED` and the panel path; the agent asks the person to press **Connect**. A disconnect may be deliberate (the person closed Chrome or pressed Disconnect), and in approval mode a reconnect would raise a dialog nobody asked for.
+- **Approval mode:** each script opens a new connection, so Chrome asks again for each one. The text tells the agent to warn the person before each script and to use as few scripts as possible; a script waits until **Allow** and fails with `403` on cancel.
+
+Nothing code-browser does closes the browser or its tabs: Disconnect, Forget, `stop_browser` and a backend shutdown close only code-browser's own connection and proxy tunnel. After a backend restart the browser is listed *stopped* and is never connected again on its own.
+
+### Headed browsers
+
+- Watching a tab in the panel brings it to the front in the person's window (screencasts of background tabs need it).
+- A minimised or fully covered window may produce no frames.
+- The controller covers panel viewers only: the person at the browser's own window can always act.
+- While an agent's script is connected, Playwright auto-dismisses JavaScript dialogs on every tab, the person's included.
 
 ## Install and Chromium
 

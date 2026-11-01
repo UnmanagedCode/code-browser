@@ -66,3 +66,13 @@ test('activate sets the active tab; unknown ids are ignored', () => {
   assert.equal(reduceTabs(s, { type: 'destroyed', targetId: 'Z' }, 'agent'), s);
   assert.equal(reduceTabs(s, created('A'), 'agent'), s, 'a duplicate created event is ignored');
 });
+
+// Invariant: a tab created in the background (a person's existing tab in an attached browser) is listed but never
+// activated, even when no tab is active; a later foreground tab still becomes active.
+test('a background tab is added without becoming active', () => {
+  const s = run([{ ...created('U1'), background: true }, { ...created('U2'), background: true }]);
+  assert.deepEqual(s.tabs.map((t) => t.targetId), ['U1', 'U2']);
+  assert.equal(s.activeId, null);
+  assert.deepEqual(s.mru, []);
+  assert.equal(run([created('A')], 'agent', s).activeId, 'A');
+});
