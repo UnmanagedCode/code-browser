@@ -5,9 +5,9 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 import { CdpConnection } from './cdp.js';
-import { attachedDir, attachedNames, readAttached, removeAttached, writeAttached } from './attachStore.js';
+import { attachedDir, attachedNames, parseAttachTarget, readAttached, removeAttached, writeAttached } from './attachStore.js';
 import { allowsUnsandboxed, removeSettings, setAllowUnsandboxed as writeAllowUnsandboxed, settingsDir } from './browserSettings.js';
-import { discover, parseAttachTarget } from './cdpDiscovery.js';
+import { discover } from './cdpDiscovery.js';
 import { buildArgs, isSandboxFailure } from './chromium/args.js';
 import { locateChromium } from './chromium/locate.js';
 import { pluginDir } from './config.js';
@@ -57,6 +57,7 @@ export function createBrowserManager({
   timeouts = {},
   createSession = null,
   trashFs = { readdirSync: fs.readdirSync, chmodSync: fs.chmodSync }, // seam: boot's trash walk races with deletions
+  now = Date.now, // seam: the launch deadline's clock
 } = {}) {
   const t = { launch: LAUNCH_TIMEOUT_MS, stopGrace: STOP_GRACE_MS, killGrace: KILL_GRACE_MS, shutdownGrace: SHUTDOWN_GRACE_MS, approval: APPROVAL_TIMEOUT_MS, ...timeouts };
   const events = new EventEmitter();
@@ -88,11 +89,16 @@ export function createBrowserManager({
     if (recordOf(name)) return 'attached';
     throw new CodedError('NOT_FOUND', `no browser named '${name}'`);
   }
+  const startRefusal = (name) => new CodedError('ATTACHED', `'${name}' is the user's own browser, attached in the panel: code-browser did not launch it, and only the user can connect it (with Connect in the panel)`);
+  const sandboxRefusal = (name) => new CodedError('BAD_REQUEST', `'${name}' is an attached browser: code-browser did not launch it, so its sandbox is not code-browser's to change`);
   const requireProfile = (name) => {
-    if (kindOf(name) === 'attached') {
-      throw new CodedError('ATTACHED', `'${name}' is the user's own browser, attached in the panel: code-browser did not launch it, and only the user can connect it (with Connect in the panel)`);
-    }
+    if (kindOf(name) === 'attached') throw startRefusal(name);
   };
+  // An operation that applies only to launched browsers refuses an attached name at once, never queueing behind a
+  // connect (which may wait minutes on Chrome's approval dialog). The locked body checks again.
+  const launchedOnly = (name, refusal, fn) => (
+    typeof name === 'string' && NAME_RE.test(name) && !profileExists(name) && recordOf(name) ? Promise.reject(refusal(name)) : withLock(name, fn)
+  );
   const requireAttached = (name) => {
     if (kindOf(name) !== 'attached') throw new CodedError('BAD_REQUEST', `'${name}' is not an attached browser`);
     return recordOf(name);
@@ -214,8 +220,8 @@ export function createBrowserManager({
 
   async function readDevToolsPort(profileDir, handle) {
     const file = path.join(profileDir, 'DevToolsActivePort');
-    const deadline = Date.now() + t.launch;
-    while (Date.now() < deadline) {
+    const deadline = now() + t.launch;
+    while (now() < deadline) {
       let lines = null;
       try { lines = fs.readFileSync(file, 'utf8').split('\n'); } catch { /* not yet */ }
       if (lines && lines[0] && lines[1]) return { port: Number(lines[0]), wsPath: lines[1] };
@@ -357,66 +363,81 @@ export function createBrowserManager({
     });
   }
 
+  // Every phase (proxy dial, discovery, upgrade, session start) observes the attempt's abort: closing the tunnel and
+  // the CDP socket ends whichever is in flight, so stop/delete/re-attach never wait one out.
   async function doConnect(name) {
     const rec = requireAttached(name);
     if (running.has(name)) return;
     const port = Number(rec.address.split(':')[1]);
     const abort = new AbortController();
+    const { signal } = abort;
     attempts.set(name, abort);
-    const cancelled = () => { if (abort.signal.aborted) throw abort.signal.reason; };
     let tunnel = null;
     let cdp = null;
+    let entry = null;
+    const closeAll = () => {
+      if (entry) entry.stopping = true;
+      tunnel?.close();
+      cdp?.close();
+    };
+    signal.addEventListener('abort', closeAll, { once: true });
+    const cancelled = () => { if (signal.aborted) throw signal.reason; };
+    const proxyFailure = (err) => (tunnel?.lastError ? new CodedError('ATTACH_FAILED', `through the proxy: ${tunnel.lastError.message}`) : err);
     try {
       let base = rec.address;
       if (rec.via === 'proxy') {
-        tunnel = await openTunnel(() => openProxied(dataDir, port, { env }));
+        tunnel = await openTunnel(() => openProxied(dataDir, port, { env, signal }));
+        if (signal.aborted) tunnel.close();
+        cancelled();
         base = `127.0.0.1:${tunnel.port}`;
       }
       let found;
       try {
-        found = await discover(base, { timeoutMs: CDP_TIMEOUT_MS });
+        found = await discover(base, { timeoutMs: CDP_TIMEOUT_MS, signal });
       } catch (err) {
-        if (tunnel?.lastError) throw new CodedError('ATTACH_FAILED', `through the proxy: ${tunnel.lastError.message}`);
-        throw err;
+        cancelled();
+        throw proxyFailure(err);
       }
-      cancelled();
       approvalSeen.set(name, found.asksApproval);
       events.emit('change');
       const dup = found.browserId && [...running.values()].find((e) => e.name !== name && e.browserId === found.browserId);
       if (dup) throw new CodedError('EXISTS', `that is browser '${dup.name}', already ${dup.kind === 'attached' ? 'attached' : 'run by code-browser'}`);
       try {
-        cdp = await CdpConnection.connect(found.wsUrl, { timeoutMs: found.asksApproval ? t.approval : CDP_TIMEOUT_MS, signal: abort.signal });
+        cdp = await CdpConnection.connect(found.wsUrl, { timeoutMs: found.asksApproval ? t.approval : CDP_TIMEOUT_MS, signal });
       } catch (err) {
-        if (abort.signal.aborted) throw err;
-        throw tunnel?.lastError ? new CodedError('ATTACH_FAILED', `through the proxy: ${tunnel.lastError.message}`) : cdpRefusal(err, found.asksApproval, t.approval);
+        cancelled();
+        throw tunnel?.lastError ? proxyFailure(err) : cdpRefusal(err, found.asksApproval, t.approval);
       }
-      const entry = {
+      if (signal.aborted) cdp.close();
+      cancelled();
+      entry = {
         name, kind: 'attached', via: rec.via, port, cdp, tunnel, browserId: found.browserId, asksApproval: found.asksApproval, sandbox: null,
         cdpEndpoint: found.asksApproval ? found.wsUrl : `http://${base}`, startedAt: Date.now(), stopping: false,
       };
-      tunnel = null;
-      cdp = null;
       running.set(name, entry);
       lastExit.delete(name);
-      entry.cdp.on('close', () => onExit(entry));
+      cdp.on('close', () => onExit(entry));
       if (createSession) {
-        entry.session = createSession(entry);
         try {
+          entry.session = createSession(entry);
           await entry.session.start();
         } catch (err) {
-          entry.stopping = true;
-          onExit(entry);
+          cancelled();
           throw new CodedError('ATTACH_FAILED', `could not start the browser session: ${err.message}`);
         }
+        cancelled();
         entry.session.events.on('change', () => events.emit('change'));
       }
+      signal.removeEventListener('abort', closeAll);
       events.emit('started', entry);
     } catch (err) {
-      tunnel?.close();
-      cdp?.close();
-      if (!abort.signal.aborted) attachErrors.set(name, err.message);
+      // Whatever phase failed: an entry already registered is removed (closing its socket and tunnel, not a disconnect).
+      if (entry) { entry.stopping = true; onExit(entry); }
+      closeAll();
+      if (!signal.aborted) attachErrors.set(name, err.message);
       throw err;
     } finally {
+      signal.removeEventListener('abort', closeAll);
       if (attempts.get(name) === abort) attempts.delete(name);
     }
   }
@@ -437,7 +458,7 @@ export function createBrowserManager({
 
   // Revoking consent stops a browser that runs unsandboxed now; one that runs sandboxed is untouched.
   async function doSetAllowUnsandboxed(name, allow) {
-    if (kindOf(name) === 'attached') throw new CodedError('BAD_REQUEST', `'${name}' is an attached browser: code-browser did not launch it, so its sandbox is not code-browser's to change`);
+    if (kindOf(name) === 'attached') throw sandboxRefusal(name);
     writeAllowUnsandboxed(dataDir, name, allow);
     if (!allow && running.get(name)?.sandbox === false) await doStop(name);
     events.emit('change');
@@ -516,11 +537,11 @@ export function createBrowserManager({
     ensure,
     attach,
     connect,
-    start: (name) => withLock(name, () => doStart(name)),
+    start: (name) => launchedOnly(name, startRefusal, () => doStart(name)),
     // Disconnect and Forget also cancel a connect still in progress (one waiting on Chrome's approval dialog).
     stop: (name) => { cancelAttempt(name); return withLock(name, () => doStop(name)); },
     delete: (name) => { cancelAttempt(name); return withLock(name, () => doDelete(name)); },
-    setAllowUnsandboxed: (name, allow) => withLock(name, () => doSetAllowUnsandboxed(name, allow)),
+    setAllowUnsandboxed: (name, allow) => launchedOnly(name, sandboxRefusal, () => doSetAllowUnsandboxed(name, allow)),
     entry: (name) => running.get(name),
     session: (name) => running.get(name)?.session,
     boot,

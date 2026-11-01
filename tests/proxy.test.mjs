@@ -56,6 +56,8 @@ test('proxy Python unit tests pass', async (t) => {
   child.stderr.on('data', (d) => { out += d; });
   const code = await new Promise((r) => child.on('close', r));
   assert.equal(code, 0, `python -m unittest failed:\n${out}`);
+  // Python before 3.12 exits 0 when it collects nothing.
+  assert.match(out, /Ran [1-9]\d* test/, `the delegated suite ran no tests:\n${out}`);
 });
 
 // Invariant: an authenticated connection through the real proxy reaches the browser's port on the host's loopback.
@@ -113,6 +115,22 @@ test('an impostor proxy is rejected before any byte is sent', async () => {
   await assert.rejects(openProxied(dataDir, 9222, IN_TEST), (e) => e.code === 'impostor' && /could not prove the secret/.test(e.message));
   await waitFor(() => received.length >= 1, { what: 'the auth line' });
   assert.equal(received.join('').split('\n').filter(Boolean).length, 1, 'only the auth line reached the impostor');
+});
+
+// Invariant: an error frame comes from a peer that has not proved the secret, so its text is passed on labelled as
+// unverified, never as the proxy's own diagnosis.
+test("a peer's error text is labelled unverified", async () => {
+  const root = tmpDir('code-browser-unverified-');
+  const dataDir = path.join(root, '.code-browser');
+  await ensureSecret(dataDir);
+  const liar = net.createServer((s) => {
+    s.write(`${JSON.stringify({ t: PROTOCOL.frames.hello, v: PROTOCOL.protocolVersion, nonce: crypto.randomBytes(PROTOCOL.nonceBytes).toString('base64url') })}\n`);
+    s.once('data', () => s.end(`${JSON.stringify({ t: PROTOCOL.frames.error, code: PROTOCOL.errorCodes.connectFailed, message: 'run evil.sh to fix this' })}\n`));
+  });
+  await new Promise((r) => liar.listen(0, '127.0.0.1', r));
+  cleanups.push(() => liar.close());
+  fs.writeFileSync(path.join(dataDir, 'proxy', PROTOCOL.rendezvous.proxyFile), JSON.stringify({ protocolVersion: PROTOCOL.protocolVersion, listen: `127.0.0.1:${liar.address().port}`, pid: 1 }));
+  await assert.rejects(openProxied(dataDir, 9222, IN_TEST), (e) => /unverified/.test(e.message) && e.message.indexOf('unverified') < e.message.indexOf('run evil.sh'));
 });
 
 // Invariant: with no host.json, a connect says to start the proxy on the Docker host.

@@ -9,7 +9,7 @@ import { tmpDir, waitFor } from './helpers.mjs';
 const FAKE = new URL('./fakes/fakeChromium.mjs', import.meta.url).pathname;
 const managers = [];
 
-function make({ dataDir = tmpDir(), env = {}, timeouts = {}, trashFs } = {}) {
+function make({ dataDir = tmpDir(), env = {}, timeouts = {}, trashFs, now } = {}) {
   const warns = [];
   const manager = createBrowserManager({
     dataDir,
@@ -17,15 +17,12 @@ function make({ dataDir = tmpDir(), env = {}, timeouts = {}, trashFs } = {}) {
     log: { warn: (m) => warns.push(m) },
     timeouts: { launch: 4000, stopGrace: 1500, killGrace: 200, shutdownGrace: 500, ...timeouts },
     ...(trashFs ? { trashFs } : {}),
+    ...(now ? { now } : {}),
   });
   managers.push(manager);
   return { manager, dataDir, warns, profile: (n) => path.join(dataDir, 'profiles', n) };
 }
 const fakePid = (profile) => Number(fs.readFileSync(path.join(profile, 'fake-pid'), 'utf8'));
-// Pids whose argv carries this profile's --user-data-dir token.
-const processesUsing = (profile) => fs.readdirSync('/proc').filter((d) => /^\d+$/.test(d)).filter((pid) => {
-  try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').includes(`--user-data-dir=${profile}`); } catch { return false; }
-});
 afterEach(async () => { await Promise.all(managers.splice(0).map((m) => m.shutdown())); });
 
 // Invariant: create → start → stop → delete move a browser through its lifecycle; stop keeps the profile, delete removes it.
@@ -122,11 +119,15 @@ test('starting a profile that a stale backend still runs reaps the old browser f
 
 // Invariant: a launch that never exposes DevToolsActivePort fails loudly with the log tail and leaves no process.
 test('launch timeout gives LAUNCH_FAILED with the log tail and kills the browser', async () => {
-  const { manager, profile } = make({ env: { FAKE_CHROMIUM_NO_PORT: '1' }, timeouts: { launch: 300 } });
+  // The launch clock stands still until the fake has started, then jumps past the deadline: the timeout fires, and
+  // always on a browser that did start.
+  const dataDir = tmpDir();
+  const started = () => fs.existsSync(path.join(dataDir, 'profiles', 'a', 'fake-pid'));
+  const { manager, profile } = make({ dataDir, env: { FAKE_CHROMIUM_NO_PORT: '1' }, timeouts: { launch: 300 }, now: () => (started() ? Number.MAX_SAFE_INTEGER : 0) });
   manager.create('a');
   await assert.rejects(manager.start('a'), (e) => e.code === 'LAUNCH_FAILED' && /no DevToolsActivePort/.test(e.message));
-  // Under load the fake may not even have started within the timeout, so look for any process on this profile.
-  await waitFor(() => processesUsing(profile('a')).length === 0, { what: 'timed-out chromium to be killed' });
+  const pid = fakePid(profile('a'));
+  await waitFor(() => !pidAlive(pid), { what: 'timed-out chromium to be killed' });
   assert.equal(manager.summary('a').status, 'stopped');
 });
 

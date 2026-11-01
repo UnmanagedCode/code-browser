@@ -1,27 +1,12 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { discover, parseAttachTarget } from '../src/cdpDiscovery.js';
+import { discover } from '../src/cdpDiscovery.js';
 import { MAX_DISCOVERY_BYTES } from '../src/limits.js';
 import { externalFake, listen } from './helpers.mjs';
 
 const fakes = [];
 after(async () => { for (const f of fakes) await f.kill(); });
-
-// Invariant: only a loopback port is accepted (localhost canonicalised to 127.0.0.1), via proxy or direct; anything
-// else is BAD_ENDPOINT, so the backend never dials an arbitrary host.
-test('parseAttachTarget accepts loopback ports only', () => {
-  assert.deepEqual(parseAttachTarget({ address: '127.0.0.1:9222', via: 'proxy' }), { address: '127.0.0.1:9222', port: 9222, via: 'proxy' });
-  assert.deepEqual(parseAttachTarget({ address: ' localhost:1 ', via: 'direct' }), { address: '127.0.0.1:1', port: 1, via: 'direct' });
-  for (const body of [
-    { address: '10.0.0.1:9222', via: 'proxy' }, { address: 'example.com:9222', via: 'direct' }, { address: '127.0.0.2:9222', via: 'direct' },
-    { address: '[::1]:9222', via: 'direct' }, { address: '127.0.0.1:0', via: 'proxy' }, { address: '127.0.0.1:65536', via: 'proxy' },
-    { address: '127.0.0.1', via: 'proxy' }, { address: 'http://127.0.0.1:9222', via: 'proxy' }, { address: 9222, via: 'proxy' },
-    { address: '127.0.0.1:9222', via: 'lan' }, { address: '127.0.0.1:9222' }, null,
-  ]) {
-    assert.throws(() => parseAttachTarget(body), (e) => e.code === 'BAD_ENDPOINT', JSON.stringify(body));
-  }
-});
 
 // Invariant: a JSON /json/version yields the browser socket on the address asked through, with its id.
 test('discover: JSON mode names the browser socket and id', async () => {
@@ -65,4 +50,45 @@ test('discover refuses other answers and sends no Origin', async () => {
   const gone = await stub(() => {});
   gone.close();
   await assert.rejects(discover(gone.base, { timeoutMs: 2000 }), (e) => e.code === 'ATTACH_FAILED' && /remote debugging/.test(e.message));
+});
+
+// A server that answers slowly forever: either never finishing its headers, or finishing them and trickling the body.
+async function trickle(stage) {
+  const server = http.createServer();
+  const sockets = new Set();
+  server.on('connection', (c) => { sockets.add(c); c.on('close', () => sockets.delete(c)); });
+  server.on('request', (req, res) => {
+    if (stage === 'body') { res.writeHead(200, { 'content-type': 'application/json' }); res.write('{'); } else res.socket.write('HTTP/1.1 200 OK\r\nX-Drip: ');
+    const timer = setInterval(() => (stage === 'body' ? res.write(' ') : res.socket.write('x')), 50);
+    res.socket.on('close', () => clearInterval(timer));
+  });
+  const port = await listen(server);
+  return { base: `127.0.0.1:${port}`, open: () => sockets.size, close: () => { server.close(); for (const c of sockets) c.destroy(); } };
+}
+
+// Invariant: discovery has a bounded total deadline: a server trickling bytes (in its headers or its body) cannot keep
+// it alive past timeoutMs, and the socket is closed.
+for (const stage of ['headers', 'body']) {
+  test(`discover gives up on a trickling server at its deadline (${stage})`, async () => {
+    const t = await trickle(stage);
+    const t0 = Date.now();
+    await assert.rejects(discover(t.base, { timeoutMs: 300 }), (e) => e.code === 'ATTACH_FAILED' && /did not answer within 300 ms/.test(e.message));
+    assert.ok(Date.now() - t0 < 1500, `took ${Date.now() - t0} ms`);
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(t.open(), 0);
+    t.close();
+  });
+}
+
+// Invariant: an aborted discovery rejects with the abort's reason at once, before or during the request.
+test('discover observes its abort signal', async () => {
+  const t = await trickle('headers');
+  const reason = new Error('cancelled');
+  const ac = new AbortController();
+  const pending = discover(t.base, { timeoutMs: 10_000, signal: ac.signal });
+  await new Promise((r) => setTimeout(r, 100));
+  ac.abort(reason);
+  await assert.rejects(pending, (e) => e === reason);
+  await assert.rejects(discover(t.base, { timeoutMs: 10_000, signal: ac.signal }), (e) => e === reason);
+  t.close();
 });

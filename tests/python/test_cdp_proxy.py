@@ -53,6 +53,11 @@ class Source(unittest.TestCase):
         self.assertEqual(cdp_proxy.mac(v["secret"], LABELS["proxy"], v["nonceProxy"], v["nonceClient"], v["port"]), v["proxyMac"])
         self.assertNotEqual(v["clientMac"], v["proxyMac"], "distinct labels stop a reflected MAC")
 
+    # Invariant: the proxy's default reach is exactly 127.0.0.1:9222; widening it means changing this literal.
+    def test_default_reach_is_9222_only(self):
+        self.assertEqual(PROTOCOL["defaultPorts"], [9222])
+        self.assertEqual(cdp_proxy.parse_args([], default_host=lambda: "127.0.0.1").ports, [9222])
+
     # Invariant: without --ports the proxy forwards only to protocol.json's defaultPorts; --ports replaces that list.
     def test_default_and_replaced_ports(self):
         local = lambda: "127.0.0.1"  # noqa: E731
@@ -71,8 +76,10 @@ class Source(unittest.TestCase):
 
     # Invariant: the listener is never put where the LAN reaches it: wildcards and the default-route address are refused.
     def test_listen_guard(self):
-        for wildcard in ("0.0.0.0", "", "::"):
-            self.assertIsNotNone(cdp_proxy.listen_problem(wildcard))
+        self.assertIsNotNone(cdp_proxy.listen_problem("0.0.0.0", None))
+        for not_ipv4 in (":7078", "[::]:7078", "localhost:7078", "127.0.0.1:99999", "127.0.0.1"):
+            with self.assertRaises(SystemExit, msg=not_ipv4), mock.patch("sys.stderr"):
+                cdp_proxy.parse_args(["--listen", not_ipv4])
         self.assertIsNotNone(cdp_proxy.listen_problem("192.168.1.5", "192.168.1.5"))
         self.assertIsNone(cdp_proxy.listen_problem("127.0.0.1", "127.0.0.1"))
         self.assertIsNone(cdp_proxy.listen_problem("172.17.0.1", "192.168.1.5"))
@@ -120,6 +127,25 @@ class Rendezvous(unittest.TestCase):
         big.write_text("x" * (PROTOCOL["maxRendezvousBytes"] + 1))
         with self.assertRaisesRegex(ValueError, "larger than"):
             cdp_proxy.read_small_file(big)
+
+    # Invariant: a symlinked rendezvous file is never followed: the secret is refused, and host.json is not removed
+    # through it.
+    def test_symlinks_are_refused(self):
+        target = self.root / "elsewhere.json"
+        target.write_text(json.dumps({"secret": SECRET, "pid": 7}))
+        (self.root / RDV["backendFile"]).symlink_to(target)
+        with self.assertRaises(cdp_proxy.SecretUnavailable):
+            cdp_proxy.read_secret(self.root)
+        (self.root / RDV["proxyFile"]).symlink_to(target)
+        self.assertFalse(cdp_proxy.remove_host_json_if_ours(self.root, 7))
+        self.assertTrue(target.exists())
+
+    # Invariant: the proxy makes its rendezvous dir 0700, tightening one that already exists.
+    def test_proxy_dir_is_tightened(self):
+        (self.root / RDV["dir"]).mkdir(mode=0o755)
+        os.chmod(str(self.root / RDV["dir"]), 0o755)
+        path = cdp_proxy.proxy_dir(self.root)
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o700)
 
     # Invariant: a missing, malformed or short secret is reported with the path, never used.
     def test_read_secret_refusals(self):

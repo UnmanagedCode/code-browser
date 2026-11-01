@@ -25,8 +25,8 @@ src/mcp.js               the tools; always answers {result}|{error}|{text,meta}
 src/snippet.js           the Playwright snippet; src/panelLink.js the shell link
 src/browserManager.js    profiles and attached records (one namespace), launch/stop/delete, attach/connect, one entry per running browser
 src/browserSettings.js   settings/<name>.json: the per-browser unsandboxed opt-in
-src/attachStore.js       attached/<name>.json: a person's own browser, {address, via}
-src/cdpDiscovery.js      attach-form validation (loopback ports only) and /json/version discovery (JSON or approval mode)
+src/attachStore.js       attached/<name>.json: a person's own browser, {address, via}; parseAttachTarget, the one address validator (loopback ports only) for the form and stored records
+src/cdpDiscovery.js      /json/version discovery (JSON or approval mode), with a total deadline and an abort signal
 src/tunnel.js            per proxied attached browser: a 127.0.0.1:<random> forwarder, one proxied upstream per connection
 src/proxyClient.js       the CDP proxy client: dial candidates, HMAC handshake, limiter
 src/proxyStore.js        proxy/ rendezvous files: the secret (written) and host.json (read)
@@ -95,7 +95,9 @@ A person's own browser, attached in the panel. The manager owns only its own CDP
   4. `CdpConnection.connect` with `APPROVAL_TIMEOUT_MS` in approval mode (Chrome holds the upgrade until the person answers), else `CDP_TIMEOUT_MS`. `403` → Chrome's refusal; a handshake timeout → nobody allowed it.
   5. The session starts with `attached: true`: `Target.getTargets` seeds the existing page tabs as background tabs (not active), then `Target.setDiscoverTargets`. `Target.activateTarget` is sent only when a screencast starts on a tab (`onStart` in `src/screencast.js`), and closing the last tab opens nothing.
   6. Any failure closes the tunnel and socket and sets `attachError` (in memory), status `stopped`.
-- **Disconnect** (`stop`), **Forget** (`delete`), backend **shutdown**: close the CDP socket and the tunnel only. `Browser.close` is never sent. A connect in progress is aborted (its `AbortSignal` terminates the pending upgrade), with no `attachError`.
+- **Disconnect** (`stop`), **Forget** (`delete`), backend **shutdown**: close the CDP socket and the tunnel only. `Browser.close` is never sent. A connect in progress is aborted, with no `attachError`, in whichever phase it is: the attempt's `AbortSignal` cancels the proxy dial (`openProxied`), the discovery request (`discover`) and the pending upgrade (`CdpConnection.connect`), and closes the tunnel and CDP socket, so a session start in flight fails at once too. Re-attaching aborts the same way. Discovery also has a total deadline (`CDP_TIMEOUT_MS`), so a server that trickles bytes cannot hold a connect open.
+- **Start and the sandbox opt-in** refuse an attached name before taking the per-name lock (`launchedOnly` in `src/browserManager.js`), so they never wait behind a connect.
+- **A failure after registration** (the session cannot be created or started) removes the entry and closes its socket and tunnel; the browser ends `stopped` with `attachError`, not *Disconnected*.
 - **Unexpected close** (the browser quit, the proxy died): `stopped` with `lastExit` (*Disconnected*). No automatic retry, and no connect at boot: only a person's **Connect** (`POST …/connect`) connects. `start` refuses an attached name with `ATTACHED`.
 - **Endpoints handed to agents** are on the backend's loopback: the address (direct) or the tunnel. Chrome builds `webSocketDebuggerUrl` from the `Host` it was asked through, so through the tunnel it already names the tunnel and nothing is rewritten; `Host: 127.0.0.1:<tunnel port>` passes Chrome's Host check.
 
@@ -157,11 +159,12 @@ Related: an agent reading untrusted pages in a logged-in shared profile can be p
 
 ## Testing
 
-Run: `npm test` (backend `node --test`, including the Python-gated proxy tests, + panel Vitest), `npm run typecheck`, `python3 -m unittest discover -s tests/python -v` (the proxy alone), and gated `RUN_REAL_CHROMIUM=1 npm run test:e2e`.
+Run: `npm test` (backend `node --test`, including the Python-gated proxy tests, + panel Vitest), `npm run typecheck`, `python3 -m unittest discover -s tests/python -v` (the proxy alone), and gated `RUN_REAL_CHROMIUM=1 npm run test:e2e` (needs a Chromium, and Python 3.9+ for step 10's proxy).
 
 - **Fake Chromium** (`tests/fakes/fakeChromium.mjs`): a Node script injected through `CODE_BROWSER_CHROMIUM`, run through the real keeper and launch path. It serves a CDP subset (targets, attach, screencast with ack-paced frames, navigation and history, dialogs, recorded `Input.*`, every `Target.activateTarget` in `Fake.getState`) plus test-only `Fake.*` methods, and Chromium's devtools guards (`Host` must be an IP or `localhost`, a WebSocket with an `Origin` is `403`, `webSocketDebuggerUrl` built from `Host`). Env knobs: `FAKE_CHROMIUM_REQUIRE_NO_SANDBOX` (the fake writes `fake-argv.json` and `fake-pid` only after its sandbox check, so their absence proves no unsandboxed launch), `FAKE_CHROMIUM_NO_PORT`, `FAKE_CHROMIUM_IGNORE_CLOSE`, `FAKE_CHROMIUM_APPROVAL` (Chrome's approval mode: empty `404` on `/json*`, the browser upgrade held until `PUT /fake/approval?answer=allow|deny`). It exits on `Browser.close`, so a fake still alive proves none was sent.
 - **External fake** (`externalFake` in `tests/helpers.mjs`): the same fake started outside code-browser, as a person's own browser.
-- **CDP proxy:** `tests/python/test_cdp_proxy.py` (stdlib `unittest`) covers the proxy alone; `tests/proxy.test.mjs` runs that suite and the real proxy against the backend's client and manager (`startProxy` helper; the backend dials `127.0.0.1` through `CODE_BROWSER_PROXY_DIAL_HOST`). Python-gated and **fail closed**: without Python 3.9+ these tests fail unless `CODE_BROWSER_SKIP_PYTHON=1` skips them; `CODE_BROWSER_PYTHON` picks the interpreter. Both suites check the MAC vector in `tests/fixtures/proxy-mac-vector.json`.
+- **Fake proxy** (`tests/fakes/fakeProxy.mjs`): an in-process stand-in that speaks the real wire protocol, so the default run covers the proxied path (cancellation, cleanup, no secret in tool results) without Python; `mode: 'blackhole'` accepts and never says hello.
+- **CDP proxy:** `tests/python/test_cdp_proxy.py` (stdlib `unittest`) covers the proxy alone; `tests/proxy.test.mjs` runs that suite (and checks it ran tests) and the real proxy against the backend's client and manager (`startProxy` helper; the backend dials `127.0.0.1` through `CODE_BROWSER_PROXY_DIAL_HOST`). Python-gated and **fail closed**: without Python 3.9+ these tests fail unless `CODE_BROWSER_SKIP_PYTHON=1` skips them; `CODE_BROWSER_PYTHON` picks the interpreter. Both suites check the MAC vector in `tests/fixtures/proxy-mac-vector.json`.
 - **Live stack** (`liveStack` in `tests/helpers.mjs`): real manager, session and gateway over the fake, with a second CDP client standing in for an agent.
 - **Fake clock** (`fakeClock`): screencast pacing and the control lease are tested without real waits.
 - **Panel tests** mock `fetch` with a tripwire (`frontend/src/test/setup.ts`); `tests/frontend-source.test.mjs` scans panel sources for banned sinks and root-relative URLs and checks the built `index.html`.

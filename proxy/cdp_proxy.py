@@ -36,11 +36,7 @@ if sys.version_info < (3, 9):
     sys.exit("code-browser proxy needs Python 3.9 or newer")
 
 
-def load_protocol():
-    return json.loads(Path(__file__).with_name("protocol.json").read_text(encoding="utf-8"))
-
-
-PROTOCOL = load_protocol()
+PROTOCOL = json.loads(Path(__file__).with_name("protocol.json").read_text(encoding="utf-8"))
 VERSION = PROTOCOL["protocolVersion"]
 RENDEZVOUS = PROTOCOL["rendezvous"]
 LABELS = PROTOCOL["macLabels"]
@@ -63,17 +59,10 @@ KEEPALIVE_IDLE_S = 15
 KEEPALIVE_INTERVAL_S = 5
 
 STORE_DIRNAME = ".code-browser"
-# The only host the proxy ever connects to.
-TARGET_HOST = "127.0.0.1"
+# The only host the proxy ever connects to, and its fallback listen address.
 LOOPBACK_HOST = "127.0.0.1"
 SIOCGIFADDR = 0x8915
 DOCKER0 = b"docker0"
-
-# TEST-NET-1: a documentation address. A UDP connect() to it only makes the
-# kernel pick the source address of the default route; nothing is sent.
-PROBE_DEST = ("192.0.2.1", 9)
-PROBE_DEST_ENV = "CODE_BROWSER_PROXY_PROBE_DEST"
-WILDCARD_HOSTS = ("", "0.0.0.0", "::")
 
 NONCE_RE = re.compile(r"\A[A-Za-z0-9_-]{%d}\Z" % ((NONCE_BYTES * 8 + 5) // 6))
 MAC_RE = re.compile(r"\A[0-9a-f]{64}\Z")
@@ -87,32 +76,15 @@ def log(msg):
     print("code-browser-proxy: " + msg, file=sys.stderr, flush=True)
 
 
-def parse_ip_port(value):
-    host, sep, port = value.rpartition(":")
-    if not sep or not port.isdigit() or int(port) > 65535:
-        raise ValueError("expected <ip>:<port>, got %r" % value)
-    if host.startswith("[") and host.endswith("]"):
-        host = host[1:-1]
-    return host, int(port)
+def default_route_ipv4():
+    """The source address of the default route (the host's LAN address).
 
-
-def probe_dest():
-    override = os.environ.get(PROBE_DEST_ENV)
-    if not override:
-        return PROBE_DEST
-    host, port = parse_ip_port(override)
-    return str(ipaddress.IPv4Address(host)), port
-
-
-def default_route_ipv4(dest=None):
-    """The source address the kernel would use toward `dest` (the default route).
-
-    A UDP connect() only records the default peer after a route lookup; no
-    datagram leaves the host until send()/sendto(), and none is ever called.
+    A UDP connect() to a documentation address (TEST-NET-1) only makes the
+    kernel pick a route; no datagram is ever sent.
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        sock.connect(dest or probe_dest())
+        sock.connect(("192.0.2.1", 9))
         return sock.getsockname()[0]
     finally:
         sock.close()
@@ -141,34 +113,20 @@ def default_listen_host(docker0=docker0_ipv4):
     return docker0() or LOOPBACK_HOST
 
 
-def canonical_ip(ip):
-    """The canonical spelling of an IPv4 address, or `ip` unchanged when it doesn't parse."""
-    try:
-        return str(ipaddress.IPv4Address(ip))
-    except ValueError:
-        return ip
-
-
-def _is_loopback(host):
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-def listen_problem(listen_host, default_route=None):
+def listen_problem(listen_host, default_route):
     """Why the listener would be reachable from the LAN, or None.
 
-    Refuses a wildcard --listen, and a non-loopback --listen equal to the
-    default-route address (`default_route`, the probe's answer, None when the
-    probe found none). A loopback --listen is always allowed. On some other
-    LAN interface, the challenge-response handshake is the remaining gate.
+    `listen_host` is a canonical IPv4 (parse_args), `default_route` the host's
+    LAN address or None. Refuses the wildcard and the LAN address; a loopback
+    listener is always allowed. On some other LAN interface, the
+    challenge-response handshake is the remaining gate.
     """
-    if listen_host in WILDCARD_HOSTS:
-        return "--listen %r is a wildcard address, which would expose the proxy on every interface" % listen_host
-    if _is_loopback(listen_host):
+    addr = ipaddress.IPv4Address(listen_host)
+    if addr.is_unspecified:
+        return "--listen %s is a wildcard address, which would expose the proxy on every interface" % listen_host
+    if addr.is_loopback:
         return None
-    if default_route is not None and canonical_ip(listen_host) == canonical_ip(default_route):
+    if listen_host == default_route:
         return "--listen %s is this host's default-route (LAN) address, so LAN devices could reach the proxy" % listen_host
     return None
 
@@ -210,6 +168,7 @@ def proxy_dir(store):
     path = Path(store) / RENDEZVOUS["dir"]
     try:
         os.makedirs(str(path), mode=0o700, exist_ok=True)
+        os.chmod(str(path), 0o700)  # an existing dir too, as the backend does
     except OSError as e:
         raise RendezvousError(file_problem("create", path, e, Path(store)))
     return path
@@ -222,11 +181,12 @@ class SecretUnavailable(Exception):
 def read_small_file(path):
     """The text of `path` if it is a regular file of at most maxRendezvousBytes.
 
-    Opened non-blocking and checked on the open descriptor, so a FIFO can't
-    block the event loop and a huge file can't bloat it. Raises OSError for an
-    I/O failure, ValueError for a file that isn't usable.
+    Opened non-blocking and without following a symlink, and checked on the
+    open descriptor, so a FIFO can't block the event loop, a planted link isn't
+    followed and a huge file can't bloat it. Raises OSError for an I/O failure
+    (a symlink included), ValueError for a file that isn't usable.
     """
-    fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
@@ -404,7 +364,6 @@ class Proxy:
         self.listen_port = listen_port
         self.pending_handshakes = 0
         self.writers = set()
-        self.tasks = set()
         self.closing = False
 
     def port_problem(self, port):
@@ -422,8 +381,6 @@ class Proxy:
         for writer in list(self.writers):
             writer.transport.abort()
         self.writers.clear()
-        for task in list(self.tasks):
-            task.cancel()
 
     async def handle(self, reader, writer):
         if self.closing or self.pending_handshakes >= MAX_PENDING_HANDSHAKES:
@@ -508,20 +465,14 @@ class Proxy:
             await self._refuse(writer, ERROR_CODES["portRefused"], problem)
             return None
         try:
-            up_reader, up_writer = await asyncio.wait_for(asyncio.open_connection(TARGET_HOST, port), CONNECT_TIMEOUT_S)
+            up_reader, up_writer = await asyncio.wait_for(asyncio.open_connection(LOOPBACK_HOST, port), CONNECT_TIMEOUT_S)
         except (OSError, asyncio.TimeoutError) as e:
             why = "timed out" if isinstance(e, asyncio.TimeoutError) else (e.strerror or str(e))
             await self._refuse(writer, ERROR_CODES["connectFailed"],
-                               "nothing listens on %s:%d on the Docker host (%s) — is Chrome's remote debugging on?" % (TARGET_HOST, port, why))
+                               "nothing listens on %s:%d on the Docker host (%s) — is Chrome's remote debugging on?" % (LOOPBACK_HOST, port, why))
             return None
         proof = mac(secret, LABELS["proxy"], nonce_proxy, msg["nonce"], port)
         return lambda: self._splice(reader, writer, up_reader, up_writer, proof)
-
-    def _task(self, coro):
-        task = asyncio.get_running_loop().create_task(coro)
-        self.tasks.add(task)
-        task.add_done_callback(self.tasks.discard)
-        return task
 
     async def _splice(self, reader, writer, up_reader, up_writer, proof):
         if self.closing:
@@ -532,10 +483,9 @@ class Proxy:
         writer.write(encode({"t": FRAMES["welcome"], "mac": proof}))
         set_keepalive(writer)
         set_keepalive(up_writer)
-        up = self._task(pump(reader, up_writer, writer))
-        down = self._task(pump(up_reader, writer, up_writer))
         try:
-            await asyncio.gather(up, down, return_exceptions=True)
+            # close() aborts both writers, which ends both pumps.
+            await asyncio.gather(pump(reader, up_writer, writer), pump(up_reader, writer, up_writer), return_exceptions=True)
         finally:
             self.writers.discard(up_writer)
             for w in (writer, up_writer):
@@ -573,26 +523,21 @@ def parse_args(argv, default_host=default_listen_host):
     args = parser.parse_args(argv)
     if args.listen is None:
         args.listen = "%s:%d" % (default_host(), DEFAULT_LISTEN_PORT)
-    try:
-        args.listen_host, args.listen_port = parse_ip_port(args.listen)
-    except ValueError as e:
-        parser.error("--listen: %s" % e)
     # Canonicalised once, here: the canonical string is both what the guard
     # checks and what is bound.
-    if args.listen_host not in WILDCARD_HOSTS:
-        try:
-            args.listen_host = str(ipaddress.IPv4Address(args.listen_host))
-        except ValueError:
-            parser.error("--listen host must be an IPv4 address, got %r" % args.listen_host)
+    host, _, port = args.listen.rpartition(":")
+    try:
+        args.listen_host = str(ipaddress.IPv4Address(host))
+        if not port.isdigit() or int(port) > 65535:
+            raise ValueError
+    except ValueError:
+        parser.error("--listen must be <ipv4>:<port>, got %r" % args.listen)
+    args.listen_port = int(port)
     try:
         args.ports = parse_ports(args.ports) if args.ports is not None else list(DEFAULT_PORTS)
     except ValueError as e:
         parser.error("--ports: %s" % e)
     return args
-
-
-class ListenError(Exception):
-    pass
 
 
 async def serve(args, rdir, store):
@@ -601,7 +546,7 @@ async def serve(args, rdir, store):
     try:
         sock = bind_listener(args.listen_host, args.listen_port)
     except OSError as e:
-        raise ListenError("cannot listen on %s: %s" % (args.listen, e.strerror or e))
+        sys.exit("code-browser-proxy: cannot listen on %s: %s" % (args.listen, e.strerror or e))
     host, port = sock.getsockname()[:2]
     proxy = Proxy(rdir, args.ports, port)
     server = await asyncio.start_server(proxy.handle, sock=sock, limit=MAX_FRAME_BYTES)
@@ -617,7 +562,7 @@ async def serve(args, rdir, store):
 
     print("code-browser-proxy listening on %s:%d" % (host, port), flush=True)
     log("code-browser store: %s" % store)
-    log("forwarding to %s port(s) %s" % (TARGET_HOST, ",".join(str(p) for p in args.ports)))
+    log("forwarding to %s port(s) %s" % (LOOPBACK_HOST, ",".join(str(p) for p in args.ports)))
     secret_file = Path(rdir) / RENDEZVOUS["backendFile"]
     if not os.path.lexists(str(secret_file)):
         log("waiting for code-browser to create %s" % secret_file)
@@ -631,17 +576,10 @@ async def serve(args, rdir, store):
 
 def main(argv=None):
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    problem = listen_problem(args.listen_host)
-    if problem:
-        sys.exit("code-browser-proxy: " + problem)
     try:
-        dest = probe_dest()
-    except ValueError as e:
-        sys.exit("code-browser-proxy: %s: %s" % (PROBE_DEST_ENV, e))
-    try:
-        route = default_route_ipv4(dest)
+        route = default_route_ipv4()
     except OSError:
-        route = None  # nothing to compare against
+        route = None  # no default route: nothing to compare against
     problem = listen_problem(args.listen_host, route)
     if problem:
         sys.exit("code-browser-proxy: " + problem)
@@ -656,7 +594,7 @@ def main(argv=None):
     try:
         rdir = proxy_dir(store)
         asyncio.run(serve(args, rdir, store))
-    except (ListenError, RendezvousError) as e:
+    except RendezvousError as e:
         sys.exit("code-browser-proxy: %s" % e)
     except OSError as e:
         sys.exit("code-browser-proxy: %s" % e)

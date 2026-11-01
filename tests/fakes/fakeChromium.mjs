@@ -7,7 +7,8 @@
 // FAKE_CHROMIUM_APPROVAL (Chrome's own-profile approval mode: /json* is an empty 404, a page socket is 403, and a
 // /devtools/browser[/<id>] upgrade is held until a test answers it: `PUT /fake/approval?answer=allow|deny`;
 // `GET /fake/approval` gives {pending}).
-// Test-only CDP methods (Fake.getState lists every Target.activateTarget as `activations`): Fake.crash, Fake.getRecorded, Fake.navigateTarget, Fake.emitFrame, Fake.getState, Fake.openDialog.
+// Test-only CDP methods (Fake.getState lists every Target.activateTarget as `activations`, and counts open CDP
+// `connections`, the caller's included): Fake.crash, Fake.getRecorded, Fake.navigateTarget, Fake.emitFrame, Fake.getState, Fake.openDialog.
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -151,7 +152,7 @@ function handle(ws, msg) {
     case 'Fake.getRecorded': return reply({ recorded });
     case 'Fake.navigateTarget': setUrl(targets.get(params.targetId), params.url); return reply();
     case 'Fake.emitFrame': markChange(params.targetId); return reply();
-    case 'Fake.getState': return reply({ activeTarget, activations, targets: [...targets.values()].map(info), sessions: [...sessions.keys()] });
+    case 'Fake.getState': return reply({ activeTarget, activations, connections: wss.clients.size, targets: [...targets.values()].map(info), sessions: [...sessions.keys()] });
     case 'Fake.openDialog': {
       for (const [sid, s] of sessions) {
         if (s.targetId === params.targetId) s.ws.send(JSON.stringify({ method: 'Page.javascriptDialogOpening', sessionId: sid, params: { url: targets.get(params.targetId).url, message: params.message, type: params.type ?? 'alert', defaultPrompt: params.defaultPrompt ?? '' } }));

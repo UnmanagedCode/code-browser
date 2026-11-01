@@ -72,9 +72,8 @@ Either side reads a rendezvous file only when it is a regular file of at most `m
 | Name | Default | Meaning |
 |---|---|---|
 | `--ports <n,…>` | `defaultPorts` in `protocol.json` (9222) | The only `127.0.0.1` ports the proxy connects to. Replaces the default list. Any other port is `port_refused`, whose message names the `--ports` value that would allow it. |
-| `--listen <ip:port>` | the `docker0` address if the host has one, else `127.0.0.1`; port `defaultListenPort` | The listener the backend dials (`:0` = any free port; `host.json` carries the real one). Refused when a wildcard, or the host's default-route (LAN) address. |
+| `--listen <ipv4:port>` | the `docker0` address if the host has one, else `127.0.0.1`; port `defaultListenPort` | The listener the backend dials (`:0` = any free port; `host.json` carries the real one). Refused when `0.0.0.0`, or the host's default-route (LAN) address. |
 | `--projects-root <dir>` | the nearest parent of the script's directory holding `.code-browser` | Where code-browser's store is. |
-| `CODE_BROWSER_PROXY_PROBE_DEST` (env, tests only) | a documentation address | Route-probe destination for the `--listen` guard (`<ipv4>:<port>`). |
 | `CODE_BROWSER_PROXY_DIAL_HOST` (backend env, tests only) | `host.docker.internal` | The name the backend dials for a proxy on the host's loopback. |
 
 Timings and caps (`handshakeTimeoutMs`, `connectTimeoutMs`, `maxPendingHandshakes`, `maxClientHandshakes`, `maxFrameBytes`) are in `protocol.json`, read by both sides.
@@ -104,7 +103,8 @@ WantedBy=multi-user.target
 
 ## Security model
 
-- **Mutual challenge-response, secret never on the wire.** Every connection starts with the proxy's random nonce; the backend answers with its own nonce, the port, and an HMAC-SHA256 over them under the shared secret; the proxy answers with an HMAC under a different label. Each side checks the other's in constant time; the labels stop a reflected MAC, fresh nonces stop a replay. The backend uses nothing the proxy sends, data bytes included, before the proxy has proven the secret.
+- **Mutual challenge-response, secret never on the wire.** Every connection starts with the proxy's random nonce; the backend answers with its own nonce, the port, and an HMAC-SHA256 over them under the shared secret; the proxy answers with an HMAC under a different label. Each side checks the other's in constant time; the labels stop a reflected MAC, fresh nonces stop a replay. The backend uses nothing the proxy sends, data bytes included, before the proxy has proven the secret; the one exception, an `error` frame's text, is shown labelled as unverified.
+- **No symlinks followed.** Both sides open rendezvous files with `O_NOFOLLOW`: a symlinked `secret.json` is refused by the proxy and replaced by the backend, a symlinked `host.json` is refused. Both make the rendezvous dir `0700`, an existing one included.
 - **What the secret grants:** TCP to `127.0.0.1:<port>` on the Docker host, for the ports in the proxy's list only (by default `127.0.0.1:9222`), never its own port. The port is checked after authentication, so an unauthenticated client learns nothing about the list.
 - **Who holds the secret:** anything that can read `<projectsRoot>/.code-browser/proxy/secret.json` (`0600`): the backend's user in the container, which includes agents' shells, and the host user. On Docker Desktop containers can already reach the host's loopback through `host.docker.internal`, so this adds little; on native Linux it extends a secret holder's reach to the listed loopback ports.
 - **Impersonating the proxy** (writing `host.json`, or answering at the dial address) needs the secret too: without it no welcome MAC verifies and the backend aborts before sending a byte. An impostor sees only fresh nonces and an HMAC over them.

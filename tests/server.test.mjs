@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { createApp } from '../src/app.js';
-import { parseAttachTarget } from '../src/cdpDiscovery.js';
+import { parseAttachTarget } from '../src/attachStore.js';
 import { CodedError } from '../src/errors.js';
 import { CSP } from '../src/http.js';
 import { buildRoutes } from '../src/routes.js';

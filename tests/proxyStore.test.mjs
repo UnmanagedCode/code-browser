@@ -57,3 +57,30 @@ test('readHost and parseHost', async () => {
   execFileSync('mkfifo', [hostFile(d)]);
   assert.match((await readHost(d)).error, /not a regular file/);
 });
+
+// Invariant: an existing valid secret is kept but tightened to 0600, as boot promises for every private file.
+test('ensureSecret tightens an existing valid secret', async () => {
+  const d = tmpDir();
+  const s1 = await ensureSecret(d);
+  fs.chmodSync(secretFile(d), 0o644);
+  assert.equal(await ensureSecret(d), s1);
+  assert.equal(modeOf(secretFile(d)), 0o600);
+});
+
+// Invariant: a symlinked rendezvous file is never followed: a symlinked secret is replaced by a regular file (the
+// link's target is neither used nor changed), and a symlinked host.json is reported unusable.
+test('symlinked rendezvous files are refused', async () => {
+  const d = tmpDir();
+  fs.mkdirSync(proxyDir(d), { recursive: true });
+  const target = path.join(d, 'elsewhere.json');
+  const planted = JSON.stringify({ protocolVersion: PROTOCOL.protocolVersion, secret: 'p'.repeat(PROTOCOL.minSecretLength), listen: '127.0.0.1:1', pid: 1 });
+  fs.writeFileSync(target, planted, { mode: 0o644 });
+  fs.symlinkSync(target, secretFile(d));
+  const s = await ensureSecret(d);
+  assert.notEqual(s, 'p'.repeat(PROTOCOL.minSecretLength));
+  assert.ok(!fs.lstatSync(secretFile(d)).isSymbolicLink());
+  assert.equal(fs.readFileSync(target, 'utf8'), planted);
+  assert.equal(modeOf(target), 0o644);
+  fs.symlinkSync(target, hostFile(d));
+  assert.match((await readHost(d)).error, /symlink/);
+});

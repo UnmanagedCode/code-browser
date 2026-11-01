@@ -137,7 +137,8 @@ export async function handshake(socket, reader, { secret, port, where }) {
   if (reply === null) throw proxyError(`the proxy at ${where} closed the connection during the handshake`, 'closed');
   if (reply.t === FRAMES.error) {
     checkShape(reply, ERROR_SHAPE, 'the proxy error');
-    throw proxyError(`the proxy at ${where} refused the connection: ${reply.message}`, reply.code);
+    // An error frame precedes any proof of the secret: its text is the peer's claim, passed on as such.
+    throw proxyError(`the proxy at ${where} refused the connection (unverified: this peer has not proved the secret): ${reply.message}`, reply.code);
   }
   if (reply.t !== FRAMES.welcome) throw badFrame(`the proxy at ${where} sent ${JSON.stringify(reply.t)} instead of its welcome`);
   checkShape(reply, WELCOME_SHAPE, 'the proxy welcome');
@@ -169,23 +170,28 @@ export function createLimiter(max) {
 const sharedLimiter = createLimiter(PROTOCOL.maxClientHandshakes);
 
 // `allowHalfOpen`: the pipe carries a TCP stream whose half-close must not cut the reply.
-function connect(host, port, timeoutMs) {
+function connect(host, port, timeoutMs, signal) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return; }
     const socket = net.connect({ host, port, allowHalfOpen: true });
+    const onAbort = () => { clearTimeout(timer); socket.destroy(); reject(signal.reason); };
+    signal?.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(() => {
       socket.destroy();
       reject(proxyError(`connecting to the proxy at ${host}:${port} timed out after ${timeoutMs} ms`, 'timeout'));
     }, timeoutMs);
-    const onError = (e) => { clearTimeout(timer); reject(proxyError(`cannot reach the proxy at ${host}:${port}: ${e.message}`, e.code)); };
+    const onError = (e) => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); reject(proxyError(`cannot reach the proxy at ${host}:${port}: ${e.message}`, e.code)); };
     socket.once('error', onError);
-    socket.once('connect', () => { clearTimeout(timer); socket.off('error', onError); resolve(socket); });
+    socket.once('connect', () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); socket.off('error', onError); resolve(socket); });
   });
 }
 
-function dialAndAuth({ host, port, target, secret, limiter }) {
+function dialAndAuth({ host, port, target, secret, limiter, signal }) {
   const where = `${host}:${port}`;
   return limiter.run(async () => {
-    const socket = await connect(host, port, PROTOCOL.connectTimeoutMs);
+    const socket = await connect(host, port, PROTOCOL.connectTimeoutMs, signal);
+    const onAbort = () => socket.destroy();
+    signal?.addEventListener('abort', onAbort, { once: true });
     socket.setNoDelay(true);
     const reader = lineReader(socket, PROTOCOL.maxFrameBytes);
     let timer;
@@ -197,16 +203,18 @@ function dialAndAuth({ host, port, target, secret, limiter }) {
       return { socket, head };
     } catch (e) {
       socket.destroy();
-      throw e;
+      throw signal?.aborted ? signal.reason : e;
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
     }
   });
 }
 
 // One authenticated connection to 127.0.0.1:`port` on the Docker host, through the proxy that `<dataDir>/proxy/`
-// names: `{socket, head}` (head: bytes the target already sent). Rejects with a message saying what to do.
-export async function openProxied(dataDir, port, { env = process.env, inContainer = runningInContainer, gateway = defaultGatewayIPv4, limiter = sharedLimiter } = {}) {
+// names: `{socket, head}` (head: bytes the target already sent). Rejects with a message saying what to do, or with
+// `signal`'s reason once it aborts.
+export async function openProxied(dataDir, port, { env = process.env, inContainer = runningInContainer, gateway = defaultGatewayIPv4, limiter = sharedLimiter, signal } = {}) {
   const host = await readHost(dataDir);
   if (!host) throw proxyError('no CDP proxy is running: start it on the Docker host with `python3 proxy/cdp_proxy.py` from the code-browser checkout (docs/proxy.md)', 'no_proxy');
   if (host.error) throw proxyError(host.error, 'bad_host_file');
@@ -214,9 +222,10 @@ export async function openProxied(dataDir, port, { env = process.env, inContaine
   let last = null;
   for (const candidate of dialCandidates(host.listenHost, { inContainer: inContainer(), gateway: gateway(), loopbackHost: env[DIAL_HOST_ENV] || DEFAULT_LOOPBACK_DIAL_HOST })) {
     try {
-      return await dialAndAuth({ host: candidate, port: host.listenPort, target: port, secret, limiter });
+      return await dialAndAuth({ host: candidate, port: host.listenPort, target: port, secret, limiter, signal });
     } catch (e) {
-      if (PROXY_CODES.has(e.code)) throw e; // a real proxy answered: another address won't answer differently
+      if (signal?.aborted) throw signal.reason;
+      if (PROXY_CODES.has(e.code)) throw e; // a proxy answered with an error code: another address won't answer differently
       last = e;
     }
   }

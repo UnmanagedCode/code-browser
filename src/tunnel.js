@@ -31,6 +31,7 @@ export function openTunnel(connect) {
   });
 
   tunnel.close = () => {
+    if (tunnel.closed) return;
     tunnel.closed = true;
     server.close();
     for (const s of sockets) s.destroy();

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { attachedDir, attachedNames, readAttached, removeAttached, writeAttached } from '../src/attachStore.js';
+import { attachedDir, attachedNames, parseAttachTarget, readAttached, removeAttached, writeAttached } from '../src/attachStore.js';
 import { tmpDir } from './helpers.mjs';
 
 const modeOf = (p) => fs.statSync(p).mode & 0o777;
@@ -21,16 +21,35 @@ test('records round-trip privately', () => {
   assert.equal(readAttached(d, 'mine'), null);
 });
 
-// Invariant: a malformed record (bad JSON, a non-loopback address, an unknown via) is warned about and read as none.
+// Invariant: only a loopback port is accepted (localhost canonicalised to 127.0.0.1), via proxy or direct; anything
+// else is BAD_ENDPOINT, so the backend never dials an arbitrary host.
+test('parseAttachTarget accepts loopback ports only', () => {
+  assert.deepEqual(parseAttachTarget({ address: '127.0.0.1:9222', via: 'proxy' }), { address: '127.0.0.1:9222', port: 9222, via: 'proxy' });
+  assert.deepEqual(parseAttachTarget({ address: ' localhost:1 ', via: 'direct' }), { address: '127.0.0.1:1', port: 1, via: 'direct' });
+  assert.equal(parseAttachTarget({ address: '127.0.0.1:65535', via: 'proxy' }).port, 65535);
+  for (const body of [
+    { address: '10.0.0.1:9222', via: 'proxy' }, { address: 'example.com:9222', via: 'direct' }, { address: '127.0.0.2:9222', via: 'direct' },
+    { address: '[::1]:9222', via: 'direct' }, { address: '127.0.0.1:0', via: 'proxy' }, { address: '127.0.0.1:65536', via: 'proxy' },
+    { address: '127.0.0.1', via: 'proxy' }, { address: 'http://127.0.0.1:9222', via: 'proxy' }, { address: 9222, via: 'proxy' },
+    { address: '127.0.0.1:9222', via: 'lan' }, { address: '127.0.0.1:9222' }, null,
+  ]) {
+    assert.throws(() => parseAttachTarget(body), (e) => e.code === 'BAD_ENDPOINT', JSON.stringify(body));
+  }
+});
+
+// Invariant: a stored record passes the same validator as the form: bad JSON, a non-loopback address, a port outside
+// 1-65535 or an unknown via is warned about and read as none.
 test('malformed records are warned about and ignored', () => {
   const d = tmpDir();
   fs.mkdirSync(attachedDir(d), { recursive: true });
   const warns = [];
-  for (const [n, text] of [['a', '{nope'], ['b', '{"address":"10.0.0.1:9222","via":"proxy"}'], ['c', '{"address":"127.0.0.1:9222","via":"lan"}']]) {
+  const bad = [['a', '{nope'], ['b', '{"address":"10.0.0.1:9222","via":"proxy"}'], ['c', '{"address":"127.0.0.1:9222","via":"lan"}'],
+    ['d', '{"address":"127.0.0.1:0","via":"proxy"}'], ['e', '{"address":"127.0.0.1:99999","via":"direct"}']];
+  for (const [n, text] of bad) {
     fs.writeFileSync(path.join(attachedDir(d), `${n}.json`), text);
-    assert.equal(readAttached(d, n, { warn: (m) => warns.push(m) }), null);
+    assert.equal(readAttached(d, n, { warn: (m) => warns.push(m) }), null, n);
   }
-  assert.equal(warns.length, 3);
+  assert.equal(warns.length, bad.length);
   fs.writeFileSync(path.join(attachedDir(d), 'Bad Name.json'), '{}');
-  assert.deepEqual(attachedNames(d).sort(), ['a', 'b', 'c'], 'names outside NAME_RE are never listed');
+  assert.deepEqual(attachedNames(d).sort(), bad.map(([n]) => n), 'names outside NAME_RE are never listed');
 });

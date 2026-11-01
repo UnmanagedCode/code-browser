@@ -19,7 +19,7 @@ Enable the plugin in code-conductor; the backend starts on the first tool call o
 
 On a host where Chromium's sandbox cannot start (containers, restricted user namespaces), the first start is refused with `SANDBOX_UNAVAILABLE`. Open the panel, read the risk, and allow that browser to run without the sandbox.
 
-Tests: `npm test` (includes the CDP proxy's Python tests: needs Python 3.9+, or `CODE_BROWSER_SKIP_PYTHON=1` to skip them explicitly); real Chromium end to end: `RUN_REAL_CHROMIUM=1 npm run test:e2e`.
+Tests: `npm test` (includes the CDP proxy's Python tests: needs Python 3.9+, or `CODE_BROWSER_SKIP_PYTHON=1` to skip them explicitly); real Chromium end to end: `RUN_REAL_CHROMIUM=1 npm run test:e2e` (also needs Python 3.9+: it runs the proxy).
 
 ## Key defaults
 

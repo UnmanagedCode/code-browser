@@ -1,10 +1,12 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { createBrowserManager } from '../src/browserManager.js';
 import { PROTOCOL } from '../src/proxyProtocol.js';
-import { externalFake, liveStack, sleep, tmpDir, waitFor } from './helpers.mjs';
+import { fakeProxy } from './fakes/fakeProxy.mjs';
+import { externalFake, listen, liveStack, sleep, tmpDir, waitFor } from './helpers.mjs';
 
 const fakes = [];
 let stacks = [];
@@ -223,6 +225,9 @@ test('attach on an attached name re-points it', async () => {
   await manager.attach('mine', direct(f2));
   assert.equal(manager.summary('mine').attached.address, f2.address);
   assert.equal(manager.summary('mine').status, 'running');
+  assert.equal(manager.summary('mine').cdpEndpoint, `http://${f2.address}`, 'the live connection is the new target');
+  await waitFor(async () => (await fakeState(f1)).connections === 1, { what: "the old browser's connection to close (1 = this probe)" });
+  assert.equal((await fakeState(f2)).connections, 2, 'the backend and this probe');
   assert.deepEqual(JSON.parse(fs.readFileSync(recordFile(dataDir, 'mine'), 'utf8')), direct(f2));
 });
 
@@ -256,6 +261,8 @@ test('session: user tabs stay in the background until watched', async () => {
   assert.equal(stack.manager.info('mine').activeTargetId, null);
   const [tab] = session.snapshot().tabs;
   await waitFor(async () => (await fakeState(f)).sessions.length >= 1, { what: 'tab attached' });
+  await sleep(100);
+  assert.equal((await fakeState(f)).sessions.length, 1, 'exactly one page session per seeded tab');
   assert.deepEqual((await fakeState(f)).activations, []);
 
   session.activateTab(tab.targetId);
@@ -278,3 +285,117 @@ test('session: user tabs stay in the background until watched', async () => {
   assert.equal((await agent.send('Fake.getState')).targets.length, 0, 'no about:blank is opened in a user browser');
   agent.close();
 });
+
+// ---- cancellation, refusal before queueing, cleanup after registration ----
+
+// A server that starts an HTTP answer and then drips a header byte every 50 ms, forever.
+async function drip() {
+  const sockets = new Set();
+  const server = http.createServer();
+  server.on('connection', (s) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
+  server.on('request', (req, res) => {
+    res.socket.write('HTTP/1.1 200 OK\r\nX-Drip: ');
+    const timer = setInterval(() => res.socket.write('x'), 50);
+    res.socket.on('close', () => clearInterval(timer));
+  });
+  const port = await listen(server);
+  return { address: `127.0.0.1:${port}`, open: () => sockets.size, close: () => { server.close(); for (const s of sockets) s.destroy(); } };
+}
+
+// Invariant: stop cancels a connect at once while discovery is still waiting on a slow answer: stopped, no error, and
+// the discovery socket is closed.
+test('stop cancels a connect during discovery', async () => {
+  const { manager } = await setup();
+  const d = await drip();
+  try {
+    const pending = assert.rejects(manager.attach('mine', { address: d.address, via: 'direct' }), (e) => /cancelled/.test(e.message));
+    await waitFor(() => d.open() === 1, { what: 'the discovery request' });
+    const t0 = Date.now();
+    await manager.stop('mine');
+    await pending;
+    assert.ok(Date.now() - t0 < 1000, `stop took ${Date.now() - t0} ms`);
+    assert.equal(manager.summary('mine').status, 'stopped');
+    assert.equal(manager.summary('mine').attachError, null);
+    await waitFor(() => d.open() === 0, { what: 'the discovery socket to close' });
+  } finally { d.close(); }
+});
+
+// Invariant: Forget cancels a connect at once while the proxy dial is still waiting on a proxy that never answers,
+// and the proxied socket is closed.
+test('delete cancels a connect during the proxy dial', async () => {
+  const { manager, dataDir } = await setup();
+  const proxy = await fakeProxy(dataDir, { mode: 'blackhole' });
+  try {
+    const pending = assert.rejects(manager.attach('mine', { address: '127.0.0.1:9222', via: 'proxy' }), (e) => /cancelled/.test(e.message));
+    await waitFor(() => proxy.connections() === 1, { what: 'the proxy dial' });
+    const t0 = Date.now();
+    await manager.delete('mine');
+    await pending;
+    assert.ok(Date.now() - t0 < 1000, `delete took ${Date.now() - t0} ms`);
+    assert.throws(() => manager.summary('mine'), (e) => e.code === 'NOT_FOUND');
+    await waitFor(() => proxy.connections() === 0, { what: 'the proxied socket to close' });
+  } finally { proxy.close(); }
+});
+
+// Invariant: re-attaching cancels a connect stuck in discovery and connects the new target without waiting it out.
+test('re-attach cancels a stuck connect', async () => {
+  const { manager } = await setup();
+  const d = await drip();
+  const f = await fake();
+  try {
+    const stuck = assert.rejects(manager.attach('mine', { address: d.address, via: 'direct' }), (e) => /cancelled/.test(e.message));
+    await waitFor(() => d.open() === 1, { what: 'the discovery request' });
+    const t0 = Date.now();
+    await manager.attach('mine', direct(f));
+    await stuck;
+    assert.ok(Date.now() - t0 < 1500, `re-attach took ${Date.now() - t0} ms`);
+    assert.equal(manager.summary('mine').cdpEndpoint, `http://${f.address}`);
+  } finally { d.close(); }
+});
+
+// Invariant: start and the sandbox opt-in, which apply only to launched browsers, refuse an attached name at once,
+// even while its connect waits on Chrome's approval dialog (they do not queue behind it).
+test('start and the opt-in refuse an attached name without queueing', async () => {
+  const { manager } = await setup();
+  const f = await fake({ approval: true });
+  const pending = assert.rejects(manager.attach('mine', direct(f)), (e) => /cancelled/.test(e.message));
+  await waitFor(async () => (await f.pending()) === 1, { what: 'the held connection' });
+  const t0 = Date.now();
+  await assert.rejects(manager.start('mine'), (e) => e.code === 'ATTACHED');
+  await assert.rejects(manager.setAllowUnsandboxed('mine', true), (e) => e.code === 'BAD_REQUEST');
+  assert.ok(Date.now() - t0 < 500, `refusals took ${Date.now() - t0} ms`);
+  assert.equal(manager.summary('mine').status, 'connecting');
+  await manager.stop('mine');
+  await pending;
+});
+
+// Invariant: a failure after the attached browser is registered (here createSession throws) removes it, closes its CDP
+// connection and its tunnel, and leaves it stopped with attachError; summary and info agree.
+for (const via of ['direct', 'proxy']) {
+  test(`a session that fails to start leaves nothing behind (${via})`, async () => {
+    const dataDir = path.join(tmpDir(), '.code-browser');
+    let captured = null;
+    const manager = createBrowserManager({
+      dataDir, log: { warn() {} }, env: { ...process.env, CODE_BROWSER_PROXY_DIAL_HOST: '127.0.0.1' },
+      createSession: (entry) => { captured = entry; throw new Error('boom'); },
+    });
+    await manager.boot();
+    const f = await fake();
+    const proxy = via === 'proxy' ? await fakeProxy(dataDir) : null;
+    try {
+      await assert.rejects(manager.attach('mine', { address: f.address, via }), (e) => e.code === 'ATTACH_FAILED' && /boom/.test(e.message));
+      const s = manager.summary('mine');
+      assert.equal(s.status, 'stopped');
+      assert.match(s.attachError, /boom/);
+      assert.equal(s.lastExit, null, 'a failed connect is not a disconnect');
+      assert.equal(manager.entry('mine'), undefined);
+      assert.throws(() => manager.info('mine'), (e) => e.code === 'NOT_RUNNING');
+      assert.ok(captured.cdp.closed, 'the CDP connection is closed');
+      if (via === 'proxy') assert.ok(captured.tunnel.closed, 'the tunnel is closed');
+      await waitFor(async () => (await fakeState(f)).connections === 1, { what: "the backend's connection to go (1 = this probe)" });
+    } finally {
+      proxy?.close();
+      await manager.shutdown();
+    }
+  });
+}

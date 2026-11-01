@@ -547,7 +547,8 @@ describe('attached browsers', () => {
   const calls = (fetchMock: ReturnType<typeof vi.fn>, url: string) => (fetchMock.mock.calls as unknown as [string, RequestInit][]).filter(([u]) => u === url);
   const list = async (b: BrowserSummary[]) => { goTo(''); render(<App socket={f.socket} />); await f.emit({ type: 'browsers', list: b }); };
 
-  // Invariant: the attach form posts the name, the debug address and how to reach it (through the proxy by default).
+  // Invariant: the attach form defaults to 127.0.0.1:9222 through the proxy, and posts the name, the debug address and
+  // how to reach it.
   it('the attach form posts {address, via}', async () => {
     const fetchMock = reply(202, { browser: attached({ status: 'connecting' }) });
     vi.stubGlobal('fetch', fetchMock);
@@ -555,6 +556,8 @@ describe('attached browsers', () => {
     const form = screen.getByRole('form', { name: 'Attach a browser' });
     fireEvent.change(within(form).getByRole('textbox', { name: 'Name' }), { target: { value: 'mine' } });
     expect((within(form).getByRole('textbox', { name: 'Debug address' }) as HTMLInputElement).value).toBe('127.0.0.1:9222');
+    expect((within(form).getByRole('radio', { name: /On the Docker host/ }) as HTMLInputElement).checked).toBe(true);
+    expect((within(form).getByRole('radio', { name: /On this machine/ }) as HTMLInputElement).checked).toBe(false);
     fireEvent.click(within(form).getByRole('radio', { name: /On this machine/ }));
     fireEvent.submit(form);
     await waitFor(() => expect(calls(fetchMock, 'api/browsers/mine/attach')).toHaveLength(1));

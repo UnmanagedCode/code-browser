@@ -32,10 +32,12 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
   let current = null; // the screencast target {sessionId, tabId}
   const sessionOfTab = new Map();
   const tabOfSession = new Map();
+  const attaching = new Map(); // targetId -> promise of its page session id (null when the attach failed)
   const dialogs = new Map();
 
-  const callOn = (tabId, method, params) => {
-    const sessionId = sessionOfTab.get(tabId);
+  // A listed tab may still be attaching: an action on it waits for its page session rather than failing.
+  const callOn = async (tabId, method, params) => {
+    const sessionId = sessionOfTab.get(tabId) ?? await attaching.get(tabId);
     if (!sessionId) throw new CodedError('NO_TAB', 'that tab is not attached');
     return cdp.send(method, params, { sessionId });
   };
@@ -76,18 +78,25 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
     events.emit('change');
   }
 
-  async function attach(targetId) {
-    try {
-      const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
-      if (!tabs.tabs.some((t) => t.targetId === targetId)) return; // closed while attaching
-      sessionOfTab.set(targetId, sessionId);
-      tabOfSession.set(sessionId, targetId);
-      await cdp.send('Page.enable', {}, { sessionId });
-      syncScreencast();
-      if (targetId === tabs.activeId) refreshNav().catch(warn('navigation state'));
-    } catch (err) {
-      warn(`attach ${targetId}`)(err);
-    }
+  function attach(targetId) {
+    const done = (async () => {
+      try {
+        const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
+        if (!tabs.tabs.some((t) => t.targetId === targetId)) return null; // closed while attaching
+        sessionOfTab.set(targetId, sessionId);
+        tabOfSession.set(sessionId, targetId);
+        await cdp.send('Page.enable', {}, { sessionId });
+        syncScreencast();
+        if (targetId === tabs.activeId) refreshNav().catch(warn('navigation state'));
+        return sessionId;
+      } catch (err) {
+        warn(`attach ${targetId}`)(err);
+        return sessionOfTab.get(targetId) ?? null;
+      } finally {
+        attaching.delete(targetId);
+      }
+    })();
+    attaching.set(targetId, done);
   }
 
   function forgetTab(targetId) {
