@@ -110,8 +110,10 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
     switch (method) {
       case 'Target.targetCreated':
         if (!isPage(params.targetInfo) || tabs.tabs.some((t) => t.targetId === params.targetInfo.targetId)) return;
-        apply({ type: 'created', targetId: params.targetInfo.targetId, url: params.targetInfo.url, title: params.targetInfo.title });
+        // The attach is registered before the tab is listed, so anything the listing triggers (the nav refresh of a
+        // newly active tab) waits for it.
         attach(params.targetInfo.targetId);
+        apply({ type: 'created', targetId: params.targetInfo.targetId, url: params.targetInfo.url, title: params.targetInfo.title });
         return;
       case 'Target.targetInfoChanged':
         if (isPage(params.targetInfo)) apply({ type: 'changed', targetId: params.targetInfo.targetId, url: params.targetInfo.url, title: params.targetInfo.title });
@@ -158,8 +160,8 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
       if (attached) {
         const { targetInfos } = await cdp.send('Target.getTargets');
         for (const ti of targetInfos.filter(isPage)) {
-          apply({ type: 'created', background: true, targetId: ti.targetId, url: ti.url, title: ti.title });
           attach(ti.targetId);
+          apply({ type: 'created', background: true, targetId: ti.targetId, url: ti.url, title: ti.title });
         }
       }
       await cdp.send('Target.setDiscoverTargets', { discover: true });

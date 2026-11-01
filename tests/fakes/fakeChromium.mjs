@@ -140,6 +140,8 @@ function handle(ws, msg) {
   const fail = (message) => ws.send(JSON.stringify({ id: msg.id, sessionId, error: { code: -32000, message } }));
   const sess = sessionId ? sessions.get(sessionId) : null;
   const target = sess ? targets.get(sess.targetId) : null;
+  // Like Chromium: a session goes away with its target, and a command on an unknown session is an error.
+  if (sessionId && !target) return fail(`Session with given id not found: ${sessionId}`);
   if (method.startsWith('Input.')) { recorded.push({ method, params, sessionId, targetId: sess?.targetId }); return reply(); }
   switch (method) {
     case 'Browser.close':
@@ -168,6 +170,7 @@ function handle(ws, msg) {
     case 'Target.createTarget': return reply({ targetId: newTarget(params.url ?? 'about:blank').targetId });
     case 'Target.closeTarget':
       if (!targets.delete(params.targetId)) return fail('No target with given id');
+      for (const [id, x] of sessions) if (x.targetId === params.targetId) sessions.delete(id);
       broadcast('Target.targetDestroyed', { targetId: params.targetId });
       return reply({ success: true });
     case 'Target.activateTarget': activeTarget = params.targetId; activations.push(params.targetId); return reply();

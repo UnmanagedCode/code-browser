@@ -2,8 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import net from 'node:net';
-import { dialCandidates, lineReader, mac, parseDefaultGateway, verifyMac } from '../src/proxyClient.js';
+import path from 'node:path';
+import { createLimiter, dialCandidates, lineReader, mac, openProxied, parseDefaultGateway, verifyMac } from '../src/proxyClient.js';
 import { PROTOCOL } from '../src/proxyProtocol.js';
+import { ensureSecret } from '../src/proxyStore.js';
+import { fakeProxy } from './fakes/fakeProxy.mjs';
+import { tmpDir, within } from './helpers.mjs';
 
 const VECTOR = JSON.parse(fs.readFileSync(new URL('./fixtures/proxy-mac-vector.json', import.meta.url), 'utf8'));
 
@@ -59,4 +63,42 @@ test('lineReader caps frames and keeps the bytes after the last frame', async ()
   s2.destroy();
   server.close();
   big.close();
+});
+
+// Invariant: a job aborted while it waits in the limiter's queue rejects at once with the abort's reason and never
+// runs; the jobs ahead of it are unaffected.
+test('an aborted queued job rejects at once and never runs', async () => {
+  const limiter = createLimiter(1);
+  let release;
+  const first = limiter.run(() => new Promise((r) => { release = r; }));
+  const ac = new AbortController();
+  let ran = false;
+  const queued = limiter.run(() => { ran = true; }, ac.signal);
+  const reason = new Error('cancelled');
+  ac.abort(reason);
+  await within(assert.rejects(queued, (e) => e === reason), 500, 'the queued job');
+  release('done');
+  assert.equal(await first, 'done');
+  await new Promise((r) => setImmediate(r));
+  assert.equal(ran, false);
+  await assert.rejects(limiter.run(() => {}, ac.signal), (e) => e === reason, 'an already-aborted signal is refused before queueing');
+});
+
+// Invariant: an aborted proxy dial rejects promptly while it is still queued behind in-flight handshakes.
+test('openProxied observes its abort while queued', async () => {
+  const dataDir = path.join(tmpDir(), '.code-browser');
+  await ensureSecret(dataDir);
+  const proxy = await fakeProxy(dataDir);
+  const limiter = createLimiter(1);
+  let release;
+  limiter.run(() => new Promise((r) => { release = r; }));
+  const ac = new AbortController();
+  const reason = new Error('cancelled');
+  const dial = openProxied(dataDir, 9222, { env: { CODE_BROWSER_PROXY_DIAL_HOST: '127.0.0.1' }, limiter, signal: ac.signal });
+  await new Promise((r) => setTimeout(r, 50));
+  ac.abort(reason);
+  try {
+    await within(assert.rejects(dial, (e) => e === reason), 500, 'the queued dial');
+    assert.equal(proxy.connections(), 0, 'it never dialled');
+  } finally { release(); proxy.close(); }
 });

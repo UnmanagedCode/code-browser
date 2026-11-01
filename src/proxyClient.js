@@ -150,7 +150,8 @@ export async function handshake(socket, reader, { secret, port, where }) {
 }
 
 // At most `max` jobs at once; the rest wait, first in first out. Every handshake runs inside one, which keeps
-// the backend below the proxy's cap on unauthenticated connections.
+// the backend below the proxy's cap on unauthenticated connections. A job whose `signal` aborts while it waits
+// leaves the queue and rejects with the abort's reason; once running, the job itself observes the signal.
 export function createLimiter(max) {
   let active = 0;
   const queue = [];
@@ -163,7 +164,20 @@ export function createLimiter(max) {
   };
   return {
     get inFlight() { return active; },
-    run(fn) { return new Promise((resolve, reject) => { queue.push({ fn, resolve, reject }); pump(); }); },
+    run(fn, signal) {
+      return new Promise((resolve, reject) => {
+        if (signal?.aborted) { reject(signal.reason); return; }
+        const job = { fn, resolve, reject };
+        const onAbort = () => {
+          const i = queue.indexOf(job);
+          if (i >= 0) { queue.splice(i, 1); reject(signal.reason); }
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+        job.fn = () => { signal?.removeEventListener('abort', onAbort); return fn(); };
+        queue.push(job);
+        pump();
+      });
+    },
   };
 }
 
@@ -208,7 +222,7 @@ function dialAndAuth({ host, port, target, secret, limiter, signal }) {
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
     }
-  });
+  }, signal);
 }
 
 // One authenticated connection to 127.0.0.1:`port` on the Docker host, through the proxy that `<dataDir>/proxy/`

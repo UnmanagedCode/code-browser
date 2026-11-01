@@ -3,10 +3,14 @@ import assert from 'node:assert/strict';
 import WebSocket from 'ws';
 import { externalFake, request } from './helpers.mjs';
 
+// The upgrade's status, 'open', or 'held' when nothing answers within a bound (a removed guard lets the request fall
+// into approval mode's held branch, which must fail the test rather than hang it).
 const upgrade = (url, headers) => new Promise((resolve) => {
   const ws = new WebSocket(url, { headers });
-  ws.on('unexpected-response', (_req, res) => { resolve(res.statusCode); res.resume(); });
-  ws.on('open', () => { ws.close(); resolve('open'); });
+  const timer = setTimeout(() => { ws.terminate(); resolve('held'); }, 2000);
+  const done = (v) => { clearTimeout(timer); resolve(v); };
+  ws.on('unexpected-response', (_req, res) => { done(res.statusCode); res.resume(); });
+  ws.on('open', () => { ws.close(); done('open'); });
   ws.on('error', () => {});
 });
 

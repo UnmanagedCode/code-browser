@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createBrowserManager } from '../src/browserManager.js';
 import { PROTOCOL } from '../src/proxyProtocol.js';
 import { fakeProxy } from './fakes/fakeProxy.mjs';
-import { externalFake, listen, liveStack, sleep, tmpDir, waitFor } from './helpers.mjs';
+import { brokenAnswer, externalFake, listen, liveStack, sleep, tmpDir, waitFor, within } from './helpers.mjs';
 
 const fakes = [];
 let stacks = [];
@@ -369,33 +369,76 @@ test('start and the opt-in refuse an attached name without queueing', async () =
   await pending;
 });
 
-// Invariant: a failure after the attached browser is registered (here createSession throws) removes it, closes its CDP
-// connection and its tunnel, and leaves it stopped with attachError; summary and info agree.
-for (const via of ['direct', 'proxy']) {
-  test(`a session that fails to start leaves nothing behind (${via})`, async () => {
-    const dataDir = path.join(tmpDir(), '.code-browser');
-    let captured = null;
-    const manager = createBrowserManager({
-      dataDir, log: { warn() {} }, env: { ...process.env, CODE_BROWSER_PROXY_DIAL_HOST: '127.0.0.1' },
-      createSession: (entry) => { captured = entry; throw new Error('boom'); },
+// Invariant: a failure after the attached browser is registered (createSession throws, or the session's start
+// rejects) removes it, disposes a session that was created, closes its CDP connection and its tunnel, and leaves it
+// stopped with attachError; summary and info agree.
+const FAILURES = {
+  'createSession throws': () => () => { throw new Error('boom'); },
+  'session.start rejects': (record) => () => ({ events: { on() {} }, start: async () => { throw new Error('boom'); }, dispose: () => { record.disposed = true; } }),
+};
+for (const [failure, makeCreate] of Object.entries(FAILURES)) {
+  for (const via of ['direct', 'proxy']) {
+    test(`a session that fails to start leaves nothing behind (${failure}, ${via})`, async () => {
+      const dataDir = path.join(tmpDir(), '.code-browser');
+      const record = { entry: null, disposed: false };
+      const create = makeCreate(record);
+      const manager = createBrowserManager({
+        dataDir, log: { warn() {} }, env: { ...process.env, CODE_BROWSER_PROXY_DIAL_HOST: '127.0.0.1' },
+        createSession: (entry) => { record.entry = entry; return create(entry); },
+      });
+      await manager.boot();
+      const f = await fake();
+      const proxy = via === 'proxy' ? await fakeProxy(dataDir) : null;
+      try {
+        await assert.rejects(manager.attach('mine', { address: f.address, via }), (e) => e.code === 'ATTACH_FAILED' && /boom/.test(e.message));
+        const s = manager.summary('mine');
+        assert.equal(s.status, 'stopped');
+        assert.match(s.attachError, /boom/);
+        assert.equal(s.lastExit, null, 'a failed connect is not a disconnect');
+        assert.equal(manager.entry('mine'), undefined);
+        assert.throws(() => manager.info('mine'), (e) => e.code === 'NOT_RUNNING');
+        assert.ok(record.entry.cdp.closed, 'the CDP connection is closed');
+        if (via === 'proxy') assert.ok(record.entry.tunnel.closed, 'the tunnel is closed');
+        if (failure === 'session.start rejects') assert.ok(record.disposed, 'the created session is disposed');
+        await waitFor(async () => (await fakeState(f)).connections === 1, { what: "the backend's connection to go (1 = this probe)" });
+      } finally {
+        proxy?.close();
+        await manager.shutdown();
+      }
     });
-    await manager.boot();
-    const f = await fake();
+  }
+}
+
+// Invariant: a debug port that cuts its answer off (directly, or through the proxy and tunnel) fails the connect at
+// once with attachError, and the lock is free: stop and delete then return promptly.
+for (const via of ['direct', 'proxy']) {
+  test(`a truncated discovery answer fails the connect and frees the lock (${via})`, async () => {
+    const { manager, dataDir } = await setup();
+    const b = await brokenAnswer('truncate');
     const proxy = via === 'proxy' ? await fakeProxy(dataDir) : null;
     try {
-      await assert.rejects(manager.attach('mine', { address: f.address, via }), (e) => e.code === 'ATTACH_FAILED' && /boom/.test(e.message));
-      const s = manager.summary('mine');
-      assert.equal(s.status, 'stopped');
-      assert.match(s.attachError, /boom/);
-      assert.equal(s.lastExit, null, 'a failed connect is not a disconnect');
-      assert.equal(manager.entry('mine'), undefined);
-      assert.throws(() => manager.info('mine'), (e) => e.code === 'NOT_RUNNING');
-      assert.ok(captured.cdp.closed, 'the CDP connection is closed');
-      if (via === 'proxy') assert.ok(captured.tunnel.closed, 'the tunnel is closed');
-      await waitFor(async () => (await fakeState(f)).connections === 1, { what: "the backend's connection to go (1 = this probe)" });
-    } finally {
-      proxy?.close();
-      await manager.shutdown();
-    }
+      await within(assert.rejects(manager.attach('mine', { address: b.address, via }), (e) => e.code === 'ATTACH_FAILED'), 3000, 'attach');
+      assert.equal(manager.summary('mine').status, 'stopped');
+      assert.ok(manager.summary('mine').attachError);
+      await within(manager.stop('mine'), 1000, 'stop');
+      await within(manager.delete('mine'), 1000, 'delete');
+    } finally { proxy?.close(); b.close(); }
   });
 }
+
+// Invariant: aborting a connect whose discovery answer is stalled mid-body through the tunnel (the abort's own tunnel
+// close truncates that answer) settles at once: stop returns promptly and the row is stopped with no error.
+test('stop during a stalled answer through the tunnel returns promptly', async () => {
+  const { manager, dataDir } = await setup();
+  const b = await brokenAnswer('stall');
+  const proxy = await fakeProxy(dataDir);
+  try {
+    const pending = assert.rejects(manager.attach('mine', { address: b.address, via: 'proxy' }), (e) => /cancelled/.test(e.message));
+    await waitFor(() => b.open() === 1, { what: 'the request through the proxy' });
+    await within(manager.stop('mine'), 1000, 'stop');
+    await within(pending, 1000, 'the attach');
+    assert.equal(manager.summary('mine').status, 'stopped');
+    assert.equal(manager.summary('mine').attachError, null);
+    await within(manager.delete('mine'), 1000, 'delete');
+  } finally { proxy.close(); b.close(); }
+});

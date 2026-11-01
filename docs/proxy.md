@@ -104,7 +104,7 @@ WantedBy=multi-user.target
 ## Security model
 
 - **Mutual challenge-response, secret never on the wire.** Every connection starts with the proxy's random nonce; the backend answers with its own nonce, the port, and an HMAC-SHA256 over them under the shared secret; the proxy answers with an HMAC under a different label. Each side checks the other's in constant time; the labels stop a reflected MAC, fresh nonces stop a replay. The backend uses nothing the proxy sends, data bytes included, before the proxy has proven the secret; the one exception, an `error` frame's text, is shown labelled as unverified.
-- **No symlinks followed.** Both sides open rendezvous files with `O_NOFOLLOW`: a symlinked `secret.json` is refused by the proxy and replaced by the backend, a symlinked `host.json` is refused. Both make the rendezvous dir `0700`, an existing one included.
+- **No symlinks followed** (on Linux and macOS, which have `O_NOFOLLOW`; see Windows under Limitations). Both sides open rendezvous files with `O_NOFOLLOW`: a symlinked `secret.json` is refused by the proxy and replaced by the backend, a symlinked `host.json` is refused. Both make the rendezvous dir `0700`, an existing one included.
 - **What the secret grants:** TCP to `127.0.0.1:<port>` on the Docker host, for the ports in the proxy's list only (by default `127.0.0.1:9222`), never its own port. The port is checked after authentication, so an unauthenticated client learns nothing about the list.
 - **Who holds the secret:** anything that can read `<projectsRoot>/.code-browser/proxy/secret.json` (`0600`): the backend's user in the container, which includes agents' shells, and the host user. On Docker Desktop containers can already reach the host's loopback through `host.docker.internal`, so this adds little; on native Linux it extends a secret holder's reach to the listed loopback ports.
 - **Impersonating the proxy** (writing `host.json`, or answering at the dial address) needs the secret too: without it no welcome MAC verifies and the backend aborts before sending a byte. An impostor sees only fresh nonces and an HMAC over them.
@@ -119,5 +119,5 @@ WantedBy=multi-user.target
 - **Only listed ports.** A browser on another debug port needs `--ports`; the panel shows the proxy's refusal with the exact flag.
 - **Untested in CI:** Docker Desktop's `host.docker.internal` → host loopback path, a real native-Linux `docker0` default and gateway fallback, and Ctrl-C on Windows.
 - **Python 3.9 compatibility is checked statically** (the tests parse the source with `feature_version=(3, 9)`); run the tests with `CODE_BROWSER_PYTHON=python3.9` to check it for real.
-- **Windows**: the `0600`/`0700` modes do not apply on NTFS.
+- **Windows**: the `0600`/`0700` modes do not apply on NTFS, and there is no `O_NOFOLLOW`, so a symlinked rendezvous file is followed there.
 - **IPv4 only.**

@@ -1,13 +1,29 @@
 // An in-process stand-in for proxy/cdp_proxy.py, so the default `npm test` covers the proxied path without Python.
-// It speaks the real wire protocol (proxy/protocol.json) with its own HMAC code, publishes host.json in <dataDir>/proxy/,
-// and pipes an authenticated connection to 127.0.0.1:<port>. `mode: 'blackhole'` accepts and never says hello.
+// It speaks the real wire protocol (proxy/protocol.json) with its own HMAC code, refuses the auth frames the real
+// proxy refuses (same checks, same order, same codes), publishes host.json in <dataDir>/proxy/, and pipes an
+// authenticated connection to 127.0.0.1:<port>. `mode: 'blackhole'` accepts and never says hello.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { PROTOCOL } from '../../src/proxyProtocol.js';
 
-const { frames: F, macLabels: L, rendezvous: R } = PROTOCOL;
+const { frames: F, macLabels: L, rendezvous: R, errorCodes: E } = PROTOCOL;
+const NONCE_RE = new RegExp(`^[A-Za-z0-9_-]{${Math.ceil((PROTOCOL.nonceBytes * 8) / 6)}}$`);
+const MAC_RE = /^[0-9a-f]{64}$/;
+const AUTH_KEYS = ['mac', 'nonce', 'port', 't', 'v'];
+
+// The error code the real proxy answers a parsed-or-not auth line with before checking the MAC, or null.
+function authProblem(text) {
+  let f;
+  try { f = JSON.parse(text); } catch { return E.badFrame; }
+  if (!f || typeof f !== 'object' || Array.isArray(f) || f.t !== F.auth) return E.badFrame;
+  if (f.v !== PROTOCOL.protocolVersion) return E.versionMismatch;
+  const shapeOk = Object.keys(f).sort().join() === AUTH_KEYS.join() && Number.isInteger(f.v) && typeof f.nonce === 'string'
+    && typeof f.mac === 'string' && Number.isInteger(f.port) && NONCE_RE.test(f.nonce) && MAC_RE.test(f.mac)
+    && f.port >= PROTOCOL.port.min && f.port <= PROTOCOL.port.max;
+  return shapeOk ? null : E.badFrame;
+}
 const hmac = (secret, label, np, nc, port) => crypto.createHmac('sha256', secret).update([label, np, nc, String(port)].join('\n')).digest('hex');
 const line = (obj) => `${JSON.stringify(obj)}\n`;
 
@@ -27,14 +43,17 @@ export async function fakeProxy(dataDir, { mode = 'pipe' } = {}) {
       if (i < 0) return;
       client.off('data', onData);
       client.pause();
-      const auth = JSON.parse(buf.subarray(0, i).toString());
+      const text = buf.subarray(0, i).toString();
       const rest = buf.subarray(i + 1);
+      const refuse = (code, message) => client.end(line({ t: F.error, code, message }));
+      const problem = authProblem(text);
+      if (problem) { refuse(problem, 'refused by the fake proxy'); return; }
+      const auth = JSON.parse(text);
       const secret = JSON.parse(fs.readFileSync(path.join(dir, R.backendFile), 'utf8')).secret;
-      if (auth.mac !== hmac(secret, L.client, nonce, auth.nonce, auth.port)) {
-        client.end(line({ t: F.error, code: PROTOCOL.errorCodes.authFailed, message: 'authentication failed' }));
-        return;
-      }
+      if (auth.mac !== hmac(secret, L.client, nonce, auth.nonce, auth.port)) { refuse(E.authFailed, 'authentication failed'); return; }
+      let connected = false;
       const up = net.connect(auth.port, '127.0.0.1', () => {
+        connected = true;
         client.write(line({ t: F.welcome, mac: hmac(secret, L.proxy, nonce, auth.nonce, auth.port) }));
         if (rest.length) up.write(rest);
         client.pipe(up);
@@ -42,7 +61,8 @@ export async function fakeProxy(dataDir, { mode = 'pipe' } = {}) {
         client.resume();
       });
       track(up);
-      up.on('close', () => client.destroy());
+      up.on('error', () => { if (!connected) refuse(E.connectFailed, `nothing listens on 127.0.0.1:${auth.port}`); });
+      up.on('close', () => { if (connected) client.destroy(); });
       client.on('close', () => up.destroy());
     };
     client.on('data', onData);

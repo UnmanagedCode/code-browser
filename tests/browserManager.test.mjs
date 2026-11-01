@@ -120,12 +120,15 @@ test('starting a profile that a stale backend still runs reaps the old browser f
 // Invariant: a launch that never exposes DevToolsActivePort fails loudly with the log tail and leaves no process.
 test('launch timeout gives LAUNCH_FAILED with the log tail and kills the browser', async () => {
   // The launch clock stands still until the fake has started, then jumps past the deadline: the timeout fires, and
-  // always on a browser that did start.
+  // always on a browser that did start. A fake that never starts releases the clock after a real bound instead, and
+  // the pid check below then fails the test.
   const dataDir = tmpDir();
+  const t0 = Date.now();
   const started = () => fs.existsSync(path.join(dataDir, 'profiles', 'a', 'fake-pid'));
-  const { manager, profile } = make({ dataDir, env: { FAKE_CHROMIUM_NO_PORT: '1' }, timeouts: { launch: 300 }, now: () => (started() ? Number.MAX_SAFE_INTEGER : 0) });
+  const { manager, profile } = make({ dataDir, env: { FAKE_CHROMIUM_NO_PORT: '1' }, timeouts: { launch: 300 }, now: () => (started() || Date.now() - t0 > 10_000 ? Number.MAX_SAFE_INTEGER : 0) });
   manager.create('a');
   await assert.rejects(manager.start('a'), (e) => e.code === 'LAUNCH_FAILED' && /no DevToolsActivePort/.test(e.message));
+  assert.ok(started(), 'the fake started before the deadline fired');
   const pid = fakePid(profile('a'));
   await waitFor(() => !pidAlive(pid), { what: 'timed-out chromium to be killed' });
   assert.equal(manager.summary('a').status, 'stopped');

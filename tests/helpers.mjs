@@ -240,3 +240,27 @@ export async function startProxy({ projectsRoot, ports = null }) {
   const end = (signal) => new Promise((r) => { if (exited()) r(); else { proc.once('exit', r); proc.kill(signal); } });
   return { proc, port: Number(m[1]), log: () => out, stop: () => end('SIGTERM'), kill: () => end('SIGKILL') };
 }
+
+// `promise`, or a rejection naming `what` after `ms`: a test whose subject hangs fails instead of hanging.
+export function within(promise, ms, what) {
+  let timer;
+  const bound = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} did not settle within ${ms} ms`)), ms); });
+  return Promise.race([promise, bound]).finally(() => clearTimeout(timer));
+}
+
+// An HTTP server whose answer to any request starts and then stops: `truncate` sends headers promising a body, one
+// byte of it, then destroys the socket; `stall` sends the same and then sends nothing more.
+export async function brokenAnswer(mode) {
+  const sockets = new Set();
+  const server = net.createServer((s) => {
+    sockets.add(s);
+    s.on('close', () => sockets.delete(s));
+    s.on('error', () => {});
+    s.once('data', () => {
+      s.write('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{');
+      if (mode === 'truncate') setTimeout(() => s.destroy(), 20);
+    });
+  });
+  const port = await listen(server);
+  return { port, address: `127.0.0.1:${port}`, open: () => sockets.size, close: () => { server.close(); for (const s of sockets) s.destroy(); } };
+}

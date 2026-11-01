@@ -204,3 +204,18 @@ test('a failed attach makes waiting actions NO_TAB', async () => {
   cdp.release();
   await assert.rejects(input, (e) => e.code === 'NO_TAB');
 });
+
+// Invariant: the session's own navigation refresh for a new active tab never races that tab's attach: no NO_TAB (or
+// any) warning is logged for a tab the session lists, and the refresh reaches the tab's session once attached.
+test('a new tab logs no warning and its navigation state is read through its session', async () => {
+  const cdp = slowAttachCdp();
+  const warns = [];
+  const session = createBrowserSession({ name: 'a', cdp, sandbox: true, log: { warn: (m) => warns.push(m) } });
+  await session.start();
+  cdp.created('T1');
+  await new Promise((r) => setImmediate(r));
+  cdp.release();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(warns, []);
+  assert.ok(cdp.calls.some((c) => c.method === 'Page.getNavigationHistory' && c.sessionId === 'S-T1'));
+});

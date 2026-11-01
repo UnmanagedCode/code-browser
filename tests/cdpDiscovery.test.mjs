@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { discover } from '../src/cdpDiscovery.js';
 import { MAX_DISCOVERY_BYTES } from '../src/limits.js';
-import { externalFake, listen } from './helpers.mjs';
+import { brokenAnswer, externalFake, listen, within } from './helpers.mjs';
 
 const fakes = [];
 after(async () => { for (const f of fakes) await f.kill(); });
@@ -91,4 +91,29 @@ test('discover observes its abort signal', async () => {
   await assert.rejects(pending, (e) => e === reason);
   await assert.rejects(discover(t.base, { timeoutMs: 10_000, signal: ac.signal }), (e) => e === reason);
   t.close();
+});
+
+// Invariant: an answer cut off before its end (headers, part of the body, then the socket closes) settles discovery
+// at once with ATTACH_FAILED, without waiting for the deadline.
+test('a truncated answer rejects at once', async () => {
+  const b = await brokenAnswer('truncate');
+  try {
+    await within(assert.rejects(discover(b.address, { timeoutMs: 30_000 }), (e) => e.code === 'ATTACH_FAILED'), 2000, 'discover');
+  } finally { b.close(); }
+});
+
+// Invariant: with an answer stalled mid-body, the deadline and the abort each settle discovery themselves (the abort
+// with its own reason), and the socket is closed.
+test('deadline and abort settle a stalled body', async () => {
+  const b = await brokenAnswer('stall');
+  try {
+    await within(assert.rejects(discover(b.address, { timeoutMs: 200 }), (e) => e.code === 'ATTACH_FAILED' && /within 200 ms/.test(e.message)), 2000, 'the deadline');
+    const ac = new AbortController();
+    const reason = new Error('cancelled');
+    const pending = discover(b.address, { timeoutMs: 30_000, signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 100));
+    ac.abort(reason);
+    await within(assert.rejects(pending, (e) => e === reason), 2000, 'the abort');
+    await within((async () => { while (b.open() > 0) await new Promise((r) => setTimeout(r, 20)); })(), 2000, 'the socket to close');
+  } finally { b.close(); }
 });
