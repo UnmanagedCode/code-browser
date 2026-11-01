@@ -1,5 +1,6 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { lineReader, mac } from '../src/proxyClient.js';
@@ -36,6 +37,9 @@ test('the fake proxy refuses malformed auth frames like the real one', async () 
     [() => 'not json', E.badFrame],
     [(f) => ({ ...f, t: 'nope' }), E.badFrame],
     [(f) => ({ ...f, v: 99 }), E.versionMismatch],
+    [(f) => ({ ...f, v: true }), E.badFrame],
+    [(f) => JSON.stringify(f).replace(`"v":${PROTOCOL.protocolVersion}`, `"v":${PROTOCOL.protocolVersion}.0`), E.badFrame],
+    [(f) => JSON.stringify(f).replace('"port":1', '"port":1.0'), E.badFrame],
     [(f) => ({ ...f, extra: 1 }), E.badFrame],
     [(f) => { const { mac: _m, ...rest } = f; return rest; }, E.badFrame],
     [(f) => ({ ...f, port: true }), E.badFrame],
@@ -51,5 +55,15 @@ test('the fake proxy refuses malformed auth frames like the real one', async () 
     assert.equal(reply.t, PROTOCOL.frames.error, build.toString());
     assert.equal(reply.code, code, build.toString());
   }
-  assert.equal((await exchange((f) => f)).t, PROTOCOL.frames.error, 'nothing listens on port 1: a well-formed frame passes to the connect');
+  const passed = await exchange((f) => f);
+  assert.equal(passed.code, E.connectFailed, 'a well-formed frame with the right MAC reaches the connect (nothing listens on port 1)');
+});
+
+// Invariant: with no secret on disk the fake proxy answers no_secret, as the real one does, rather than crashing.
+test('the fake proxy answers no_secret without a secret', async () => {
+  const file = path.join(dataDir, 'proxy', PROTOCOL.rendezvous.backendFile);
+  fs.renameSync(file, `${file}.away`);
+  try {
+    assert.equal((await exchange((f) => f)).code, E.noSecret);
+  } finally { fs.renameSync(`${file}.away`, file); }
 });

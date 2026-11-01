@@ -426,8 +426,8 @@ for (const via of ['direct', 'proxy']) {
   });
 }
 
-// Invariant: aborting a connect whose discovery answer is stalled mid-body through the tunnel (the abort's own tunnel
-// close truncates that answer) settles at once: stop returns promptly and the row is stopped with no error.
+// Invariant: stop during a connect whose discovery answer is stalled mid-body through the proxy and tunnel returns
+// promptly, the attach rejects as cancelled, the row ends stopped with no error, and delete then returns promptly.
 test('stop during a stalled answer through the tunnel returns promptly', async () => {
   const { manager, dataDir } = await setup();
   const b = await brokenAnswer('stall');

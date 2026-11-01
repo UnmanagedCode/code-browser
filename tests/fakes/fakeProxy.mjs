@@ -13,12 +13,17 @@ const NONCE_RE = new RegExp(`^[A-Za-z0-9_-]{${Math.ceil((PROTOCOL.nonceBytes * 8
 const MAC_RE = /^[0-9a-f]{64}$/;
 const AUTH_KEYS = ['mac', 'nonce', 'port', 't', 'v'];
 
-// The error code the real proxy answers a parsed-or-not auth line with before checking the MAC, or null.
+// Python's json reads a number written with a fraction or exponent as a float: keep that distinction ({float}).
+const pyJson = (text) => JSON.parse(text, (_k, v, ctx) => (typeof v === 'number' && !/^-?\d+$/.test(ctx.source) ? { float: v } : v));
+// Python's `!=` treats True as 1 and 1.0 as 1.
+const pyNumber = (x) => (x === true ? 1 : x === false ? 0 : x?.float ?? x);
+
+// The error code the real proxy answers a parsed-or-not auth line with before reading the secret, or null.
 function authProblem(text) {
   let f;
-  try { f = JSON.parse(text); } catch { return E.badFrame; }
+  try { f = pyJson(text); } catch { return E.badFrame; }
   if (!f || typeof f !== 'object' || Array.isArray(f) || f.t !== F.auth) return E.badFrame;
-  if (f.v !== PROTOCOL.protocolVersion) return E.versionMismatch;
+  if (pyNumber(f.v) !== PROTOCOL.protocolVersion) return E.versionMismatch; // then `v: true` / `1.0` fail the shape
   const shapeOk = Object.keys(f).sort().join() === AUTH_KEYS.join() && Number.isInteger(f.v) && typeof f.nonce === 'string'
     && typeof f.mac === 'string' && Number.isInteger(f.port) && NONCE_RE.test(f.nonce) && MAC_RE.test(f.mac)
     && f.port >= PROTOCOL.port.min && f.port <= PROTOCOL.port.max;
@@ -49,7 +54,9 @@ export async function fakeProxy(dataDir, { mode = 'pipe' } = {}) {
       const problem = authProblem(text);
       if (problem) { refuse(problem, 'refused by the fake proxy'); return; }
       const auth = JSON.parse(text);
-      const secret = JSON.parse(fs.readFileSync(path.join(dir, R.backendFile), 'utf8')).secret;
+      let secret;
+      try { secret = JSON.parse(fs.readFileSync(path.join(dir, R.backendFile), 'utf8')).secret; } catch { secret = null; }
+      if (typeof secret !== 'string' || secret.length < PROTOCOL.minSecretLength) { refuse(E.noSecret, 'no usable secret'); return; }
       if (auth.mac !== hmac(secret, L.client, nonce, auth.nonce, auth.port)) { refuse(E.authFailed, 'authentication failed'); return; }
       let connected = false;
       const up = net.connect(auth.port, '127.0.0.1', () => {
