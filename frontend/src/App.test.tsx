@@ -26,7 +26,7 @@ function fakeSocket() {
   };
 }
 
-const running = (name: string, controller: BrowserSummary['controller'] = 'agent'): BrowserSummary => ({ name, status: 'running', controller, sandbox: true, allowUnsandboxed: false, sandboxUnavailable: false, lastExit: null });
+const running = (name: string, controller: BrowserSummary['controller'] = 'agent'): BrowserSummary => ({ name, kind: 'launched', status: 'running', controller, sandbox: true, allowUnsandboxed: false, sandboxUnavailable: false, lastExit: null, attached: null, attachError: null });
 const state = (over: Partial<BrowserState> = {}): BrowserState => ({
   type: 'state', name: 'a', status: 'running', sandbox: true, controller: { kind: 'agent' },
   tabs: [{ targetId: 'T1', url: 'https://one.test/', title: 'One' }], activeTabId: 'T1', canGoBack: false, canGoForward: false, ...over,
@@ -536,5 +536,101 @@ describe('sandbox opt-in', () => {
       expect(confirm).not.toHaveBeenCalled();
       expect(JSON.parse(post(fetchMock, 'api/browsers/a/allow-unsandboxed')[0][1].body as string)).toEqual({ allow: false });
     });
+  });
+});
+
+describe('attached browsers', () => {
+  const attached = (over: Partial<BrowserSummary> = {}, a: Partial<NonNullable<BrowserSummary['attached']>> = {}): BrowserSummary => ({
+    ...running('mine'), kind: 'attached', status: 'stopped', sandbox: null, attached: { address: '127.0.0.1:9222', via: 'proxy', asksApproval: null, ...a }, ...over,
+  });
+  const reply = (status: number, body: unknown) => vi.fn(async () => new Response(JSON.stringify(body), { status }));
+  const calls = (fetchMock: ReturnType<typeof vi.fn>, url: string) => (fetchMock.mock.calls as unknown as [string, RequestInit][]).filter(([u]) => u === url);
+  const list = async (b: BrowserSummary[]) => { goTo(''); render(<App socket={f.socket} />); await f.emit({ type: 'browsers', list: b }); };
+
+  // Invariant: the attach form posts the name, the debug address and how to reach it (through the proxy by default).
+  it('the attach form posts {address, via}', async () => {
+    const fetchMock = reply(202, { browser: attached({ status: 'connecting' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await list([]);
+    const form = screen.getByRole('form', { name: 'Attach a browser' });
+    fireEvent.change(within(form).getByRole('textbox', { name: 'Name' }), { target: { value: 'mine' } });
+    expect((within(form).getByRole('textbox', { name: 'Debug address' }) as HTMLInputElement).value).toBe('127.0.0.1:9222');
+    fireEvent.click(within(form).getByRole('radio', { name: /On this machine/ }));
+    fireEvent.submit(form);
+    await waitFor(() => expect(calls(fetchMock, 'api/browsers/mine/attach')).toHaveLength(1));
+    const [, init] = calls(fetchMock, 'api/browsers/mine/attach')[0];
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ address: '127.0.0.1:9222', via: 'direct' });
+  });
+
+  // Invariant: an attached row shows what it is and how it is reached, offers Connect when stopped (posting connect),
+  // and has no sandbox or Start controls.
+  it('a stopped attached row offers Connect, Change… and Forget, and no sandbox controls', async () => {
+    const fetchMock = reply(202, { browser: attached({ status: 'connecting' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await list([attached({ lastExit: { code: null, signal: null, at: 1 } }, { asksApproval: true })]);
+    for (const text of ['attached', 'via proxy', 'asks approval', 'Disconnected', '127.0.0.1:9222']) expect(screen.getByText(text)).toBeTruthy();
+    for (const name of ['Start', 'Delete', 'Disallow without sandbox']) expect(screen.queryByRole('button', { name })).toBeNull();
+    expect(screen.queryByText('Crashed')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(calls(fetchMock, 'api/browsers/mine/connect')).toHaveLength(1));
+  });
+
+  // Invariant: Forget asks first and says the browser is untouched; Disconnect posts stop; Change… prefills the form.
+  it('Forget confirms, Disconnect stops, Change… prefills the form', async () => {
+    const fetchMock = reply(200, { ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal('confirm', confirm);
+    await list([attached({ status: 'running' }, { via: 'direct', address: '127.0.0.1:9333' })]);
+    fireEvent.click(screen.getByRole('button', { name: 'Forget' }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/untouched/));
+    expect(fetchMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    await waitFor(() => expect(calls(fetchMock, 'api/browsers/mine/stop')).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Change…' }));
+    const form = screen.getByRole('form', { name: 'Attach a browser' });
+    expect((within(form).getByRole('textbox', { name: 'Name' }) as HTMLInputElement).value).toBe('mine');
+    expect((within(form).getByRole('textbox', { name: 'Debug address' }) as HTMLInputElement).value).toBe('127.0.0.1:9333');
+    expect((within(form).getByRole('radio', { name: /On this machine/ }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  // Invariant: a failed connect's message and the Allow hint while connecting are shown as text, never markup.
+  it('attachError and the Allow hint render as text', async () => {
+    const hostile = '<img src=x onerror="window.__pwned=1"> start the proxy with --ports 9222,9333';
+    await list([attached({ attachError: hostile }), attached({ name: 'two', status: 'connecting' })]);
+    expect(screen.getByText(hostile).textContent).toBe(hostile);
+    expect(document.querySelector('img')).toBeNull();
+    expect(screen.getByText(/click Allow/)).toBeTruthy();
+  });
+
+  // Invariant: the viewer of a disconnected attached browser says so, shows the last error and offers Connect; while
+  // connecting it shows the Allow hint; nothing is joined.
+  it('the viewer shows disconnected with Connect, and the Allow hint while connecting', async () => {
+    const fetchMock = reply(202, {});
+    vi.stubGlobal('fetch', fetchMock);
+    goTo('?browser=mine');
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [attached({ attachError: 'nobody allowed it' })] });
+    expect(screen.getByText('This browser is disconnected.')).toBeTruthy();
+    expect(screen.getByText('nobody allowed it')).toBeTruthy();
+    expect(f.views.at(-1)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(calls(fetchMock, 'api/browsers/mine/connect')).toHaveLength(1));
+    await f.emit({ type: 'browsers', list: [attached({ status: 'connecting' })] });
+    expect(screen.getByText(/click Allow/)).toBeTruthy();
+    expect(f.views.at(-1)).toBeNull();
+  });
+
+  // Invariant: with tabs but no active one (a user's browser nobody has picked a tab in), the viewer asks to pick one.
+  it('tabs without an active tab ask to select one', async () => {
+    goTo('?browser=mine');
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [attached({ status: 'running' })] });
+    await f.emit(state({ name: 'mine', sandbox: null, activeTabId: null }));
+    expect(screen.getByText('Select a tab to watch it.')).toBeTruthy();
+    expect(document.querySelector('canvas')).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'One' }));
+    expect(f.sent).toContainEqual({ msg: 'tab', action: 'activate', tabId: 'T1' });
   });
 });

@@ -1,6 +1,7 @@
 // Pure reducer for one browser's tab list and the shared "active tab".
 // State: {tabs: [{targetId, url, title}], activeId, mru: [targetId, …] (most recent first)}.
-// Events: created, changed, destroyed, activate. `controller` is 'agent' | 'human'.
+// Events: created (`background: true` adds the tab without activating it), changed, destroyed, activate.
+// `controller` is 'agent' | 'human'.
 export const emptyTabs = () => ({ tabs: [], activeId: null, mru: [] });
 
 const activate = (state, id) => ({ ...state, activeId: id, mru: [id, ...state.mru.filter((m) => m !== id)] });
@@ -9,7 +10,8 @@ export function reduceTabs(state, ev, controller) {
   switch (ev.type) {
     case 'created':
       if (state.tabs.some((t) => t.targetId === ev.targetId)) return state;
-      // A new page is always shown: the agent opened a tab, or a click opened a popup.
+      // A new page is shown (the agent opened a tab, or a click opened a popup); a person's existing tab is not.
+      if (ev.background) return { ...state, tabs: [...state.tabs, { targetId: ev.targetId, url: ev.url, title: ev.title }] };
       return activate({ ...state, tabs: [...state.tabs, { targetId: ev.targetId, url: ev.url, title: ev.title }] }, ev.targetId);
     case 'changed': {
       const prev = state.tabs.find((t) => t.targetId === ev.targetId);

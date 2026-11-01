@@ -13,13 +13,13 @@ Applied by `src/app.js` to every HTTP request, in this order; no handler runs be
 | 0 | A request target that is not a valid URL | `400` (after the Origin check, so a foreign Origin still gets `403`) |
 | 1 | A request that carries an `Origin` must have the same host:port as `Host`; and a `Host` that names the backend's own port must be a loopback name (`127.0.0.1`, `localhost`, `[::1]`). `api/health` skips the loopback rule. (`src/requestGuard.js`, `requestRefusal`) | `403` |
 | 2 | Route lookup | `404` unknown path, `405` wrong method |
-| 2b | A route marked `requireOrigin` (the opt-in route, below) needs an `Origin` header | `403` |
+| 2b | A route marked `requireOrigin` (the panel-only routes, below) needs an `Origin` header | `403` |
 | 3 | Every state-changing route (`POST`, `DELETE`), `api/mcp` included, needs `Content-Type: application/json` | `415` |
 | 4 | Body read: size cap `MAX_BODY_BYTES` (`src/limits.js`), valid JSON; an empty body reads as `{}` | `413`, `400` |
 
 - A request with **no** `Origin` skips only check 1. cc calls `api/mcp` server-side without one.
 - A foreign `Origin` is refused on `api/mcp` too, and a `text/plain` or form body is refused with `415` whatever the `Origin`.
-- A **panel-only route** (`requireOrigin` in `src/routes.js`: `POST api/browsers/:name/allow-unsandboxed`) additionally refuses a request with **no** `Origin` (`403`, before the content-type check). A browser always sends `Origin` on a `fetch` POST and cc's proxy passes it through, so the panel is unaffected; cc's MCP bridge and plain scripts send none. This is not a defence against a client that adds the header.
+- A **panel-only route** (`requireOrigin` in `src/routes.js`: `POST api/browsers/:name/allow-unsandboxed`, `…/attach`, `…/connect`) additionally refuses a request with **no** `Origin` (`403`, before the content-type check). A browser always sends `Origin` on a `fetch` POST and cc's proxy passes it through, so the panel is unaffected; cc's MCP bridge and plain scripts send none. This is not a defence against a client that adds the header.
 - A WebSocket upgrade must carry an `Origin` (see below).
 - Every response carries the CSP and `nosniff`, `no-referrer`, `no-store` (`src/http.js`, `SECURITY_HEADERS`), including `404`, `503` and the reply to a malformed request (`clientError`).
 
@@ -30,15 +30,25 @@ Applied by `src/app.js` to every HTTP request, in this order; no handler runs be
 | `GET api/health` | — | `{ok:true}`. Never touches the browser manager. |
 | `GET api/browsers` | — | `{browsers:[summary]}` |
 | `POST api/browsers` | `{name}` | `201 {browser: summary}`: creates the profile and starts it; `409 EXISTS` when the name is taken |
-| `POST api/browsers/:name/start` | `{}` | `{browser: summary}`; no-op when running |
-| `POST api/browsers/:name/stop` | `{}` | `{browser: summary}`; the profile is kept |
-| `POST api/browsers/:name/allow-unsandboxed` | `{allow: boolean}` | `{browser: summary}`; panel-only (needs `Origin`); `allow: false` stops the browser if it runs unsandboxed; `400 BAD_REQUEST` when `allow` is not a boolean |
-| `DELETE api/browsers/:name` | — | `{ok:true}`; stops the browser and moves the profile to the trash dir |
+| `POST api/browsers/:name/start` | `{}` | `{browser: summary}`; no-op when running; `409 ATTACHED` for an attached browser |
+| `POST api/browsers/:name/stop` | `{}` | `{browser: summary}`; the profile is kept. An attached browser is disconnected (code-browser's own connection and tunnel close; nothing is sent to the browser) and a connect in progress is cancelled |
+| `POST api/browsers/:name/allow-unsandboxed` | `{allow: boolean}` | `{browser: summary}`; panel-only (needs `Origin`); `allow: false` stops the browser if it runs unsandboxed; `400 BAD_REQUEST` when `allow` is not a boolean or the browser is attached |
+| `POST api/browsers/:name/attach` | `{address, via}` | `202 {browser: summary}` (status `connecting`); panel-only. Saves `attached/<name>.json` (re-pointing an attached name) and connects in the background. `address`: `127.0.0.1:<port>` or `localhost:<port>` (port 1–65535; canonicalised to `127.0.0.1`); `via`: `proxy` \| `direct`; anything else `400 BAD_ENDPOINT`. `409 EXISTS` when the name is a profile or another attached browser has the same `{address, via}` |
+| `POST api/browsers/:name/connect` | `{}` | `202 {browser: summary}` (status `connecting`); panel-only; connects an attached browser in the background; `400 BAD_REQUEST` for a profile, `404 NOT_FOUND` for an unknown name |
+| `DELETE api/browsers/:name` | — | `{ok:true}`; stops the browser and moves the profile to the trash dir. For an attached browser: disconnects and removes the record only |
 | `POST api/mcp` | `{tool, arguments, caller}` | see MCP |
 
-`summary` = `{name, status: "running"|"stopped", controller: "agent"|"human", sandbox: boolean|null, allowUnsandboxed: boolean, sandboxUnavailable: boolean, lastExit: {code, signal, at}|null, cdpEndpoint: string|null}`. `lastExit` is set only after an unexpected exit. `allowUnsandboxed` is the human's per-browser opt-in to run without Chromium's sandbox. `sandboxUnavailable` is true after a start was refused for want of a sandbox, until a start succeeds or the browser is deleted; it is held in memory and does not survive a backend restart.
+`summary` = `{name, kind: "launched"|"attached", status: "running"|"stopped"|"connecting", controller: "agent"|"human", sandbox: boolean|null, allowUnsandboxed: boolean, sandboxUnavailable: boolean, lastExit: {code, signal, at}|null, cdpEndpoint: string|null, attached: {address, via, asksApproval: boolean|null}|null, attachError: string|null}`. `lastExit` is set only after an unexpected exit (for an attached browser: the connection dropped; the panel shows *Disconnected*). `allowUnsandboxed` is the human's per-browser opt-in to run without Chromium's sandbox. `sandboxUnavailable` is true after a start was refused for want of a sandbox, until a start succeeds or the browser is deleted; it is held in memory and does not survive a backend restart.
 
-Errors are `{error: "<CODE>: <message>"}` with the status from `src/errors.js` (`statusFor`): `INVALID_NAME`/`BAD_REQUEST` 400, `FORBIDDEN` 403, `NOT_FOUND` 404, `EXISTS`/`NOT_RUNNING`/`SANDBOX_UNAVAILABLE` 409, `PAYLOAD_TOO_LARGE` 413, `UNSUPPORTED_MEDIA_TYPE` 415, anything else 500 (`CHROMIUM_NOT_FOUND`, `LAUNCH_FAILED`).
+Attached browsers (`kind: "attached"`, a person's own browser):
+
+- `status` `connecting` while an attach or connect is in progress (attached only).
+- `attached`: the saved `address` and `via`, and `asksApproval` (Chrome's approval mode, known once discovery has run; `null` before), `null` for launched browsers.
+- `attachError`: why the last connect failed, held in memory; cleared by the next attach or connect.
+- `sandbox` is `null`, `allowUnsandboxed` and `sandboxUnavailable` are `false`.
+- `cdpEndpoint` is a URL on the backend's own loopback: `http://127.0.0.1:<port>` (direct), `http://127.0.0.1:<tunnel port>` (through the proxy), or `ws://…/devtools/browser` in approval mode. It never carries the proxy secret.
+
+Errors are `{error: "<CODE>: <message>"}` with the status from `src/errors.js` (`statusFor`): `INVALID_NAME`/`BAD_REQUEST`/`BAD_ENDPOINT` 400, `FORBIDDEN` 403, `NOT_FOUND` 404, `EXISTS`/`NOT_RUNNING`/`SANDBOX_UNAVAILABLE`/`ATTACHED` 409, `PAYLOAD_TOO_LARGE` 413, `UNSUPPORTED_MEDIA_TYPE` 415, `ATTACH_FAILED` 502, anything else 500 (`CHROMIUM_NOT_FOUND`, `LAUNCH_FAILED`). `ATTACH_FAILED` reaches callers as `attachError`, since attach and connect answer `202` before connecting.
 
 `GET` routes have no side effects: `<img>` tags and simple requests from any page can reach them.
 
@@ -59,17 +69,19 @@ cc POSTs `{tool, arguments, caller}` to `api/mcp` and expects HTTP `200` with on
 | Tool | Arguments | Returns |
 |---|---|---|
 | `list_browsers` | — | `{result: [summary]}` |
-| `start_browser` | `name?` | as `browser_info`; creates the profile when the name is new; no-op when running; `SANDBOX_UNAVAILABLE` error when the host has no usable sandbox and the browser is not allowed to run without one |
-| `stop_browser` | `name?` | `{result: {name, status: "stopped"}}` |
+| `start_browser` | `name?` | as `browser_info`; creates the profile when the name is new; no-op when running; `SANDBOX_UNAVAILABLE` error when the host has no usable sandbox and the browser is not allowed to run without one; `ATTACHED` error for an attached browser (it creates nothing and connects nothing) |
+| `stop_browser` | `name?` | `{result: {name, status: "stopped"}}`; an attached browser is only disconnected |
 | `browser_info` | `name?` | `{text, meta}` |
 
 `name` defaults to `default` and must match `NAME_RE` (`src/limits.js`).
 
-`browser_info.meta`: `{name, status, cdpEndpoint, controller, sandbox, allowUnsandboxed, tabs: [{targetId, url, title, active}], panelPath}`.
+`browser_info.meta`: `{name, kind, status, attached, cdpEndpoint, controller, sandbox, allowUnsandboxed, tabs: [{targetId, url, title, active}], panelPath}`.
 
-`browser_info.text` (raw text, not escaped): the do-not-drive note when `controller` is `human`; a one-line `WARNING` when `sandbox` is `false`; the panel path with its relative-address note; the two Playwright rules; the ready-to-run snippet in a `js` fence (`src/snippet.js`).
+`browser_info.text` (raw text, not escaped): the do-not-drive note when `controller` is `human`; a one-line `WARNING` when `sandbox` is `false`; for an attached browser the attached note (`ATTACHED_NOTE` in `src/mcp.js`: the user's tabs and logins, work in your own tab, do not close tabs you did not open, `sandbox` is null, `stop_browser` only disconnects and only the user reconnects, a person may be using the window); when `attached.asksApproval` the approval note (`APPROVAL_NOTE`: every script's connection raises Chrome's dialog, tell the user first, use few scripts); the panel path with its relative-address note; the two Playwright rules; the ready-to-run snippet in a `js` fence (`src/snippet.js`: for an attached browser with no active tab it opens its own tab; in approval mode `connectOverCDP` waits `APPROVAL_TIMEOUT_MS`).
 
-Error codes: `UNKNOWN_TOOL`, `INVALID_NAME`, `NOT_FOUND`, `NOT_RUNNING`, `SANDBOX_UNAVAILABLE` (the text names the panel path and says only a human can enable *Allow without sandbox*; unknown tool arguments such as `allowUnsandboxed` are ignored), `CHROMIUM_NOT_FOUND` (lists every path tried and the install command), `LAUNCH_FAILED` (carries the Chromium log tail), `CDP_TIMEOUT`, `CDP_ERROR`, `CDP_CLOSED`, `INTERNAL`.
+No tool attaches or connects a browser, and every tool takes `name` only.
+
+Error codes: `UNKNOWN_TOOL`, `INVALID_NAME`, `NOT_FOUND`, `NOT_RUNNING` (for an attached browser the text says it is the user's own browser and to ask them to press Connect at the panel path), `ATTACHED` (`start_browser` on an attached browser; names the panel path and says to ask the user to Connect it), `SANDBOX_UNAVAILABLE` (the text names the panel path and says only a human can enable *Allow without sandbox*; unknown tool arguments such as `allowUnsandboxed` are ignored), `CHROMIUM_NOT_FOUND` (lists every path tried and the install command), `LAUNCH_FAILED` (carries the Chromium log tail), `CDP_TIMEOUT`, `CDP_ERROR`, `CDP_CLOSED`, `INTERNAL`.
 
 ## Panel shell link
 
@@ -121,7 +133,7 @@ Error codes: `UNKNOWN_TOOL`, `INVALID_NAME`, `NOT_FOUND`, `NOT_RUNNING`, `SANDBO
 | `type` | Fields |
 |---|---|
 | `browsers` | `list: [summary]`, on `hello` and on every change |
-| `state` | `name, status, sandbox, controller: {kind:"agent"} \| {kind:"human", you: boolean}, tabs: [{targetId,url,title}], activeTabId, canGoBack, canGoForward`; on `view` and on every change. A browser that stops sends `{name, status:"stopped"}` and the viewer is un-viewed. |
+| `state` | `name, status, sandbox` (`null` for an attached browser)`, controller: {kind:"agent"} \| {kind:"human", you: boolean}, tabs: [{targetId,url,title}], activeTabId, canGoBack, canGoForward`; on `view` and on every change. A browser that stops sends `{name, status:"stopped"}` and the viewer is un-viewed. |
 | `dialog` | `tabId, dialogType` (`alert`\|`confirm`\|`prompt`\|`beforeunload`), `message, defaultPrompt`; a pending dialog is replayed to a viewer that joins late |
 | `dialogClosed` | `tabId` |
 | `error` | `code, message`: `BAD_REQUEST`, `NOT_CONTROLLER`, `NOT_VIEWING`, `NOT_RUNNING`, `INVALID_NAME`, `INVALID_INPUT`, `BAD_URL`, `NO_TAB`, `NO_DIALOG`, `INTERNAL` |
@@ -139,3 +151,31 @@ Owned by `src/screencast.js`; the numbers are `MAX_FPS`, `VIEWER_HIGH_WATER` in 
 - A viewer that never acks receives no further frames. The panel acks after drawing.
 - A viewer that joins gets the cached latest frame at once. A tab switch drops the cache and discards frames of the old tab.
 - The screencast runs only on the active tab and only while some viewer has a view; its size is the largest viewer's request, clamped to `MAX_FRAME_DIM`.
+
+## CDP proxy wire protocol
+
+Between the backend (client, `src/proxyClient.js`) and `proxy/cdp_proxy.py` on the Docker host. Every value named here lives in `proxy/protocol.json`, which both sides read (`src/proxyProtocol.js`); nothing restates it. Running and security model: [proxy.md](proxy.md).
+
+**Transport:** raw TCP, the backend dials. Newline-delimited JSON frames (`frames`), each at most `maxFrameBytes`, until the handshake ends; after `welcome` the connection is a byte pipe to `127.0.0.1:<port>` on the host.
+
+| Step | Frame | Fields |
+|---|---|---|
+| 1. proxy → client | `hello` | `v` (`protocolVersion`), `nonce` (`nonceBytes` random bytes, base64url) |
+| 2. client → proxy | `auth` | exactly `t, v, nonce, port, mac`: the client's own nonce, the target port (an integer in `port.min`–`port.max`), `mac` = client MAC |
+| 3. proxy → client | `welcome` \| `error` | `welcome`: `mac` = proxy MAC. `error`: `code`, `message` |
+
+- **MAC:** lowercase hex HMAC-SHA256 under the secret over `label + "\n" + nonce_proxy + "\n" + nonce_client + "\n" + port` (decimal), with `macLabels.client` for the client and `macLabels.proxy` for the proxy. Compared in constant time. `tests/fixtures/proxy-mac-vector.json` is a vector both test suites check.
+- **Order of checks (proxy):** the auth frame's shape (`bad_frame`) and version (`version_mismatch`), the secret (`no_secret`), the MAC (`auth_failed`), the port (`port_refused`), then the connect to `127.0.0.1:<port>` within `connectTimeoutMs` (`connect_failed`). The port list is only checked after the MAC.
+- **Port policy:** allowed ports are `defaultPorts` unless `--ports` replaces them; the proxy's own listen port is always refused. A `port_refused` message names the `--ports` value that would allow the port.
+- **Client side:** it uses nothing after `hello` (data bytes included) before the proxy MAC verifies; otherwise it fails with `impostor`. A real proxy's `error` stops dialling further candidates; a connect failure, a timeout or an impostor moves to the next candidate.
+- **Caps:** `maxPendingHandshakes` unauthenticated connections at the proxy (one more is cut with no hello); `handshakeTimeoutMs` per handshake on both sides; the backend runs at most `maxClientHandshakes` handshakes at once.
+- **Error codes** (`errorCodes`): `auth_failed`, `version_mismatch`, `no_secret`, `bad_frame`, `port_refused`, `connect_failed`. Backend-only failure codes: `no_proxy` (no `host.json`: start the proxy), `bad_host_file`, `impostor`, `closed`, `timeout`. They reach the panel inside `attachError` as `through the proxy: …`.
+
+### Rendezvous files
+
+In `<dataDir>/proxy/` (`rendezvous.dir`). Each has one writer; both are read only as a regular file of at most `maxRendezvousBytes`, opened non-blocking.
+
+| File | Writer | Shape |
+|---|---|---|
+| `rendezvous.backendFile` (`secret.json`) | backend (`ensureSecret` in `src/proxyStore.js`), at boot and before each proxied connection, when missing or invalid; `0600` in a `0700` dir | `{protocolVersion, secret}`; `secret` at least `minSecretLength` characters |
+| `rendezvous.proxyFile` (`host.json`) | proxy, at startup; removed on a clean exit while it names that pid; `0600` | `{protocolVersion, listen: "<ipv4>:<port>", pid}`. Another `protocolVersion` is reported as `update the proxy/ copy on the host` |

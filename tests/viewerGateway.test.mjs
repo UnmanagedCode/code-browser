@@ -331,3 +331,38 @@ test('websocket upgrade: rebound Host refused, loopback and proxied Hosts accept
     assert.match(await handshake(host), /^HTTP\/1\.1 101 /, host);
   }
 });
+
+// Invariant: an attached browser is watched and driven through the same gateway: frames, take control, input reaching
+// the user's browser, hand back; a disconnect un-views it as stopped, and the browser keeps running.
+test('a viewer watches and drives an attached browser; a disconnect shows it stopped', async () => {
+  const { externalFake } = await import('./helpers.mjs');
+  stack = liveStack();
+  await stack.manager.boot();
+  await stack.listen();
+  const user = await externalFake();
+  try {
+    await stack.manager.attach('mine', { address: user.address, via: 'direct' });
+    const session = stack.manager.session('mine');
+    await waitFor(() => session.snapshot().tabs.length === 1, { what: 'seeded tab' });
+    const v = await stack.viewer();
+    v.send({ msg: 'view', name: 'mine', maxWidth: 800, maxHeight: 600 });
+    await v.waitFor((x) => x.last('state')?.status === 'running', 'state');
+    assert.equal(v.last('state').sandbox, null);
+    const tabId = session.snapshot().tabs[0].targetId;
+    v.send({ msg: 'tab', action: 'activate', tabId });
+    await v.waitFor((x) => x.frames.length >= 1, 'a frame');
+    v.send({ msg: 'control', action: 'take' });
+    await v.waitFor((x) => x.last('state').controller.kind === 'human', 'control');
+    v.send(click);
+    const agent = await user.agent();
+    await waitFor(async () => (await agent.send('Fake.getRecorded')).recorded.some((r) => r.method === 'Input.dispatchMouseEvent' && r.targetId === tabId), { what: 'input in the user browser' });
+    v.send({ msg: 'control', action: 'release' });
+    await v.waitFor((x) => x.last('state').controller.kind === 'agent', 'hand back');
+    agent.close();
+    await stack.manager.stop('mine');
+    await v.waitFor((x) => x.last('state').status === 'stopped', 'stopped state');
+    assert.ok(user.alive());
+  } finally {
+    await user.kill();
+  }
+});

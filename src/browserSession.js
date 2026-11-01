@@ -12,12 +12,18 @@ const isPage = (ti) => ti.type === 'page' && !ti.subtype;
 // The live side of one running browser: tabs and the shared active tab, dialogs, navigation state,
 // input dispatch, the controller lease and the screencast. Emits 'change' (any visible state),
 // 'dialog' ({tabId, type, message, defaultPrompt}) and 'dialogClosed' ({tabId}).
-export function createBrowserSession({ name, cdp, sandbox, log = console, controllerOptions = {}, screencastOptions = {} }) {
+//
+// `attached`: the browser is a person's own (attached in the panel). Its existing tabs are seeded without
+// becoming active, a tab is brought to the front only when someone starts watching it, and closing the last
+// tab opens nothing.
+export function createBrowserSession({ name, cdp, sandbox, attached = false, log = console, controllerOptions = {}, screencastOptions = {} }) {
   const events = new EventEmitter();
   const controller = createController({ ...controllerOptions, onChange: () => events.emit('change') });
+  const warn = (what) => (err) => { if (!disposed) log.warn(`code-browser: '${name}' ${what}: ${err.message}`); };
   const screencast = createScreencast({
     send: (method, params, sessionId) => cdp.send(method, params, { sessionId }),
     onError: (err) => log.warn(`code-browser: '${name}' screencast: ${err.message}`),
+    ...(attached ? { onStart: (tabId) => { cdp.send('Target.activateTarget', { targetId: tabId }).catch(warn('activateTarget')); } } : {}),
     ...screencastOptions,
   });
   let tabs = emptyTabs();
@@ -28,7 +34,6 @@ export function createBrowserSession({ name, cdp, sandbox, log = console, contro
   const tabOfSession = new Map();
   const dialogs = new Map();
 
-  const warn = (what) => (err) => { if (!disposed) log.warn(`code-browser: '${name}' ${what}: ${err.message}`); };
   const callOn = (tabId, method, params) => {
     const sessionId = sessionOfTab.get(tabId);
     if (!sessionId) throw new CodedError('NO_TAB', 'that tab is not attached');
@@ -64,7 +69,7 @@ export function createBrowserSession({ name, cdp, sandbox, log = console, contro
     if (tabs.activeId !== before) {
       syncScreencast();
       if (tabs.activeId) {
-        cdp.send('Target.activateTarget', { targetId: tabs.activeId }).catch(warn('activateTarget'));
+        if (!attached) cdp.send('Target.activateTarget', { targetId: tabs.activeId }).catch(warn('activateTarget'));
         refreshNav().catch(warn('navigation state'));
       }
     }
@@ -95,7 +100,7 @@ export function createBrowserSession({ name, cdp, sandbox, log = console, contro
   function onEvent({ method, params, sessionId }) {
     switch (method) {
       case 'Target.targetCreated':
-        if (!isPage(params.targetInfo)) return;
+        if (!isPage(params.targetInfo) || tabs.tabs.some((t) => t.targetId === params.targetInfo.targetId)) return;
         apply({ type: 'created', targetId: params.targetInfo.targetId, url: params.targetInfo.url, title: params.targetInfo.title });
         attach(params.targetInfo.targetId);
         return;
@@ -106,7 +111,7 @@ export function createBrowserSession({ name, cdp, sandbox, log = console, contro
         if (!tabs.tabs.some((t) => t.targetId === params.targetId)) return;
         forgetTab(params.targetId);
         apply({ type: 'destroyed', targetId: params.targetId });
-        if (tabs.tabs.length === 0 && !disposed) cdp.send('Target.createTarget', { url: 'about:blank' }).catch(warn('open blank tab'));
+        if (tabs.tabs.length === 0 && !disposed && !attached) cdp.send('Target.createTarget', { url: 'about:blank' }).catch(warn('open blank tab'));
         return;
       case 'Page.screencastFrame':
         screencast.onFrame(sessionId, params);
@@ -141,6 +146,13 @@ export function createBrowserSession({ name, cdp, sandbox, log = console, contro
     screencast,
     async start() {
       cdp.on('event', onEventBound);
+      if (attached) {
+        const { targetInfos } = await cdp.send('Target.getTargets');
+        for (const ti of targetInfos.filter(isPage)) {
+          apply({ type: 'created', background: true, targetId: ti.targetId, url: ti.url, title: ti.title });
+          attach(ti.targetId);
+        }
+      }
       await cdp.send('Target.setDiscoverTargets', { discover: true });
     },
     dispose() {

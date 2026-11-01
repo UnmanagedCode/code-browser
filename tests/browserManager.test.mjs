@@ -22,6 +22,10 @@ function make({ dataDir = tmpDir(), env = {}, timeouts = {}, trashFs } = {}) {
   return { manager, dataDir, warns, profile: (n) => path.join(dataDir, 'profiles', n) };
 }
 const fakePid = (profile) => Number(fs.readFileSync(path.join(profile, 'fake-pid'), 'utf8'));
+// Pids whose argv carries this profile's --user-data-dir token.
+const processesUsing = (profile) => fs.readdirSync('/proc').filter((d) => /^\d+$/.test(d)).filter((pid) => {
+  try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').includes(`--user-data-dir=${profile}`); } catch { return false; }
+});
 afterEach(async () => { await Promise.all(managers.splice(0).map((m) => m.shutdown())); });
 
 // Invariant: create → start → stop → delete move a browser through its lifecycle; stop keeps the profile, delete removes it.
@@ -121,8 +125,8 @@ test('launch timeout gives LAUNCH_FAILED with the log tail and kills the browser
   const { manager, profile } = make({ env: { FAKE_CHROMIUM_NO_PORT: '1' }, timeouts: { launch: 300 } });
   manager.create('a');
   await assert.rejects(manager.start('a'), (e) => e.code === 'LAUNCH_FAILED' && /no DevToolsActivePort/.test(e.message));
-  const pid = fakePid(profile('a'));
-  await waitFor(() => !pidAlive(pid), { what: 'timed-out chromium to be killed' });
+  // Under load the fake may not even have started within the timeout, so look for any process on this profile.
+  await waitFor(() => processesUsing(profile('a')).length === 0, { what: 'timed-out chromium to be killed' });
   assert.equal(manager.summary('a').status, 'stopped');
 });
 
@@ -143,7 +147,7 @@ test('sandbox failure without the opt-in is refused and launches nothing unsandb
   assert.equal(fs.existsSync(path.join(profile('a'), 'fake-pid')), false);
   assert.equal(fs.existsSync(path.join(dataDir, 'run', 'a.json')), false);
   assert.ok(!warns.some((w) => w.includes('relaunching')));
-  assert.deepEqual(manager.summary('a'), { name: 'a', status: 'stopped', controller: 'agent', sandbox: null, allowUnsandboxed: false, sandboxUnavailable: true, lastExit: null, cdpEndpoint: null });
+  assert.deepEqual(manager.summary('a'), { name: 'a', kind: 'launched', status: 'stopped', controller: 'agent', sandbox: null, allowUnsandboxed: false, sandboxUnavailable: true, lastExit: null, cdpEndpoint: null, attached: null, attachError: null });
   assert.ok(changes > 0, 'the refusal emits change');
 });
 

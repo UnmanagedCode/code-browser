@@ -1,0 +1,21 @@
+{
+  "protocolVersion": 1,
+  "rendezvous": { "dir": "proxy", "backendFile": "secret.json", "proxyFile": "host.json" },
+  "macLabels": { "client": "code-browser-proxy/1 client", "proxy": "code-browser-proxy/1 proxy" },
+  "frames": { "hello": "hello", "auth": "auth", "welcome": "welcome", "error": "error" },
+  "port": { "min": 1, "max": 65535 },
+  "defaultPorts": [9222],
+  "defaultListenPort": 7078,
+  "minSecretLength": 32,
+  "nonceBytes": 32,
+  "maxFrameBytes": 16384,
+  "maxRendezvousBytes": 4096,
+  "maxPendingHandshakes": 32,
+  "maxClientHandshakes": 8,
+  "handshakeTimeoutMs": 5000,
+  "connectTimeoutMs": 2000,
+  "errorCodes": {
+    "authFailed": "auth_failed", "versionMismatch": "version_mismatch", "noSecret": "no_secret",
+    "badFrame": "bad_frame", "portRefused": "port_refused", "connectFailed": "connect_failed"
+  }
+}

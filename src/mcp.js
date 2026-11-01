@@ -10,6 +10,18 @@ const HUMAN_NOTE = 'A human currently has control of this browser. Do not drive 
 const UNSANDBOXED_NOTE = "WARNING: this browser runs without Chromium's sandbox (the host has no usable one), so a compromised page could "
   + 'run code as the host user. Do not browse untrusted pages in it, especially with logged-in profiles.';
 
+const ATTACHED_NOTE = "This is the user's own browser, which they attached in the panel: its other tabs and logged-in sessions are theirs. "
+  + "Work in your own tab and do not close tabs you did not open. `sandbox` is null because code-browser did not launch it, "
+  + 'so nothing is known about its sandbox or profile. stop_browser only disconnects, and only the user can reconnect it. '
+  + 'A person may be using its window right now.';
+
+const APPROVAL_NOTE = 'Chrome asks the user "Allow remote debugging?" for every connection to this browser, and each script you run '
+  + 'opens a new one. Tell the user before you run a script; it waits until they click Allow and fails with 403 if they cancel. '
+  + 'Do the work in as few scripts as possible.';
+
+const attachedOnly = (err, name, path) => new CodedError(err.code, `${err.message}. Browser '${name}' is the user's own browser; ask the user to `
+  + `press Connect for it in the code-browser panel: ${path} (relative to the address the user opens cc at; do not add a host).`);
+
 const sandboxUnavailable = (err, path) => new CodedError(err.code, `${err.message}. A human must enable "Allow without sandbox" for this browser in the code-browser panel: ${path} `
   + '(relative to the address the user opens cc at; do not add a host). You cannot enable it yourself: ask the user, then call start_browser again.');
 
@@ -18,11 +30,20 @@ export function createMcp({ manager, pluginDir, pluginId }) {
   const nameOf = (args) => assertName(args?.name ?? DEFAULT_BROWSER_NAME);
 
   async function browserInfo(name) {
-    const info = await manager.info(name);
     const path = panelPath(name, pluginId);
+    let info;
+    try {
+      info = await manager.info(name);
+    } catch (err) {
+      if (err.code !== 'NOT_RUNNING') throw err;
+      throw manager.list().find((b) => b.name === name)?.kind === 'attached' ? attachedOnly(err, name, path) : err;
+    }
+    const attached = info.kind === 'attached';
     const meta = {
       name: info.name,
+      kind: info.kind,
       status: info.status,
+      attached: info.attached,
       cdpEndpoint: info.cdpEndpoint,
       controller: info.controller,
       sandbox: info.sandbox,
@@ -33,6 +54,8 @@ export function createMcp({ manager, pluginDir, pluginId }) {
     const text = [
       ...(info.controller === 'human' ? [HUMAN_NOTE, ''] : []),
       ...(info.sandbox === false ? [UNSANDBOXED_NOTE, ''] : []),
+      ...(attached ? [ATTACHED_NOTE, ''] : []),
+      ...(info.attached?.asksApproval ? [APPROVAL_NOTE, ''] : []),
       `Panel: ${path} — it is relative to the address the user opens cc at. Give it to the user as-is, or as a markdown link with that path as the target. Do not add a host.`,
       '',
       'Rules:',
@@ -41,7 +64,7 @@ export function createMcp({ manager, pluginDir, pluginId }) {
       '',
       'Save this as an .mjs file and run it with node via Bash:',
       '```js',
-      buildSnippet({ pluginDir, cdpEndpoint: info.cdpEndpoint, activeTargetId: info.activeTargetId }).trimEnd(),
+      buildSnippet({ pluginDir, cdpEndpoint: info.cdpEndpoint, activeTargetId: info.activeTargetId, attached, asksApproval: info.attached?.asksApproval === true }).trimEnd(),
       '```',
     ].join('\n');
     return { text, meta };
@@ -55,7 +78,9 @@ export function createMcp({ manager, pluginDir, pluginId }) {
       try {
         await manager.start(name);
       } catch (err) {
-        throw err.code === 'SANDBOX_UNAVAILABLE' ? sandboxUnavailable(err, panelPath(name, pluginId)) : err;
+        if (err.code === 'SANDBOX_UNAVAILABLE') throw sandboxUnavailable(err, panelPath(name, pluginId));
+        if (err.code === 'ATTACHED') throw attachedOnly(err, name, panelPath(name, pluginId));
+        throw err;
       }
       return browserInfo(name);
     },

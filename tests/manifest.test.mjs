@@ -63,3 +63,19 @@ test('descriptions explain the sandbox refusal and the human opt-in', () => {
   assert.match(desc('browser_info'), /`sandbox`/);
   for (const name of ['browser_info', 'list_browsers']) assert.match(desc(name), /allowUnsandboxed/, name);
 });
+
+// Invariant: no tool attaches or connects a browser: that is a human's action in the panel only.
+test('no tool is named for attaching or connecting', () => {
+  for (const tool of manifest.mcp.tools) assert.doesNotMatch(tool.name, /attach|connect/, tool.name);
+});
+
+// Invariant: the tools tell the agent that an attached browser is the user's: start refuses it (ATTACHED), stop only
+// disconnects, and the listing and info explain kind and attached.
+test('descriptions explain attached browsers', () => {
+  const desc = (name) => manifest.mcp.tools.find((t) => t.name === name).description;
+  assert.match(desc('start_browser'), /ATTACHED/);
+  assert.match(desc('start_browser'), /Connect/);
+  assert.match(desc('stop_browser'), /only disconnects/);
+  for (const name of ['list_browsers', 'browser_info']) assert.match(desc(name), /attached/, name);
+  assert.match(desc('browser_info'), /asksApproval/);
+});

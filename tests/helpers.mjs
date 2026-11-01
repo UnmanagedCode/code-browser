@@ -1,3 +1,4 @@
+import { execFileSync, spawn } from 'node:child_process';
 import http from 'node:http';
 import net from 'node:net';
 import fs from 'node:fs';
@@ -93,15 +94,15 @@ export function decodeFrame(buf) {
 
 export const FAKE_CHROMIUM = new URL('./fakes/fakeChromium.mjs', import.meta.url).pathname;
 
-export function liveStack({ env = {}, leaseMs = 30_000, clock = null } = {}) {
-  const dataDir = tmpDir();
+export function liveStack({ env = {}, leaseMs = 30_000, clock = null, dataDir = tmpDir() } = {}) {
   const manager = createBrowserManager({
     dataDir,
-    env: { ...process.env, CODE_BROWSER_CHROMIUM: FAKE_CHROMIUM, ...env },
+    env: { ...process.env, CODE_BROWSER_CHROMIUM: FAKE_CHROMIUM, CODE_BROWSER_PROXY_DIAL_HOST: '127.0.0.1', ...env },
     log: { warn() {}, error() {} },
     timeouts: { launch: 4000, stopGrace: 1500, killGrace: 200, shutdownGrace: 500 },
     createSession: (entry) => createBrowserSession({
-      name: entry.name, cdp: entry.cdp, sandbox: entry.sandbox, log: { warn() {} }, controllerOptions: { leaseMs, ...(clock ? { schedule: clock.schedule } : {}) },
+      name: entry.name, cdp: entry.cdp, sandbox: entry.sandbox, attached: entry.kind === 'attached', log: { warn() {} },
+      controllerOptions: { leaseMs, ...(clock ? { schedule: clock.schedule } : {}) },
     }),
   });
   const gateway = createViewerGateway({ manager, log: { error() {} }, pingMs: 60_000 });
@@ -163,4 +164,79 @@ export function rawExchange(port, text, { timeout = 2000 } = {}) {
     s.on('error', () => resolve(buf));
     setTimeout(() => { s.destroy(); }, timeout).unref();
   });
+}
+
+// ---- attached browsers: a fake Chromium the "user" launched themselves, and the CDP proxy ----
+
+const liveChildren = new Set();
+process.once('exit', () => { for (const c of liveChildren) { try { c.kill('SIGKILL'); } catch { /* gone */ } } });
+const track = (child) => { liveChildren.add(child); child.once('exit', () => liveChildren.delete(child)); return child; };
+
+// A fake Chromium started outside code-browser, as a user starts their own browser. `approval` runs it in Chrome's
+// own-profile approval mode; `answer('allow'|'deny')` answers its held connection, `pending()` counts them.
+export async function externalFake({ approval = false, env = {} } = {}) {
+  const profile = tmpDir('code-browser-external-');
+  const child = track(spawn(process.execPath, [FAKE_CHROMIUM, `--user-data-dir=${profile}`], {
+    stdio: 'ignore', env: { ...process.env, ...(approval ? { FAKE_CHROMIUM_APPROVAL: '1' } : {}), ...env },
+  }));
+  const [port, wsPath] = await waitFor(() => {
+    try { const l = fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').trim().split('\n'); return l.length === 2 && l; } catch { return null; }
+  }, { what: 'the external fake to listen', timeout: 5000 });
+  const fake = {
+    port: Number(port), wsPath, profile, pid: child.pid, address: `127.0.0.1:${port}`,
+    alive: () => child.exitCode === null && child.signalCode === null,
+    kill: () => { child.kill('SIGKILL'); return new Promise((r) => (fake.alive() ? child.once('exit', r) : r())); },
+    approval: (method = 'GET', answer = '') => request(fake.port, { method, path: `/fake/approval${answer && `?answer=${answer}`}` }).then((r) => r.json),
+    pending: async () => (await fake.approval()).pending,
+    answer: (answer) => fake.approval('PUT', answer),
+    // A CDP client straight to the browser, with the fake's test-only methods (not in approval mode).
+    agent: () => CdpConnection.connect(`ws://127.0.0.1:${port}${wsPath}`),
+  };
+  return fake;
+}
+
+let pythonCache = null;
+// The interpreter for the proxy: CODE_BROWSER_PYTHON (e.g. python3.9), else python3; {ok, cmd, args} or {ok:false, reason}.
+export function findPython() {
+  if (pythonCache) return pythonCache;
+  const spec = process.env.CODE_BROWSER_PYTHON || 'python3';
+  const [cmd, ...args] = spec.split(/\s+/).filter(Boolean);
+  try {
+    const out = execFileSync(cmd, [...args, '-c', 'import sys; print("%d.%d" % sys.version_info[:2])'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const [major, minor] = out.split('.').map(Number);
+    pythonCache = major > 3 || (major === 3 && minor >= 9) ? { ok: true, cmd, args, version: out } : { ok: false, reason: `${spec} is Python ${out}` };
+  } catch (e) {
+    pythonCache = { ok: false, reason: `${spec} could not run (${e.code ?? e.message})` };
+  }
+  return pythonCache;
+}
+
+const PYTHON_MISSING = 'python3 >= 3.9 not found: install it, point CODE_BROWSER_PYTHON at it, or set CODE_BROWSER_SKIP_PYTHON=1 to skip';
+
+// Gate for a Python-dependent test, called first in its body. Fails closed: with no usable interpreter the test
+// FAILS, unless CODE_BROWSER_SKIP_PYTHON=1 opts out explicitly, which skips it. True when the test may proceed.
+export function requirePython(t) {
+  const py = findPython();
+  if (py.ok) return true;
+  if (process.env.CODE_BROWSER_SKIP_PYTHON === '1') { t.skip(`${PYTHON_MISSING} (${py.reason})`); return false; }
+  throw new Error(`${PYTHON_MISSING} (${py.reason})`);
+}
+
+export const PROXY_SCRIPT = new URL('../proxy/cdp_proxy.py', import.meta.url).pathname;
+
+// The real proxy on 127.0.0.1:<any>, for the store under `projectsRoot`, forwarding to `ports` (its default when null).
+export async function startProxy({ projectsRoot, ports = null }) {
+  const py = findPython();
+  if (!py.ok) throw new Error(`${PYTHON_MISSING} (${py.reason})`);
+  fs.mkdirSync(path.join(projectsRoot, '.code-browser'), { recursive: true });
+  const argv = [...py.args, PROXY_SCRIPT, '--projects-root', projectsRoot, '--listen', '127.0.0.1:0', ...(ports ? ['--ports', ports.join(',')] : [])];
+  const proc = track(spawn(py.cmd, argv, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } }));
+  let out = '';
+  proc.stdout.on('data', (d) => { out += d; });
+  proc.stderr.on('data', (d) => { out += d; });
+  const m = await waitFor(() => /listening on 127\.0\.0\.1:(\d+)/.exec(out) || proc.exitCode !== null || proc.signalCode !== null, { what: 'the proxy to listen', timeout: 10_000 });
+  if (m === true) throw new Error(`the proxy exited: ${out}`);
+  const exited = () => proc.exitCode !== null || proc.signalCode !== null;
+  const end = (signal) => new Promise((r) => { if (exited()) r(); else { proc.once('exit', r); proc.kill(signal); } });
+  return { proc, port: Number(m[1]), log: () => out, stop: () => end('SIGTERM'), kill: () => end('SIGKILL') };
 }

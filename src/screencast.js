@@ -13,6 +13,8 @@ const defaultSchedule = (fn, ms) => {
 // in flight; while it is busy (or its socket buffer is above the high-water mark) only the newest
 // frame is kept. A slow phone therefore gets fewer frames, never stale ones, and never slows
 // Chromium or the other viewers.
+//
+// `onStart(tabId)` runs whenever a screencast starts on a tab (someone started watching it).
 export function createScreencast({
   send,
   schedule = defaultSchedule,
@@ -22,6 +24,7 @@ export function createScreencast({
   maxDim = MAX_FRAME_DIM,
   highWater = VIEWER_HIGH_WATER,
   retryMs = 100,
+  onStart = () => {},
   onError = (err) => console.warn('code-browser: screencast:', err.message),
 }) {
   const viewers = new Map();
@@ -52,6 +55,7 @@ export function createScreencast({
     if (want && !running) {
       running = want;
       send('Page.startScreencast', { format: 'jpeg', quality, ...want }, target.sessionId).catch(onError);
+      onStart(target.tabId);
     }
   }
 

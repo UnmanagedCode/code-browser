@@ -131,3 +131,18 @@ test('a tab switch drops the cached frame', () => {
   sc.addViewer('b', late);
   assert.equal(late.frames.length, 0);
 });
+
+// Invariant: onStart reports the tab each time a screencast starts on it (someone watches), and never while nobody does.
+test('onStart fires when a screencast starts on a tab, not without viewers', () => {
+  const started = [];
+  const { sc, viewer } = setup({ onStart: (tabId) => started.push(tabId) });
+  sc.setTarget('S1', 'T1');
+  assert.deepEqual(started, [], 'no viewer, no screencast');
+  sc.addViewer('a', viewer());
+  assert.deepEqual(started, ['T1']);
+  sc.setTarget('S2', 'T2');
+  assert.deepEqual(started, ['T1', 'T2']);
+  sc.removeViewer('a');
+  sc.setTarget('S1', 'T1');
+  assert.deepEqual(started, ['T1', 'T2']);
+});
