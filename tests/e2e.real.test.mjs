@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 import { locateChromium } from '../src/chromium/locate.js';
 import { PROTOCOL } from '../src/proxyProtocol.js';
 import { pidAlive } from '../src/runState.js';
-import { sleep, startProxy, tmpDir, waitFor } from './helpers.mjs';
+import { sleep, startProxy, storeDir, tmpDir, waitFor } from './helpers.mjs';
 
 const root = new URL('..', import.meta.url).pathname;
 const { chromium } = createRequire(path.join(root, 'package.json'))('playwright-core');
@@ -51,7 +51,7 @@ function serve(html) {
 // CODE_BROWSER_PROXY_DIAL_HOST: in a container the backend dials a loopback proxy as host.docker.internal; here the
 // proxy runs beside the backend, so it is dialled on 127.0.0.1 (the documented test seam).
 function startBackend(projectsRoot) {
-  const proc = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PROJECTS_ROOT: projectsRoot, PORT: '0', CODE_BROWSER_PROXY_DIAL_HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PROJECTS_ROOT: projectsRoot, CONDUCTOR_PLUGIN_DATA_DIR: storeDir(projectsRoot), PORT: '0', CODE_BROWSER_PROXY_DIAL_HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   proc.stdout.on('data', (d) => { out += d; });
   proc.stderr.on('data', (d) => { out += d; });
@@ -75,7 +75,7 @@ async function launchOwnChromium(userDataDir, args, waitMs = 15_000) {
 
 test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' && 'set RUN_REAL_CHROMIUM=1 to run', timeout: 240_000 }, async (t) => {
   const projectsRoot = tmpDir('code-browser-e2e-');
-  const dataDir = path.join(projectsRoot, '.code-browser');
+  const dataDir = storeDir(projectsRoot);
   let backend;
   let panel;
   const fixture = await serve(FIXTURE_HTML);

@@ -96,15 +96,36 @@ class Rendezvous(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    # Invariant: the store is found by walking up from the script's own directory, or taken from --projects-root.
+    # Invariant: the store is <ancestor>/.code-conductor/plugins/data/code-browser, found by walking up from the
+    # script's own directory or taken from --projects-root.
     def test_find_store(self):
-        (self.root / ".code-browser").mkdir()
+        expected = self.root / ".code-conductor" / "plugins" / "data" / "code-browser"
+        expected.mkdir(parents=True)
         script = self.root / "a" / "plugin" / "proxy" / "cdp_proxy.py"
         script.parent.mkdir(parents=True)
         store, _ = cdp_proxy.find_store(script)
-        self.assertEqual(store, (self.root / ".code-browser").resolve())
-        self.assertEqual(cdp_proxy.find_store(script, override=str(self.root))[0], (self.root / ".code-browser").resolve())
+        self.assertEqual(store, expected.resolve())
+        self.assertEqual(cdp_proxy.find_store(script, override=str(self.root))[0], expected.resolve())
         self.assertIsNone(cdp_proxy.find_store(script, override=str(self.root / "a"))[0])
+
+    # Invariant: there is no legacy fallback: a root holding only the old .code-browser store has no store.
+    def test_find_store_ignores_legacy(self):
+        (self.root / ".code-browser").mkdir()
+        script = self.root / "a" / "proxy" / "cdp_proxy.py"
+        script.parent.mkdir(parents=True)
+        self.assertIsNone(cdp_proxy.find_store(script)[0])
+        self.assertIsNone(cdp_proxy.find_store(script, override=str(self.root))[0])
+
+    # Invariant: the proxy's hardcoded store path ends in the plugin id cc names the data dir after.
+    def test_store_relpath_matches_manifest_id(self):
+        manifest = json.loads((ROOT / "conductor.plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual(cdp_proxy.STORE_RELPATH.name, manifest["id"])
+
+    # Invariant: a missing store exits non-zero naming the relative path the person must create or point at.
+    def test_main_names_store_path(self):
+        with self.assertRaises(SystemExit) as cm:
+            cdp_proxy.main(["--projects-root", str(self.root), "--listen", "127.0.0.1:0"])
+        self.assertIn(".code-conductor/plugins/data/code-browser", str(cm.exception.code))
 
     # Invariant: host.json is published atomically 0600 and removed only while it still names this pid.
     def test_host_json(self):

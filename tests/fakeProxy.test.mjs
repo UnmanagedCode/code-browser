@@ -9,7 +9,7 @@ import { ensureSecret } from '../src/proxyStore.js';
 import { fakeProxy } from './fakes/fakeProxy.mjs';
 import { tmpDir, within } from './helpers.mjs';
 
-const dataDir = path.join(tmpDir(), '.code-browser');
+const dataDir = path.join(tmpDir(), 'data');
 const secret = await ensureSecret(dataDir);
 const proxy = await fakeProxy(dataDir);
 after(() => proxy.close());

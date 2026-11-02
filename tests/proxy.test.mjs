@@ -10,7 +10,7 @@ import path from 'node:path';
 import { handshake, lineReader, openProxied } from '../src/proxyClient.js';
 import { PROTOCOL } from '../src/proxyProtocol.js';
 import { ensureSecret } from '../src/proxyStore.js';
-import { externalFake, findPython, liveStack, requirePython, startProxy, tmpDir, waitFor } from './helpers.mjs';
+import { externalFake, findPython, liveStack, requirePython, startProxy, storeDir, tmpDir, waitFor } from './helpers.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const IN_TEST = { env: { CODE_BROWSER_PROXY_DIAL_HOST: '127.0.0.1' } };
@@ -19,7 +19,7 @@ afterEach(async () => { for (const fn of cleanups.splice(0).reverse()) await fn(
 
 async function world({ ports } = {}) {
   const root = tmpDir('code-browser-proxy-');
-  const dataDir = path.join(root, '.code-browser');
+  const dataDir = storeDir(root);
   await ensureSecret(dataDir);
   const fake = await externalFake();
   cleanups.push(() => fake.kill());
@@ -94,7 +94,7 @@ test('a wrong secret is refused', async (t) => {
 // nothing after the client's auth line: no request byte reaches it.
 test('an impostor proxy is rejected before any byte is sent', async () => {
   const root = tmpDir('code-browser-impostor-');
-  const dataDir = path.join(root, '.code-browser');
+  const dataDir = storeDir(root);
   await ensureSecret(dataDir);
   const received = [];
   const impostor = net.createServer((s) => {
@@ -121,7 +121,7 @@ test('an impostor proxy is rejected before any byte is sent', async () => {
 // unverified, never as the proxy's own diagnosis.
 test("a peer's error text is labelled unverified", async () => {
   const root = tmpDir('code-browser-unverified-');
-  const dataDir = path.join(root, '.code-browser');
+  const dataDir = storeDir(root);
   await ensureSecret(dataDir);
   const liar = net.createServer((s) => {
     s.write(`${JSON.stringify({ t: PROTOCOL.frames.hello, v: PROTOCOL.protocolVersion, nonce: crypto.randomBytes(PROTOCOL.nonceBytes).toString('base64url') })}\n`);
@@ -135,7 +135,7 @@ test("a peer's error text is labelled unverified", async () => {
 
 // Invariant: with no host.json, a connect says to start the proxy on the Docker host.
 test('no proxy running says how to start it', async () => {
-  const dataDir = path.join(tmpDir(), '.code-browser');
+  const dataDir = path.join(tmpDir(), 'data');
   await assert.rejects(openProxied(dataDir, 9222, IN_TEST), (e) => e.code === 'no_proxy' && /cdp_proxy\.py/.test(e.message));
 });
 

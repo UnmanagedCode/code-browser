@@ -379,7 +379,7 @@ const FAILURES = {
 for (const [failure, makeCreate] of Object.entries(FAILURES)) {
   for (const via of ['direct', 'proxy']) {
     test(`a session that fails to start leaves nothing behind (${failure}, ${via})`, async () => {
-      const dataDir = path.join(tmpDir(), '.code-browser');
+      const dataDir = path.join(tmpDir(), 'data');
       const record = { entry: null, disposed: false };
       const create = makeCreate(record);
       const manager = createBrowserManager({

@@ -10,7 +10,7 @@ only to an allowed port (defaultPorts in protocol.json unless --ports replaces
 that list), and never to its own port. Python 3.9+, standard library only.
 
 The two sides meet through a rendezvous directory in code-browser's store
-(<projectsRoot>/.code-browser/proxy/): code-browser writes the shared secret
+(<projectsRoot>/.code-conductor/plugins/data/code-browser/proxy/): code-browser writes the shared secret
 there, the proxy writes its listen address. The wire protocol (frames, MAC
 labels, caps, timings, error codes) lives in protocol.json next to this file;
 keep the two files together. See docs/proxy.md and docs/protocol.md.
@@ -58,7 +58,9 @@ LISTEN_BACKLOG = 128
 KEEPALIVE_IDLE_S = 15
 KEEPALIVE_INTERVAL_S = 5
 
-STORE_DIRNAME = ".code-browser"
+# cc's CONDUCTOR_PLUGIN_DATA_DIR for manifest id `code-browser`, relative to the projects root. This directory is
+# meant to be copyable on its own, so the id is hardcoded here; a test guards it against conductor.plugin.json.
+STORE_RELPATH = Path(".code-conductor", "plugins", "data", "code-browser")
 # The only host the proxy ever connects to, and its fallback listen address.
 LOOPBACK_HOST = "127.0.0.1"
 SIOCGIFADDR = 0x8915
@@ -134,21 +136,21 @@ def listen_problem(listen_host, default_route):
 # --- rendezvous ---------------------------------------------------------------
 
 def find_store(script_path, override=None):
-    """(store_dir or None, searched): code-browser's .code-browser store.
+    """(store_dir or None, searched): code-browser's data directory, STORE_RELPATH.
 
-    With `override` (--projects-root), <override>/.code-browser. Otherwise the
-    nearest ancestor of the script's directory holding a .code-browser
+    With `override` (--projects-root), <override>/STORE_RELPATH. Otherwise the
+    nearest ancestor of the script's directory holding STORE_RELPATH as a
     directory, so the answer never depends on the working directory.
     """
     if override is not None:
         root = Path(override).resolve()
-        store = root / STORE_DIRNAME
+        store = root / STORE_RELPATH
         return (store if store.is_dir() else None), [str(root)]
     searched = []
     for parent in Path(script_path).resolve().parent.parents:
         searched.append(str(parent))
-        if (parent / STORE_DIRNAME).is_dir():
-            return parent / STORE_DIRNAME, searched
+        if (parent / STORE_RELPATH).is_dir():
+            return parent / STORE_RELPATH, searched
     return None, searched
 
 
@@ -515,7 +517,7 @@ def parse_args(argv, default_host=default_listen_host):
                         help="listener code-browser dials (default: the docker0 address, else 127.0.0.1, port %d)"
                         % DEFAULT_LISTEN_PORT)
     parser.add_argument("--projects-root", metavar="DIR",
-                        help="code-browser's projects root, holding .code-browser (default: the nearest parent of this "
+                        help="code-browser's projects root, holding .code-conductor/plugins/data/code-browser (default: the nearest parent of this "
                              "script's directory that has one)")
     parser.add_argument("--ports", metavar="N[,N...]",
                         help="the only 127.0.0.1 ports the proxy forwards to (default: %s)"
@@ -587,10 +589,10 @@ def main(argv=None):
     if store is None:
         if args.projects_root is not None:
             sys.exit("code-browser-proxy: no %s directory in %s — start code-browser once with that projects root so it "
-                     "creates one" % (STORE_DIRNAME, searched[0]))
+                     "creates one" % (STORE_RELPATH, searched[0]))
         sys.exit("code-browser-proxy: no %s found in any parent of %s (searched: %s) — start code-browser once so it "
                  "creates <projectsRoot>/%s, or pass --projects-root <dir>"
-                 % (STORE_DIRNAME, Path(__file__).resolve().parent, ", ".join(searched), STORE_DIRNAME))
+                 % (STORE_RELPATH, Path(__file__).resolve().parent, ", ".join(searched), STORE_RELPATH))
     try:
         rdir = proxy_dir(store)
         asyncio.run(serve(args, rdir, store))

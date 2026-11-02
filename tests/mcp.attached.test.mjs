@@ -11,7 +11,7 @@ import { externalFake, liveStack, tmpDir, waitFor } from './helpers.mjs';
 // Invariant: no MCP tool result (text, meta, snippet, error) for a browser attached through the proxy contains the
 // provisioned proxy secret, whether it is connected or not.
 test('no tool result carries the proxy secret', async () => {
-  const dataDir = path.join(tmpDir(), '.code-browser');
+  const dataDir = path.join(tmpDir(), 'data');
   const stack = liveStack({ dataDir });
   await stack.manager.boot();
   const secret = JSON.parse(fs.readFileSync(path.join(dataDir, 'proxy', PROTOCOL.rendezvous.backendFile), 'utf8')).secret;

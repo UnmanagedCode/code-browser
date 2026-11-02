@@ -15,6 +15,10 @@ export function tmpDir(prefix = 'code-browser-test-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+// code-browser's data dir under a projects root, as cc sets CONDUCTOR_PLUGIN_DATA_DIR and as the proxy finds it
+// (STORE_RELPATH in proxy/cdp_proxy.py).
+export const storeDir = (projectsRoot) => path.join(projectsRoot, '.code-conductor', 'plugins', 'data', 'code-browser');
+
 export function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 }
@@ -228,7 +232,7 @@ export const PROXY_SCRIPT = new URL('../proxy/cdp_proxy.py', import.meta.url).pa
 export async function startProxy({ projectsRoot, ports = null }) {
   const py = findPython();
   if (!py.ok) throw new Error(`${PYTHON_MISSING} (${py.reason})`);
-  fs.mkdirSync(path.join(projectsRoot, '.code-browser'), { recursive: true });
+  fs.mkdirSync(storeDir(projectsRoot), { recursive: true });
   const argv = [...py.args, PROXY_SCRIPT, '--projects-root', projectsRoot, '--listen', '127.0.0.1:0', ...(ports ? ['--ports', ports.join(',')] : [])];
   const proc = track(spawn(py.cmd, argv, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } }));
   let out = '';

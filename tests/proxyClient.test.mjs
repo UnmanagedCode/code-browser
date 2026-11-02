@@ -86,7 +86,7 @@ test('an aborted queued job rejects at once and never runs', async () => {
 
 // Invariant: an aborted proxy dial rejects promptly while it is still queued behind in-flight handshakes.
 test('openProxied observes its abort while queued', async () => {
-  const dataDir = path.join(tmpDir(), '.code-browser');
+  const dataDir = path.join(tmpDir(), 'data');
   await ensureSecret(dataDir);
   const proxy = await fakeProxy(dataDir);
   const limiter = createLimiter(1);
