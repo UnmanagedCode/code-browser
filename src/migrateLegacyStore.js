@@ -13,7 +13,7 @@ const lstatOrNull = (p) => {
 };
 
 // `env` has no default on purpose: a caller must name the PROJECTS_ROOT it means, so a test can never reach the real one.
-// `rename` is a seam for the cross-device branch. Every failure names both paths; the legacy store is never modified
+// `rename` is a seam for the cross-device branch. Every failure names both paths; no stored file is moved or changed
 // before the final rename (an empty target is removed and missing parents are created first).
 export function migrateLegacyStore({ env, dataDir, log = console, rename = fs.renameSync }) {
   if (!env.PROJECTS_ROOT) return;
