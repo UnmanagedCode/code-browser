@@ -7,7 +7,7 @@
 - **Backend:** plain ESM JavaScript, `node server.js`, `node:http`. Runtime dependencies: `ws` (the panel socket and the backend's CDP client) and `playwright-core` (Chromium lookup, and the package the agent snippet resolves). The backend never drives pages with Playwright: its own CDP client avoids Playwright's dialog auto-dismissal and extra state.
 - **Panel:** React, TypeScript, Vite (`base: './'`), plain CSS on cc's theme tokens (no inline styles, so the CSP needs no `'unsafe-inline'`). Built into the gitignored `frontend/dist` by `prepare`.
 - **CDP proxy:** `proxy/cdp_proxy.py`, one standard-library Python file (3.9+) the user runs on the Docker host, with its wire protocol in `proxy/protocol.json` ([proxy.md](proxy.md)).
-- **Plugin contract:** `conductor.plugin.json`. cc starts the backend lazily, passing `PORT`, `PROJECTS_ROOT` and `CONDUCTOR_PLUGIN_DATA_DIR`. Core reads only `PORT` and the data dir; the [store migration](#store-migration) reads `PROJECTS_ROOT`. MCP calls arrive as plain `POST api/mcp` ([protocol.md](protocol.md#mcp-wire-format)).
+- **Plugin contract:** `conductor.plugin.json`. cc starts the backend lazily, passing `PORT`, `PROJECTS_ROOT` and `CONDUCTOR_PLUGIN_DATA_DIR`. Core reads only `PORT`, `CONDUCTOR_PLUGIN_ID` and the data dir; the [store migration](#store-migration) reads `PROJECTS_ROOT`. MCP calls arrive as plain `POST api/mcp` ([protocol.md](protocol.md#mcp-wire-format)).
 - **No install scripts** in the runtime dependency tree (`tests/deps.test.mjs`). `package-lock.json` is gitignored.
 
 ## Modules
@@ -72,8 +72,9 @@ Profiles and attached records share one namespace: `names()` is their union, and
 - **When:** `server.js` calls `migrateLegacyStore` after `loadConfig` and before `manager.boot()`. Boot creates the data dir and `proxy/secret.json`, which would make the move's target non-empty.
 - **No-ops:** `PROJECTS_ROOT` unset or empty; no legacy dir at `<PROJECTS_ROOT>/.code-browser`; the data dir is the legacy path itself. A finished move leaves no legacy dir, so every later start is a no-op.
 - **The move:** a same-filesystem `rename`, so it is atomic and keeps inodes and modes. Missing parents of the data dir are created `0700`; an existing empty data dir is replaced. It logs `code-browser: moved the store from <legacy> to <dataDir>`.
-- **Refusals** (an `Error` naming both paths): data dir not empty (keep one: delete the legacy dir, or delete the data dir); `EXDEV` (different filesystems: `mv` it with code-browser stopped, or delete the legacy dir; there is no copy fallback); legacy path not a directory.
-- **A refusal stops the backend before it listens and changes nothing.** Continuing would make boot create an empty store beside the old one, and every later start would hit "not empty".
+- **Refusals** (an `Error` naming both paths): data dir not empty (keep one: delete the legacy dir, or delete the data dir); `EXDEV` (different filesystems: `mv` it with code-browser stopped, or delete the legacy dir; there is no copy fallback); legacy path or an existing data dir that is not a directory.
+- **A refusal stops the backend before it listens and leaves the legacy store untouched** (missing parents of the data dir may already exist, and an empty data dir may already be removed). Every refusal and error names both paths. Continuing would make boot create an empty store beside the old one, and every later start would hit "not empty".
+- **Stop the browsers first.** Before the first start on the new code, stop every running browser, or stop code-browser in Settings → Plugins: the migration renames the store out from under any running Chromium and its keeper.
 - **Restart the proxy after a move:** it resolves the store once at startup ([proxy.md](proxy.md#running-it)).
 
 ## Browser lifecycle

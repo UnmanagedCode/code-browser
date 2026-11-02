@@ -34,6 +34,7 @@ A browser on any other machine is not supported.
 
 - On start it prints `code-browser-proxy listening on <ip>:<port>` (stdout), then logs (stderr) the store it found, the ports it forwards to and, if code-browser has not written its secret yet, `waiting for code-browser to create <path>`. It never logs the secret.
 - Stop it with Ctrl-C or `SIGTERM` (exit code 0): it cuts every connection and removes its `host.json`. An attached browser it carried shows *Disconnected* in the panel; press **Connect** once the proxy is back.
+- Before the first start of code-browser on the new store location, stop every running browser (or stop code-browser in Settings → Plugins): the migration renames the store out from under any running Chromium.
 - The proxy resolves the store once, at startup: when the store moves, restart the proxy (a running one keeps reading the old location and every connection fails until then).
 - Start the proxy and code-browser in either order. The backend reads `host.json` on every connection attempt.
 

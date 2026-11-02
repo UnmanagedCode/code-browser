@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { storeDir, tmpDir, waitFor } from './helpers.mjs';
+import { storeDir, tmpDir, waitFor, waitForExit } from './helpers.mjs';
 
 const root = new URL('..', import.meta.url).pathname;
 const live = new Set();
@@ -21,14 +21,23 @@ function seed(projectsRoot) {
   return legacy;
 }
 
-function run(env) {
-  const proc = spawn(process.execPath, ['server.js'], { cwd: root, env: { ...process.env, PORT: '0', ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+// `unset` names inherited variables to drop. `exited(ms)` waits for the close (stdio drained) and SIGKILLs and rejects
+// on timeout; `stop()` always leaves the child dead, so no test can leave a backend running.
+function run(env, { unset = [] } = {}) {
+  const full = { ...process.env, PORT: '0', ...env };
+  for (const k of unset) delete full[k];
+  const proc = spawn(process.execPath, ['server.js'], { cwd: root, env: full, stdio: ['ignore', 'pipe', 'pipe'] });
   live.add(proc);
   let out = '';
   proc.stdout.on('data', (d) => { out += d; });
   proc.stderr.on('data', (d) => { out += d; });
-  const exited = new Promise((r) => proc.once('exit', (code) => { live.delete(proc); r(code); }));
-  return { proc, exited, out: () => out };
+  const closed = new Promise((r) => proc.once('close', r)).then((code) => { live.delete(proc); return code; });
+  return {
+    proc,
+    out: () => out,
+    exited: (ms = 10_000) => waitForExit(proc, ms, 'the backend'),
+    async stop() { if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL'); await closed; },
+  };
 }
 
 function tree(dir) {
@@ -49,9 +58,10 @@ test('the migration runs before boot creates the store', async () => {
     assert.ok(b.out().includes(`(data: ${target})`));
     assert.equal(fs.existsSync(legacy), false);
     assert.equal(fs.readFileSync(path.join(target, 'proxy', 'secret.json'), 'utf8'), LEGACY_SECRET);
-  } finally {
     b.proc.kill('SIGTERM');
-    await b.exited;
+    assert.equal(await b.exited(), 0, 'SIGTERM shuts the backend down cleanly');
+  } finally {
+    await b.stop();
   }
 });
 
@@ -64,9 +74,13 @@ test('a failed migration refuses to boot', async () => {
   fs.writeFileSync(path.join(target, 'keep.txt'), 'mine');
   const [l, t] = [tree(legacy), tree(target)];
   const b = run({ PROJECTS_ROOT: projectsRoot, CONDUCTOR_PLUGIN_DATA_DIR: target });
-  assert.notEqual(await b.exited, 0);
-  assert.doesNotMatch(b.out(), /listening/);
-  assert.ok(b.out().includes(legacy) && b.out().includes(target));
+  try {
+    assert.notEqual(await b.exited(), 0);
+    assert.doesNotMatch(b.out(), /listening/);
+    assert.ok(b.out().includes(legacy) && b.out().includes(target));
+  } finally {
+    await b.stop();
+  }
   assert.deepEqual(tree(legacy), l);
   assert.deepEqual(tree(target), t);
 });
@@ -74,15 +88,12 @@ test('a failed migration refuses to boot', async () => {
 // Invariant: without CONDUCTOR_PLUGIN_DATA_DIR the backend refuses to start and creates nothing.
 test('a missing data-dir variable refuses to boot', async () => {
   const projectsRoot = tmpDir();
-  const env = { ...process.env, PROJECTS_ROOT: projectsRoot };
-  delete env.CONDUCTOR_PLUGIN_DATA_DIR;
-  const proc = spawn(process.execPath, ['server.js'], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
-  live.add(proc);
-  let out = '';
-  proc.stdout.on('data', (d) => { out += d; });
-  proc.stderr.on('data', (d) => { out += d; });
-  const code = await new Promise((r) => proc.once('exit', (c) => { live.delete(proc); r(c); }));
-  assert.notEqual(code, 0);
-  assert.match(out, /CONDUCTOR_PLUGIN_DATA_DIR is not set/);
-  assert.deepEqual(fs.readdirSync(projectsRoot), []);
+  const b = run({ PROJECTS_ROOT: projectsRoot }, { unset: ['CONDUCTOR_PLUGIN_DATA_DIR'] });
+  try {
+    assert.notEqual(await b.exited(), 0);
+    assert.match(b.out(), /CONDUCTOR_PLUGIN_DATA_DIR is not set/);
+    assert.deepEqual(fs.readdirSync(projectsRoot), []);
+  } finally {
+    await b.stop();
+  }
 });

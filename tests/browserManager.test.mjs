@@ -338,13 +338,13 @@ test('data tree is 0700 and run files and logs are 0600, including pre-existing 
 });
 
 // Invariant: cc never creates the data dir, so boot creates it and its missing parents, private (0700), with the secret.
-test('boot creates a missing data dir and its missing parents, 0700', async () => {
+test('boot creates a missing data dir and its missing parents, all 0700', async () => {
   const base = tmpDir();
   const dataDir = path.join(base, 'plugins', 'data', 'code-browser');
   assert.equal(fs.existsSync(dataDir), false);
   const { manager } = make({ dataDir });
   await manager.boot();
-  assert.equal(modeOf(dataDir), 0o700);
+  for (const d of [dataDir, path.dirname(dataDir), path.join(base, 'plugins')]) assert.equal(modeOf(d), 0o700, d);
   assert.ok(fs.existsSync(path.join(dataDir, 'proxy', 'secret.json')));
 });
 

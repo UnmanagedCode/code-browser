@@ -5,45 +5,50 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PRIVATE_DIR_MODE } from './fsPrivate.js';
 
+const lstatOrNull = (p) => {
+  try { return fs.lstatSync(p); } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+};
+
 // `env` has no default on purpose: a caller must name the PROJECTS_ROOT it means, so a test can never reach the real one.
-// `rename` is a seam for the cross-device branch.
+// `rename` is a seam for the cross-device branch. Every failure names both paths; the legacy store is never modified
+// before the final rename (an empty target is removed and missing parents are created first).
 export function migrateLegacyStore({ env, dataDir, log = console, rename = fs.renameSync }) {
   if (!env.PROJECTS_ROOT) return;
   const target = path.resolve(dataDir);
   const legacy = path.join(path.resolve(env.PROJECTS_ROOT), '.code-browser');
   if (legacy === target) return;
 
-  let st;
-  try { st = fs.lstatSync(legacy); } catch (err) {
-    if (err.code === 'ENOENT') return;
-    throw err;
-  }
-  if (!st.isDirectory()) throw new Error(`cannot move the store ${legacy} to ${target}: ${legacy} is not a directory; remove it`);
-
-  let targetExists = true;
-  try { fs.lstatSync(target); } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
-    targetExists = false;
-  }
-  if (targetExists) {
-    let entries = null;
-    try { entries = fs.readdirSync(target); } catch { /* not a directory */ }
-    if (!entries || entries.length > 0) {
-      throw new Error(`cannot move the store ${legacy} to ${target}: ${target} is not empty, so nothing was moved. `
-        + `Keep one: delete ${legacy} to use ${target} as is, or delete ${target} to move ${legacy} on the next start.`);
-    }
-    fs.rmdirSync(target);
-  }
-
-  fs.mkdirSync(path.dirname(target), { recursive: true, mode: PRIVATE_DIR_MODE });
+  const prefix = `cannot move the store ${legacy} to ${target}: `;
+  const refuse = (msg) => Object.assign(new Error(prefix + msg), { refusal: true });
   try {
-    rename(legacy, target);
-  } catch (err) {
-    if (err.code === 'EXDEV') {
-      throw new Error(`cannot move the store ${legacy} to ${target}: they are on different filesystems, so nothing was moved. `
-        + `With code-browser stopped, run \`mv ${legacy} ${target}\` (keeps modes), or delete ${legacy} to start empty.`);
+    const st = lstatOrNull(legacy);
+    if (!st) return;
+    if (!st.isDirectory()) throw refuse(`${legacy} is not a directory; remove it`);
+
+    const existing = lstatOrNull(target);
+    if (existing) {
+      if (!existing.isDirectory()) throw refuse(`${target} is not a directory; remove it`);
+      if (fs.readdirSync(target).length > 0) {
+        throw refuse(`${target} is not empty, so nothing was moved. Keep one: delete ${legacy} to use ${target} as is, `
+          + `or delete ${target} to move ${legacy} on the next start.`);
+      }
+      fs.rmdirSync(target);
     }
-    err.message = `cannot move the store ${legacy} to ${target}: ${err.message}`;
+
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: PRIVATE_DIR_MODE });
+    try {
+      rename(legacy, target);
+    } catch (err) {
+      if (err.code !== 'EXDEV') throw err;
+      throw refuse(`they are on different filesystems, so nothing was moved. With code-browser stopped, run `
+        + `\`mv ${legacy} ${target}\` (keeps modes), or delete ${legacy} to start empty.`);
+    }
+  } catch (err) {
+    if (err.refusal) throw err;
+    err.message = prefix + err.message;
     throw err;
   }
   log.log(`code-browser: moved the store from ${legacy} to ${target}`);

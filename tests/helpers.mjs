@@ -245,6 +245,17 @@ export async function startProxy({ projectsRoot, ports = null }) {
   return { proc, port: Number(m[1]), log: () => out, stop: () => end('SIGTERM'), kill: () => end('SIGKILL') };
 }
 
+// Resolves with the exit code once `proc` has closed (stdio drained, so its captured output is complete). After `ms` it
+// SIGKILLs `proc` and rejects: a subject that should have exited but did not fails the test instead of hanging it.
+export function waitForExit(proc, ms, what = 'the process') {
+  return new Promise((resolve, reject) => {
+    const drained = () => [proc.stdout, proc.stderr].every((st) => !st || st.destroyed);
+    if ((proc.exitCode !== null || proc.signalCode !== null) && drained()) { resolve(proc.exitCode); return; }
+    const timer = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error(`${what} did not exit within ${ms} ms`)); }, ms);
+    proc.once('close', (code) => { clearTimeout(timer); resolve(code); });
+  });
+}
+
 // `promise`, or a rejection naming `what` after `ms`: a test whose subject hangs fails instead of hanging.
 export function within(promise, ms, what) {
   let timer;

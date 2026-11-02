@@ -68,13 +68,18 @@ test('legacy dir present: moved, content intact, logged', () => {
   assert.ok(f.lines[0].includes(f.legacy) && f.lines[0].includes(f.target));
 });
 
-// Invariant: the move keeps private modes: dirs 0700, files 0600.
+// Invariant: the move keeps every mode exactly (rename, not a rewrite): a distinctive dir and file mode survive, as does the data dir's own.
 test('modes are kept', () => {
   const f = fixture();
+  fs.chmodSync(path.join(f.legacy, 'profiles', 'a'), 0o750);
+  fs.chmodSync(path.join(f.legacy, 'settings', 'a.json'), 0o640);
+  fs.chmodSync(f.legacy, 0o750);
+  const before = snapshot(f.legacy);
   f.run();
-  const snap = snapshot(f.target);
-  for (const [rel, v] of Object.entries(snap)) assert.equal(v.mode, v.data === undefined ? 0o700 : 0o600, rel);
-  assert.equal(fs.statSync(f.target).mode & 0o777, 0o700);
+  assert.deepEqual(snapshot(f.target), before);
+  assert.equal(fs.statSync(path.join(f.target, 'profiles', 'a')).mode & 0o777, 0o750);
+  assert.equal(fs.statSync(path.join(f.target, 'settings', 'a.json')).mode & 0o777, 0o640);
+  assert.equal(fs.statSync(f.target).mode & 0o777, 0o750);
 });
 
 // Invariant: after a successful move a second run changes nothing and logs nothing.
@@ -136,4 +141,32 @@ test('legacy path is a file: refused', () => {
   assert.throws(() => f.run(), /is not a directory/);
   assert.equal(fs.readFileSync(f.legacy, 'utf8'), 'x');
   assert.equal(fs.existsSync(f.target), false);
+});
+
+// Invariant: an existing data dir that is not a directory (file, dangling symlink, symlink to a dir) is refused with a
+// clear message naming both paths, and the legacy store is untouched.
+test('data dir exists but is not a directory: refused', () => {
+  const kinds = {
+    file: (t) => fs.writeFileSync(t, 'x'),
+    'dangling symlink': (t) => fs.symlinkSync(path.join(path.dirname(t), 'nowhere'), t),
+    'symlink to an empty dir': (t) => { const d = path.join(path.dirname(t), 'real'); fs.mkdirSync(d); fs.symlinkSync(d, t); },
+  };
+  for (const [kind, make] of Object.entries(kinds)) {
+    const f = fixture();
+    fs.mkdirSync(path.dirname(f.target), { recursive: true });
+    make(f.target);
+    const before = snapshot(f.legacy);
+    assert.throws(() => f.run(), (e) => e.message.includes(f.legacy) && e.message.includes(f.target) && /is not a directory/.test(e.message), kind);
+    assert.deepEqual(snapshot(f.legacy), before, kind);
+  }
+});
+
+// Invariant: a filesystem error (here ENOTDIR: the data dir's parent is a regular file) still names both paths.
+test('other filesystem errors name both paths', () => {
+  const f = fixture();
+  fs.mkdirSync(path.dirname(path.dirname(f.target)), { recursive: true });
+  fs.writeFileSync(path.dirname(f.target), 'a file where plugins/data should be');
+  const before = snapshot(f.legacy);
+  assert.throws(() => f.run(), (e) => e.code === 'ENOTDIR' && e.message.includes(f.legacy) && e.message.includes(f.target));
+  assert.deepEqual(snapshot(f.legacy), before);
 });

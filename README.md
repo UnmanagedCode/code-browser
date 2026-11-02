@@ -15,7 +15,7 @@ npm install                 # installs and builds the panel (frontend/dist)
 npm run install-browser     # one-time Chromium download (or set CODE_BROWSER_CHROMIUM)
 ```
 
-Enable the plugin in code-conductor; the backend starts on the first tool call or panel visit. Standalone: `CONDUCTOR_PLUGIN_DATA_DIR=<dir> PORT=7470 node server.js`, then open `http://127.0.0.1:7470/?browser=<name>`.
+Enable the plugin in code-conductor; the backend starts on the first tool call or panel visit. Standalone: `CONDUCTOR_PLUGIN_DATA_DIR=<dir> PORT=7470 node server.js`, then open `http://127.0.0.1:7470/?browser=<name>`. The boot migration also reads `PROJECTS_ROOT`: from a shell that exports it, `<PROJECTS_ROOT>/.code-browser` is moved into `<dir>`; unset it to start empty.
 
 On a host where Chromium's sandbox cannot start (containers, restricted user namespaces), the first start is refused with `SANDBOX_UNAVAILABLE`. Open the panel, read the risk, and allow that browser to run without the sandbox.
 
