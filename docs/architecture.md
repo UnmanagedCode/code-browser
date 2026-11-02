@@ -7,14 +7,15 @@
 - **Backend:** plain ESM JavaScript, `node server.js`, `node:http`. Runtime dependencies: `ws` (the panel socket and the backend's CDP client) and `playwright-core` (Chromium lookup, and the package the agent snippet resolves). The backend never drives pages with Playwright: its own CDP client avoids Playwright's dialog auto-dismissal and extra state.
 - **Panel:** React, TypeScript, Vite (`base: './'`), plain CSS on cc's theme tokens (no inline styles, so the CSP needs no `'unsafe-inline'`). Built into the gitignored `frontend/dist` by `prepare`.
 - **CDP proxy:** `proxy/cdp_proxy.py`, one standard-library Python file (3.9+) the user runs on the Docker host, with its wire protocol in `proxy/protocol.json` ([proxy.md](proxy.md)).
-- **Plugin contract:** `conductor.plugin.json`. cc starts the backend lazily, passing `PORT` and `PROJECTS_ROOT`; MCP calls arrive as plain `POST api/mcp` ([protocol.md](protocol.md#mcp-wire-format)).
+- **Plugin contract:** `conductor.plugin.json`. cc starts the backend lazily, passing `PORT`, `PROJECTS_ROOT` and `CONDUCTOR_PLUGIN_DATA_DIR`. Core reads only `PORT`, `CONDUCTOR_PLUGIN_ID` and the data dir; the [store migration](#store-migration) reads `PROJECTS_ROOT`. MCP calls arrive as plain `POST api/mcp` ([protocol.md](protocol.md#mcp-wire-format)).
 - **No install scripts** in the runtime dependency tree (`tests/deps.test.mjs`). `package-lock.json` is gitignored.
 
 ## Modules
 
 ```
-server.js                thin wiring: config → manager → mcp → app (+ gateway) → listen, graceful shutdown
-src/config.js            PORT, data dir ($PROJECTS_ROOT/.code-browser), plugin dir, plugin id
+server.js                thin wiring: config → migration → manager → mcp → app (+ gateway) → listen, graceful shutdown
+src/config.js            PORT, data dir ($CONDUCTOR_PLUGIN_DATA_DIR), plugin dir, plugin id
+src/migrateLegacyStore.js  one-shot boot migration of the legacy store into the data dir
 src/limits.js            every tunable constant and NAME_RE
 src/errors.js            CodedError and the code → HTTP status map
 src/requestGuard.js      Origin↔Host check
@@ -43,7 +44,11 @@ frontend/src             main/App/api/socket/route/frame, components/, input/
 
 One responsibility each: `browserManager` owns processes, files and the namespace (the network work of an attach is delegated to `cdpDiscovery`, `tunnel` and `proxyClient`), `browserSession` owns live state, `viewerGateway` owns the human-facing protocol and its permission checks. The REST routes, the MCP tools and the gateway call the same manager and session methods.
 
-## On-disk layout (`$PROJECTS_ROOT/.code-browser/`)
+## On-disk layout (`$CONDUCTOR_PLUGIN_DATA_DIR`)
+
+- cc sets the variable to `<projectsRoot>/.code-conductor/plugins/data/code-browser` and never creates the dir; `manager.boot()` creates it and its missing parents `0700` (`ensurePrivateDir`).
+- Unset or empty: the backend refuses to start (`CONDUCTOR_PLUGIN_DATA_DIR is not set`).
+
 
 | Path | Holds |
 |---|---|
@@ -61,6 +66,16 @@ Permissions (`src/fsPrivate.js`): the data dir, its top-level dirs (`profiles`, 
 Profiles and attached records share one namespace: `names()` is their union, and a name with both is the profile's (boot warns). A malformed record is warned about once and ignored.
 
 `NAME_RE` is the single name check for REST, MCP and the socket (the panel imports it from `src/limits.js`). A new profile is seeded with `session.restore_on_startup = 1` so session cookies (and the previous tabs) survive a stop; an existing profile's `Preferences` is never rewritten.
+
+### Store migration
+
+- **When:** `server.js` calls `migrateLegacyStore` after `loadConfig` and before `manager.boot()`. Boot creates the data dir and `proxy/secret.json`, which would make the move's target non-empty.
+- **No-ops:** `PROJECTS_ROOT` unset or empty; no legacy dir at `<PROJECTS_ROOT>/.code-browser`; the data dir is the legacy path itself. A finished move leaves no legacy dir, so every later start is a no-op.
+- **The move:** a same-filesystem `rename`, so it is atomic and keeps inodes and modes. Missing parents of the data dir are created `0700`; an existing empty data dir is replaced. It logs `code-browser: moved the store from <legacy> to <dataDir>`.
+- **Refusals** (an `Error` naming both paths): data dir not empty (keep one: delete the legacy dir, or delete the data dir); `EXDEV` (different filesystems: `mv` it with code-browser stopped, or delete the legacy dir; there is no copy fallback); legacy path or an existing data dir that is not a directory.
+- **A refusal stops the backend before it listens and leaves the legacy store untouched** (missing parents of the data dir may already exist, and an empty data dir may already be removed). Every refusal and error names both paths. Continuing would make boot create an empty store beside the old one, and every later start would hit "not empty".
+- **Stop the browsers first.** Before the first start on the new code, stop every running browser, or stop code-browser in Settings → Plugins: the migration renames the store out from under any running Chromium and its keeper.
+- **Restart the proxy after a move:** it resolves the store once at startup ([proxy.md](proxy.md#running-it)).
 
 ## Browser lifecycle
 
@@ -166,7 +181,8 @@ Run: `npm test` (backend `node --test`, including the Python-gated proxy tests, 
 - **Fake proxy** (`tests/fakes/fakeProxy.mjs`): an in-process stand-in that speaks the real wire protocol, so the default run covers the proxied path (cancellation, cleanup, no secret in tool results) without Python; `mode: 'blackhole'` accepts and never says hello.
 - **CDP proxy:** `tests/python/test_cdp_proxy.py` (stdlib `unittest`) covers the proxy alone; `tests/proxy.test.mjs` runs that suite (and checks it ran tests) and the real proxy against the backend's client and manager (`startProxy` helper; the backend dials `127.0.0.1` through `CODE_BROWSER_PROXY_DIAL_HOST`). Python-gated and **fail closed**: without Python 3.9+ these tests fail unless `CODE_BROWSER_SKIP_PYTHON=1` skips them; `CODE_BROWSER_PYTHON` picks the interpreter. Both suites check the MAC vector in `tests/fixtures/proxy-mac-vector.json`.
 - **Live stack** (`liveStack` in `tests/helpers.mjs`): real manager, session and gateway over the fake, with a second CDP client standing in for an agent.
+- **Config, migration, boot:** `tests/config.test.mjs` (data dir comes only from the variable; only `src/migrateLegacyStore.js` names the legacy path), `tests/migrateLegacyStore.test.mjs` (no-ops, move, modes, refusals), `tests/boot.test.mjs` (spawns `server.js`: migration precedes boot, a refusal does not listen, a missing variable refuses). A test that spawns `server.js` sets `PROJECTS_ROOT` to a fixture and `CONDUCTOR_PLUGIN_DATA_DIR` explicitly: agent shells export the real `PROJECTS_ROOT`, and `migrateLegacyStore` takes `env` with no default for the same reason.
 - **Fake clock** (`fakeClock`): screencast pacing and the control lease are tested without real waits.
 - **Panel tests** mock `fetch` with a tripwire (`frontend/src/test/setup.ts`); `tests/frontend-source.test.mjs` scans panel sources for banned sinks and root-relative URLs and checks the built `index.html`.
-- **E2E** (`tests/e2e.real.test.mjs`): real Chromium as the shared browser, a real backend process, and Playwright's headless shell as the panel's browser (one context per viewer: pages in one context hide each other, and a hidden panel page pauses its view). Where the host has no usable sandbox it also walks the refusal, a human granting the opt-in in the panel UI, persistence across a backend restart and a revoke from the browser list; where the sandbox works those steps are skipped with a diagnostic. It also asserts that no process for its data dir survives. Step 10 attaches an externally launched real Chromium through the real proxy in the panel UI (agent use, panel control, disconnect keeps Chromium and its tabs, proxy loss and reconnect, Forget); step 11 starts a Chromium with the remote-debugging pref in its `Local State` and checks approval-mode discovery (empty `404`) and the held or refused connect, skipping with a diagnostic where no `DevToolsActivePort` appears. **Untested in CI:** clicking Allow in Chrome's native dialog (the fake covers allow, deny and pending), the automation infobar, a headed foreground screencast, Docker Desktop's `host.docker.internal` path, a native-Linux `docker0` and gateway fallback, and Google-branded Chrome's default-profile restriction.
+- **E2E** (`tests/e2e.real.test.mjs`): real Chromium as the shared browser, a real backend process (its `CONDUCTOR_PLUGIN_DATA_DIR` under its fixture root), and Playwright's headless shell as the panel's browser (one context per viewer: pages in one context hide each other, and a hidden panel page pauses its view). Where the host has no usable sandbox it also walks the refusal, a human granting the opt-in in the panel UI, persistence across a backend restart and a revoke from the browser list; where the sandbox works those steps are skipped with a diagnostic. It also asserts that no process for its data dir survives. Step 10 attaches an externally launched real Chromium through the real proxy in the panel UI (agent use, panel control, disconnect keeps Chromium and its tabs, proxy loss and reconnect, Forget); step 11 starts a Chromium with the remote-debugging pref in its `Local State` and checks approval-mode discovery (empty `404`) and the held or refused connect, skipping with a diagnostic where no `DevToolsActivePort` appears. **Untested in CI:** clicking Allow in Chrome's native dialog (the fake covers allow, deny and pending), the automation infobar, a headed foreground screencast, Docker Desktop's `host.docker.internal` path, a native-Linux `docker0` and gateway fallback, and Google-branded Chrome's default-profile restriction.
 - Tests must not block the event loop of a process that hosts fixture servers: use async `spawn`, not `spawnSync`.

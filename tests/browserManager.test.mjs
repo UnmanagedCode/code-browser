@@ -311,7 +311,7 @@ const modeOf = (p) => fs.statSync(p).mode & 0o777;
 // each profile root and each trash entry are 0700 (enforced on ones that already exist, at boot), run files, settings files and logs
 // 0600. Files nested inside a profile are Chrome's own; the 0700 profile root shields them. The log holds visited URLs and the profile exposes CDP.
 test('data tree is 0700 and run files and logs are 0600, including pre-existing ones', async () => {
-  const dataDir = path.join(tmpDir(), '.code-browser');
+  const dataDir = path.join(tmpDir(), 'plugins', 'data', 'code-browser');
   const preexisting = ['', 'profiles', 'profiles/old', 'logs', 'run', 'settings', 'trash', 'trash/old-1'];
   for (const d of preexisting) fs.mkdirSync(path.join(dataDir, d), { recursive: true, mode: 0o755 });
   for (const d of preexisting) fs.chmodSync(path.join(dataDir, d), 0o755);
@@ -321,13 +321,13 @@ test('data tree is 0700 and run files and logs are 0600, including pre-existing 
   fs.chmodSync(settingsOf(dataDir, 'old'), 0o644);
   const { manager, profile } = make({ dataDir });
   await manager.boot();
-  for (const d of preexisting) assert.equal(modeOf(path.join(dataDir, d)), 0o700, `boot: ${d || '.code-browser'}`);
+  for (const d of preexisting) assert.equal(modeOf(path.join(dataDir, d)), 0o700, `boot: ${d || 'data dir'}`);
   assert.equal(modeOf(settingsOf(dataDir, 'old')), 0o600, 'a pre-existing settings file is tightened at boot');
 
   manager.create('a');
   await manager.start('a');
   for (const d of ['', 'profiles', 'logs', 'run', 'settings', 'trash']) {
-    if (fs.existsSync(path.join(dataDir, d))) assert.equal(modeOf(path.join(dataDir, d)), 0o700, d || '.code-browser');
+    if (fs.existsSync(path.join(dataDir, d))) assert.equal(modeOf(path.join(dataDir, d)), 0o700, d || 'data dir');
   }
   assert.equal(modeOf(profile('a')), 0o700);
   assert.equal(modeOf(path.join(profile('a'), 'Default')), 0o700);
@@ -337,10 +337,21 @@ test('data tree is 0700 and run files and logs are 0600, including pre-existing 
   assert.equal(modeOf(path.join(dataDir, 'trash')), 0o700);
 });
 
+// Invariant: cc never creates the data dir, so boot creates it and its missing parents, private (0700), with the secret.
+test('boot creates a missing data dir and its missing parents, all 0700', async () => {
+  const base = tmpDir();
+  const dataDir = path.join(base, 'plugins', 'data', 'code-browser');
+  assert.equal(fs.existsSync(dataDir), false);
+  const { manager } = make({ dataDir });
+  await manager.boot();
+  for (const d of [dataDir, path.dirname(dataDir), path.join(base, 'plugins')]) assert.equal(modeOf(d), 0o700, d);
+  assert.ok(fs.existsSync(path.join(dataDir, 'proxy', 'secret.json')));
+});
+
 // Invariant: a trash entry that vanishes between the listing and the chmod (an old backend's asynchronous rm during
 // cc's restart overlap) does not fail boot, entries that remain are still tightened, and any other chmod error is not hidden.
 test('boot tolerates a trash entry that vanishes mid-listing but not other errors', async () => {
-  const dataDir = path.join(tmpDir(), '.code-browser');
+  const dataDir = path.join(tmpDir(), 'data');
   for (const d of ['trash/gone-1', 'trash/kept-1', 'trash/other-1']) fs.mkdirSync(path.join(dataDir, d), { recursive: true, mode: 0o755 });
   for (const d of ['trash/gone-1', 'trash/kept-1', 'trash/other-1']) fs.chmodSync(path.join(dataDir, d), 0o755);
   const vanish = (code) => (target, mode) => {

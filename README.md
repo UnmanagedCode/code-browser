@@ -15,7 +15,7 @@ npm install                 # installs and builds the panel (frontend/dist)
 npm run install-browser     # one-time Chromium download (or set CODE_BROWSER_CHROMIUM)
 ```
 
-Enable the plugin in code-conductor; the backend starts on the first tool call or panel visit. Standalone: `PROJECTS_ROOT=<dir> PORT=7470 node server.js`, then open `http://127.0.0.1:7470/?browser=<name>`.
+Enable the plugin in code-conductor; the backend starts on the first tool call or panel visit. Standalone: `CONDUCTOR_PLUGIN_DATA_DIR=<dir> PORT=7470 node server.js`, then open `http://127.0.0.1:7470/?browser=<name>`. The boot migration also reads `PROJECTS_ROOT`: from a shell that exports it, a legacy store found under it is moved into `<dir>`; unset `PROJECTS_ROOT` to start empty ([details](docs/architecture.md#store-migration)).
 
 On a host where Chromium's sandbox cannot start (containers, restricted user namespaces), the first start is refused with `SANDBOX_UNAVAILABLE`. Open the panel, read the risk, and allow that browser to run without the sandbox.
 
@@ -23,7 +23,7 @@ Tests: `npm test` (includes the CDP proxy's Python tests: needs Python 3.9+, or 
 
 ## Key defaults
 
-- Data: `$PROJECTS_ROOT/.code-browser/` (profiles, run state, logs).
+- Data: `$CONDUCTOR_PLUGIN_DATA_DIR` (cc sets `<projectsRoot>/.code-conductor/plugins/data/code-browser`): profiles, run state, logs; see [architecture.md → On-disk layout](docs/architecture.md#on-disk-layout-conductor_plugin_data_dir).
 - Chromium: headless, 1280×800, CDP on a random loopback port, sandboxed; unsandboxed only for a browser a human allowed (see *Runs unsandboxed* below).
 - The controller lock is advisory for agents and enforced for people (see below).
 
