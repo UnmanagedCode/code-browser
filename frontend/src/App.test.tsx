@@ -125,6 +125,20 @@ describe('controller bar', () => {
     expect(screen.getByRole('button', { name: 'Take control' })).toBeTruthy();
   });
 
+  // Invariant: the control button is one element across states, so keyboard focus stays on it when control changes hands.
+  it('focus stays on the control button when control is taken and handed back', async () => {
+    await openViewer({ kind: 'agent' });
+    const take = screen.getByRole('button', { name: 'Take control' });
+    take.focus();
+    fireEvent.click(take);
+    await f.emit(state({ controller: { kind: 'human', you: true } }));
+    const handBack = screen.getByRole('button', { name: 'Hand back' });
+    expect(document.activeElement).toBe(handBack);
+    fireEvent.click(handBack);
+    await f.emit(state({ controller: { kind: 'agent' } }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Take control' }));
+  });
+
   // Invariant: actions that need control are disabled without it, and enabled with it.
   it('tab close/new and navigation need control', async () => {
     await openViewer({ kind: 'agent' });
