@@ -15,7 +15,8 @@ export interface BrowserSummary {
   attachError: string | null;
 }
 
-export interface Tab { targetId: string; url: string; title: string }
+// windowId: the browser window the tab is in; null until the backend knows it.
+export interface Tab { targetId: string; url: string; title: string; windowId: number | null }
 
 export type ControllerView = { kind: 'agent' } | { kind: 'human'; you: boolean };
 
@@ -27,6 +28,8 @@ export interface BrowserState {
   controller?: ControllerView;
   tabs?: Tab[];
   activeTabId?: string | null;
+  // Tab ids, most recently shown through code-browser first.
+  recentTabIds?: string[];
   canGoBack?: boolean;
   canGoForward?: boolean;
 }

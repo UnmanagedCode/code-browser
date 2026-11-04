@@ -2,8 +2,8 @@ import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createBrowserSession } from '../src/browserSession.js';
-import { MAX_PROMPT_TEXT } from '../src/limits.js';
-import { liveStack, waitFor } from './helpers.mjs';
+import { MAX_PROMPT_TEXT, TAB_SWEEP_MS } from '../src/limits.js';
+import { fakeClock, liveStack, waitFor } from './helpers.mjs';
 
 let stack;
 afterEach(async () => { await stack?.close(); stack = null; });
@@ -218,4 +218,131 @@ test('a new tab logs no warning and its navigation state is read through its ses
   await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual(warns, []);
   assert.ok(cdp.calls.some((c) => c.method === 'Page.getNavigationHistory' && c.sessionId === 'S-T1'));
+});
+
+// ---- title sweep, window ids and recency (the sweep runs on an injected clock) ----
+const SWEEP = TAB_SWEEP_MS;
+async function bootClocked() {
+  const clock = fakeClock();
+  stack = liveStack({ clock });
+  const session = await stack.start();
+  const agent = await stack.agent();
+  await waitFor(() => session.snapshot().activeTabId && session.snapshot().tabs[0].windowId !== null, { what: 'initial tab and window' });
+  return { session, agent, clock };
+}
+
+// Invariant: Chromium announces no title commit, so a changed title shows in the snapshot only after the next sweep.
+test('a title set without an event reaches the snapshot on the next sweep', async () => {
+  const { session, agent, clock } = await bootClocked();
+  const id = session.snapshot().activeTabId;
+  await agent.send('Fake.setTitle', { targetId: id, title: 'Hello' });
+  assert.equal(session.snapshot().tabs[0].title, '');
+  clock.advance(SWEEP);
+  await waitFor(() => session.snapshot().tabs[0].title === 'Hello', { what: 'swept title' });
+});
+
+// Invariant: a sweep updates titles only: it never moves the active tab, even for the agent.
+test('a swept title change on a background tab keeps the active tab', async () => {
+  const { session, agent, clock } = await bootClocked();
+  const first = session.snapshot().activeTabId;
+  const { targetId: second } = await agent.send('Target.createTarget', { url: 'about:blank' });
+  await waitFor(() => session.snapshot().activeTabId === second, { what: 'second active' });
+  await agent.send('Fake.setTitle', { targetId: first, title: 'Background' });
+  clock.advance(SWEEP);
+  await waitFor(() => session.snapshot().tabs.find((t) => t.targetId === first).title === 'Background', { what: 'swept title' });
+  assert.equal(session.snapshot().activeTabId, second);
+});
+
+// Invariant: every tab carries its window id, and a tab opened in a new window gets a different one.
+test('tabs carry window ids', async () => {
+  const { session, agent } = await bootClocked();
+  const { targetId } = await agent.send('Target.createTarget', { url: 'about:blank', newWindow: true });
+  await waitFor(() => session.snapshot().tabs.find((t) => t.targetId === targetId)?.windowId, { what: 'window of new tab' });
+  const [a, b] = session.snapshot().tabs;
+  assert.equal(typeof a.windowId, 'number');
+  assert.notEqual(a.windowId, b.windowId);
+});
+
+// Invariant: recentTabIds is the most-recently-used order of existing tabs only.
+test('recentTabIds follows activations and drops closed tabs', async () => {
+  const { session, agent } = await bootClocked();
+  const first = session.snapshot().activeTabId;
+  const { targetId: second } = await agent.send('Target.createTarget', { url: 'about:blank' });
+  await waitFor(() => session.snapshot().activeTabId === second, { what: 'second active' });
+  assert.deepEqual(session.snapshot().recentTabIds, [second, first]);
+  session.activateTab(first);
+  assert.deepEqual(session.snapshot().recentTabIds, [first, second]);
+  await session.closeTab(second);
+  await waitFor(() => session.snapshot().tabs.length === 1, { what: 'closed' });
+  assert.deepEqual(session.snapshot().recentTabIds, [first]);
+});
+
+// Invariant: a sweep that changes nothing emits no 'change' (one sweep a second must not wake every viewer).
+test('a sweep with nothing new emits no change', async () => {
+  const { session, clock } = await bootClocked();
+  await new Promise((r) => setTimeout(r, 30));
+  let changes = 0;
+  session.events.on('change', () => { changes += 1; });
+  clock.advance(SWEEP);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(changes, 0);
+});
+
+// Invariant: a disposed session runs no more sweeps and leaves no timer pending.
+test('dispose cancels the sweep', async () => {
+  const { session, clock } = await bootClocked();
+  assert.equal(clock.pending() > 0, true, 'a sweep is scheduled');
+  session.dispose();
+  assert.equal(clock.pending(), 0);
+});
+
+// A CDP double that answers Target.getTargets and Browser.getWindowForTarget from a fixed list.
+function listCdp(targets) {
+  const cdp = new EventEmitter();
+  cdp.calls = [];
+  cdp.send = (method, params) => {
+    cdp.calls.push({ method, params });
+    switch (method) {
+      case 'Target.getTargets': return Promise.resolve({ targetInfos: targets });
+      case 'Browser.getWindowForTarget': return Promise.resolve({ windowId: params.targetId === 'U2' ? 7 : 3 });
+      case 'Target.attachToTarget': return Promise.resolve({ sessionId: `S-${params.targetId}` });
+      default: return Promise.resolve({});
+    }
+  };
+  return cdp;
+}
+
+// Invariant: in an attached browser the person's seeded tabs get window ids, and swept titles, without becoming active.
+test('seeded tabs of an attached browser get windows and swept titles', async () => {
+  const targets = [
+    { targetId: 'U1', type: 'page', url: 'https://a.test/', title: 'a.test' },
+    { targetId: 'U2', type: 'page', url: 'https://b.test/', title: 'B' },
+  ];
+  const cdp = listCdp(targets);
+  const clock = fakeClock();
+  const session = createBrowserSession({ name: 'a', cdp, sandbox: null, attached: true, log: { warn() {} }, sweep: { schedule: clock.schedule } });
+  await session.start();
+  await waitFor(() => session.snapshot().tabs.every((t) => t.windowId !== null), { what: 'window ids' });
+  assert.deepEqual(session.snapshot().tabs.map((t) => t.windowId), [3, 7]);
+  targets[0] = { ...targets[0], title: 'Mail' };
+  clock.advance(SWEEP);
+  await waitFor(() => session.snapshot().tabs[0].title === 'Mail', { what: 'swept title' });
+  assert.equal(session.snapshot().activeTabId, null);
+  session.dispose();
+});
+
+// Invariant: a failing sweep is logged and the next one still runs.
+test('a failed sweep is logged and the loop continues', async () => {
+  const cdp = listCdp([]);
+  let fail = true;
+  const send = cdp.send;
+  cdp.send = (method, params) => (method === 'Target.getTargets' && fail && cdp.calls.some((c) => c.method === 'Target.setDiscoverTargets') ? (fail = false, Promise.reject(new Error('boom'))) : send(method, params));
+  const warns = [];
+  const clock = fakeClock();
+  const session = createBrowserSession({ name: 'a', cdp, sandbox: true, log: { warn: (m) => warns.push(m) }, sweep: { schedule: clock.schedule } });
+  await session.start();
+  clock.advance(SWEEP);
+  await waitFor(() => warns.length === 1 && clock.pending() === 1, { what: 'warning and a rescheduled sweep' });
+  assert.match(warns[0], /tab sweep: boom/);
+  session.dispose();
 });

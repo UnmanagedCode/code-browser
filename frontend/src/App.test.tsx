@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
-import type { BrowserState, BrowserSummary, ClientMessage, FrameHeader, ServerMessage } from './protocol';
+import type { BrowserState, BrowserSummary, ClientMessage, FrameHeader, ServerMessage, Tab } from './protocol';
 import { createViewerSocket, type SocketStatus, type ViewerSocket, type View } from './socket';
 
 function fakeSocket() {
@@ -29,8 +29,9 @@ function fakeSocket() {
 const running = (name: string, controller: BrowserSummary['controller'] = 'agent'): BrowserSummary => ({ name, kind: 'launched', status: 'running', controller, sandbox: true, allowUnsandboxed: false, sandboxUnavailable: false, lastExit: null, attached: null, attachError: null });
 const state = (over: Partial<BrowserState> = {}): BrowserState => ({
   type: 'state', name: 'a', status: 'running', sandbox: true, controller: { kind: 'agent' },
-  tabs: [{ targetId: 'T1', url: 'https://one.test/', title: 'One' }], activeTabId: 'T1', canGoBack: false, canGoForward: false, ...over,
+  tabs: [{ targetId: 'T1', url: 'https://one.test/', title: 'One', windowId: 1 }], activeTabId: 'T1', canGoBack: false, canGoForward: false, ...over,
 });
+const mkTab = (targetId: string, title: string, url = `https://${targetId.toLowerCase()}.test/`, windowId: number | null = 1): Tab => ({ targetId, url, title, windowId });
 const goTo = (search: string) => history.replaceState(null, '', search || location.pathname);
 
 let f: ReturnType<typeof fakeSocket>;
@@ -87,8 +88,18 @@ describe('page-controlled text', () => {
   it('a hostile tab title becomes text, not an element', async () => {
     const title = '<img src=x onerror="window.__pwned=1">';
     await openViewer();
-    await f.emit(state({ tabs: [{ targetId: 'T1', url: 'https://one.test/', title }] }));
-    expect(screen.getByRole('tab', { name: title }).textContent).toBe(title);
+    await f.emit(state({ tabs: [{ targetId: 'T1', url: 'https://one.test/', title, windowId: 1 }] }));
+    expect(document.querySelector('.tab-label')?.textContent).toBe(title);
+    expect(document.querySelector('img')).toBeNull();
+  });
+
+  // Invariant: a hostile title shown in a switcher option stays text.
+  it('a hostile tab title in the switcher becomes text, not an element', async () => {
+    const title = '<img src=x onerror="window.__pwned=1">';
+    await openViewer();
+    await f.emit(state({ tabs: [mkTab('T1', title)] }));
+    fireEvent.click(screen.getByRole('button', { name: /tabs…/ }));
+    expect(document.querySelector('.tab-option-label')?.textContent).toBe(title);
     expect(document.querySelector('img')).toBeNull();
   });
 
@@ -231,10 +242,10 @@ describe('controller bar', () => {
   // Invariant: switching the viewed tab needs no control.
   it('selecting a tab sends activate without control', async () => {
     await openViewer({ kind: 'agent' });
-    await f.emit(state({ tabs: [{ targetId: 'T1', url: 'a', title: 'One' }, { targetId: 'T2', url: 'b', title: 'Two' }] }));
+    await f.emit(state({ tabs: [{ targetId: 'T1', url: 'a', title: 'One', windowId: 1 }, { targetId: 'T2', url: 'b', title: 'Two', windowId: 1 }] }));
     fireEvent.click(screen.getByRole('tab', { name: 'Two' }));
     expect(f.sent).toContainEqual({ msg: 'tab', action: 'activate', tabId: 'T2' });
-    expect(screen.getByRole('tab', { name: 'One' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: /^One/ }).getAttribute('aria-selected')).toBe('true');
   });
 
   // Invariant: the address bar navigates with the typed text on Enter.
@@ -330,6 +341,20 @@ describe('dialogs', () => {
     expect(f.sent).toContainEqual({ msg: 'dialog', tabId: 'T1', action: 'accept', promptText: 'bob' });
     await f.emit({ type: 'dialogClosed', tabId: 'T1' });
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  // Invariant: a dialog from a background tab names that tab and can bring it forward without control; no button
+  // is offered when its tab is already the watched one.
+  it('a dialog from a background tab names its tab and Show tab activates it without control', async () => {
+    await openViewer({ kind: 'agent' });
+    await f.emit(state({ tabs: [mkTab('T1', 'One'), mkTab('T2', 'Two')] }));
+    await f.emit({ type: 'dialog', tabId: 'T2', dialogType: 'alert', message: 'hi', defaultPrompt: '' });
+    const dialog = screen.getByRole('dialog', { name: 'Page dialog' });
+    expect(within(dialog).getByText('Two').closest('p')?.textContent).toMatch(/^From tab: Two/);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Show tab' }));
+    expect(f.sent).toContainEqual({ msg: 'tab', action: 'activate', tabId: 'T2' });
+    await f.emit(state({ tabs: [mkTab('T1', 'One'), mkTab('T2', 'Two')], activeTabId: 'T2' }));
+    expect(screen.queryByRole('button', { name: 'Show tab' })).toBeNull();
   });
 });
 
@@ -732,5 +757,127 @@ describe('attached browsers', () => {
     expect(document.querySelector('canvas')).toBeNull();
     fireEvent.click(screen.getByRole('tab', { name: 'One' }));
     expect(f.sent).toContainEqual({ msg: 'tab', action: 'activate', tabId: 'T1' });
+  });
+});
+
+describe('tab switcher', () => {
+  const three = [mkTab('T1', 'Alpha', 'https://alpha.test/x'), mkTab('T2', 'Beta', 'https://beta.test/y'), mkTab('T3', 'Gamma', 'https://gamma.test/z')];
+  const trigger = () => screen.getByRole('button', { name: /\d+ tabs…/ });
+  const search = () => screen.getByRole('combobox', { name: 'Search tabs' });
+  const labels = () => within(screen.getByRole('listbox', { name: 'Tabs' })).queryAllByRole('option').map((o) => o.querySelector('.tab-option-label')?.textContent);
+  const open = async (tabs: Tab[] = three, over: Partial<BrowserState> = {}) => {
+    await openViewer();
+    await f.emit(state({ tabs, ...over }));
+    fireEvent.click(trigger());
+  };
+
+  // Invariant: the trigger opens a focused search that filters by title and by host.
+  it('opens focused and filters by title and host', async () => {
+    await open();
+    expect(document.activeElement).toBe(search());
+    expect(labels()).toEqual(['Alpha', 'Beta', 'Gamma']);
+    fireEvent.change(search(), { target: { value: 'bet' } });
+    expect(labels()).toEqual(['Beta']);
+    fireEvent.change(search(), { target: { value: 'gamma.test' } });
+    expect(labels()).toEqual(['Gamma']);
+    fireEvent.change(search(), { target: { value: 'zzz' } });
+    expect(screen.getByText('No tabs match')).toBeTruthy();
+  });
+
+  // Invariant: keyboard choice activates the highlighted tab (no control needed), closes, and returns focus to the trigger.
+  it('ArrowDown then Enter picks the highlighted tab and restores focus', async () => {
+    await open();
+    fireEvent.keyDown(search(), { key: 'ArrowDown' });
+    expect(search().getAttribute('aria-activedescendant')).toBe(screen.getAllByRole('option')[1].id);
+    fireEvent.keyDown(search(), { key: 'Enter' });
+    expect(f.sent).toContainEqual({ msg: 'tab', action: 'activate', tabId: 'T2' });
+    expect(screen.queryByRole('dialog', { name: 'Search tabs' })).toBeNull();
+    expect(document.activeElement).toBe(trigger());
+  });
+
+  // Invariant: Escape and an outside press dismiss the switcher without choosing anything.
+  it('Escape and an outside press close it and send nothing', async () => {
+    await open();
+    fireEvent.keyDown(search(), { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Search tabs' })).toBeNull();
+    expect(document.activeElement).toBe(trigger());
+    fireEvent.click(trigger());
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('dialog', { name: 'Search tabs' })).toBeNull();
+    expect(f.sent.filter((m) => m.msg === 'tab')).toEqual([]);
+  });
+
+  // Invariant: a mouse click on an option picks that tab.
+  it('clicking an option picks it', async () => {
+    await open();
+    fireEvent.click(screen.getByRole('option', { name: /Gamma/ }));
+    expect(f.sent).toContainEqual({ msg: 'tab', action: 'activate', tabId: 'T3' });
+  });
+
+  // Invariant: windows are grouped only when there is more than one.
+  it('groups options by window only with several windows', async () => {
+    await open([mkTab('T1', 'Alpha', undefined, 7), mkTab('T2', 'Beta', undefined, 9), mkTab('T3', 'Gamma', undefined, 7)]);
+    expect(screen.getByRole('group', { name: /Window 1 · 2 tabs/ })).toBeTruthy();
+    expect(within(screen.getByRole('group', { name: /Window 2/ })).getByRole('option', { name: /Beta/ })).toBeTruthy();
+    expect(labels()).toEqual(['Alpha', 'Gamma', 'Beta']);
+  });
+  it('shows a flat list for one window', async () => {
+    await open();
+    expect(screen.queryAllByRole('group')).toEqual([]);
+  });
+
+  // Invariant: Recent orders by the backend's recency, then the rest in list order.
+  it('Recent orders by recentTabIds', async () => {
+    await open(three, { recentTabIds: ['T3', 'T2'] });
+    fireEvent.click(screen.getByRole('radio', { name: 'Recent' }));
+    expect(labels()).toEqual(['Gamma', 'Beta', 'Alpha']);
+  });
+
+  // Invariant: browser pages are hidden until asked for, except the watched tab, which is always listed.
+  it('hides browser pages by default; the active one is always shown', async () => {
+    const tabs = [mkTab('T1', 'Alpha'), mkTab('T2', 'About Version', 'chrome://version/')];
+    await open(tabs);
+    expect(labels()).toEqual(['Alpha']);
+    expect(screen.queryByRole('tab', { name: /About Version/ })).toBeNull();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Show browser pages \(1\)/ }));
+    expect(labels()).toEqual(['Alpha', 'About Version']);
+    expect(screen.getByRole('tab', { name: /About Version/ })).toBeTruthy();
+  });
+  it('lists an internal tab when it is the active one', async () => {
+    await open([mkTab('T1', 'About Version', 'chrome://version/')]);
+    expect(labels()).toEqual(['About Version']);
+    expect(screen.getByRole('tab', { name: /About Version/ })).toBeTruthy();
+  });
+
+  // Invariant: the strip's arrows move focus without changing the shared tab; Enter activates.
+  it('strip arrows move focus only; Enter activates', async () => {
+    await openViewer();
+    await f.emit(state({ tabs: three }));
+    const [a, b] = [screen.getByRole('tab', { name: /Alpha/ }), screen.getByRole('tab', { name: /Beta/ })];
+    a.focus();
+    fireEvent.keyDown(a, { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(b);
+    expect(f.sent.filter((m) => m.msg === 'tab')).toEqual([]);
+    fireEvent.keyDown(b, { key: 'Enter' });
+    expect(f.sent).toContainEqual({ msg: 'tab', action: 'activate', tabId: 'T2' });
+  });
+
+  // Invariant: a newly active tab is scrolled into view in the strip.
+  it('scrolls the newly active tab into view', async () => {
+    const spy = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {});
+    await openViewer();
+    await f.emit(state({ tabs: three }));
+    spy.mockClear();
+    await f.emit(state({ tabs: three, activeTabId: 'T3' }));
+    expect((spy.mock.contexts as HTMLElement[]).some((el) => el.getAttribute('role') === 'tab' && el.textContent?.includes('Gamma'))).toBe(true);
+  });
+
+  // Invariant: the strip says which tab is shared with the agent and which tabs hold a dialog.
+  it('badges the shared tab and tabs with a dialog', async () => {
+    await openViewer();
+    await f.emit(state({ tabs: three }));
+    await f.emit({ type: 'dialog', tabId: 'T2', dialogType: 'alert', message: 'hi', defaultPrompt: '' });
+    expect(screen.getByRole('tab', { name: /Alpha.*Shared/ })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /Beta.*Dialog/ })).toBeTruthy();
   });
 });

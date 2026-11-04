@@ -119,14 +119,31 @@ input:not([type='radio']):not([type='checkbox']):focus-visible { border-color: v
 .viewer-name { max-width: 8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .url-bar { flex: 1; display: flex; min-width: 0; }
 .url-bar input { flex: 1; height: 2rem; }
-.tab-strip { display: flex; gap: 0.25rem; padding: 0.25rem; overflow-x: auto; border-bottom: 1px solid var(--border); }
+.tab-bar { position: relative; display: flex; align-items: center; gap: 0.25rem; padding: 0.25rem; border-bottom: 1px solid var(--border); }
+.tab-strip { flex: 1; min-width: 0; display: flex; gap: 0.25rem; overflow-x: auto; }
+.tab-switcher-trigger, .tab-new { flex: none; }
 .tab { display: inline-flex; border: 1px solid var(--border); border-radius: calc(var(--radius) / 2); background: var(--muted); }
 .tab[data-active='true'] { background: var(--card); border-color: var(--primary); }
-.tab button { border: 0; background: none; height: 2rem; padding: 0 0.75rem; box-shadow: none; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab button { border: 0; background: none; height: 2rem; padding: 0 0.75rem; box-shadow: none; max-width: 10rem; display: inline-flex; align-items: center; gap: 0.3rem; overflow: hidden; white-space: nowrap; }
 .tab button:not(:disabled):hover { background: var(--accent); color: var(--accent-foreground); }
 .dark .tab button:not(:disabled):hover { background: color-mix(in oklab, var(--accent) 50%, transparent); }
 /* One button serves both states (Take control, Hand back) so keyboard focus survives the swap; no transition, so it does not morph. */
 .controller-bar button { transition: none; }
+.tab-label, .tab-option-label { overflow: hidden; text-overflow: ellipsis; }
+.tab-badge { flex: none; font-size: 0.7rem; padding: 0 0.35rem; border-radius: 999px; background: var(--muted); color: var(--muted-foreground); }
+.tab-badge[data-kind='shared'] { color: var(--primary); border: 1px solid var(--primary); }
+.tab-badge[data-kind='dialog'] { color: var(--warning); border: 1px solid var(--warning); }
+.tab-switcher { position: absolute; top: 100%; left: 0.25rem; z-index: 2; width: min(28rem, 96vw); max-height: 70vh; display: flex; flex-direction: column; gap: 0.4rem; padding: 0.6rem; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); }
+.tab-switcher .hint { margin: 0; }
+.tab-switcher-options { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem; }
+.tab-switcher-options label { display: inline-flex; align-items: center; gap: 0.3rem; }
+.tab-switcher ul { list-style: none; margin: 0; padding: 0; overflow-y: auto; }
+.tab-switcher [role='listbox'] { flex: 1; min-height: 0; }
+.tab-switcher-heading { display: block; padding: 0.25rem 0.4rem; font-weight: 600; color: var(--muted-foreground); }
+.tab-option { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem; padding: 0.3rem 0.4rem; border-radius: calc(var(--radius) / 2); cursor: pointer; }
+.tab-option[aria-selected='true'] { background: var(--muted); outline: 1px solid var(--primary); }
+.tab-option-label { max-width: 100%; white-space: nowrap; }
+.tab-option-host { flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-foreground); font-size: 0.8rem; }
 .controller-bar { display: flex; align-items: center; gap: 0.75rem; padding: 0.3rem 0.5rem; background: var(--muted); }
 .controller-bar[data-holder='you'] { color: var(--success); }
 .screen { position: relative; flex: 1; min-height: 0; background: #000; }
@@ -142,8 +159,9 @@ input:not([type='radio']):not([type='checkbox']):focus-visible { border-color: v
 .sandbox-notice h2 { color: var(--warning); margin-top: 0; }
 .sandbox-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.75rem; border: 1px solid var(--warning); border-radius: calc(var(--radius) / 2); }
 .sandbox-confirm p { flex-basis: 100%; margin: 0; }
-.dialog-backdrop { position: fixed; inset: 0; display: grid; place-items: center; background: rgb(0 0 0 / 0.4); }
+.dialog-backdrop { position: fixed; inset: 0; z-index: 3; display: grid; place-items: center; background: rgb(0 0 0 / 0.4); }
 .dialog { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; min-width: min(20rem, 90vw); max-width: 90vw; }
+.dialog-source { overflow-wrap: anywhere; }
 .dialog-message { white-space: pre-wrap; overflow-wrap: anywhere; }
 .dialog-buttons { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.75rem; }
 .toast { position: fixed; top: 0.5rem; right: 0.5rem; display: flex; gap: 0.5rem; align-items: center; background: var(--card); border: 1px solid var(--destructive); border-radius: calc(var(--radius) / 2); padding: 0.4rem 0.6rem; z-index: 10; max-width: 90vw; }

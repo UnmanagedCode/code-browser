@@ -10,6 +10,9 @@ export const JPEG_QUALITY = 60;
 export const MAX_FRAME_DIM = 1920;
 export const VIEWER_HIGH_WATER = 512 * 1024;
 
+// Tabs: how often a running session re-reads tab titles (Chromium sends no event for a title commit)
+export const TAB_SWEEP_MS = 1000;
+
 // Control
 export const CONTROL_LEASE_MS = 30_000;
 

@@ -366,3 +366,24 @@ test('a viewer watches and drives an attached browser; a disconnect shows it sto
     await user.kill();
   }
 });
+
+// Invariant: a viewer's state carries each tab's window and the recency order; a title change that Chromium never
+// announces reaches the viewer as a new state on the next sweep, and a sweep that changes nothing pushes nothing.
+test('state carries windowId and recentTabIds; sweeps push fresh titles only when they changed', async () => {
+  const clock = fakeClock();
+  const { session, agent } = await boot({ clock });
+  await waitFor(() => session.snapshot().tabs[0].windowId !== null, { what: 'window id' });
+  const v = await stack.viewer();
+  await view(v);
+  const tab = v.last('state').activeTabId;
+  await v.waitFor((x) => typeof x.last('state').tabs[0].windowId === 'number', 'window id in state');
+  assert.deepEqual(v.last('state').recentTabIds, [tab]);
+  await sleep(50);
+  const count = v.of('state').length;
+  clock.advance(1000);
+  await sleep(100);
+  assert.equal(v.of('state').length, count, 'an unchanged sweep pushes nothing');
+  await agent.send('Fake.setTitle', { targetId: tab, title: 'Swept' });
+  clock.advance(1000);
+  await v.waitFor((x) => x.last('state').tabs[0].title === 'Swept', 'swept title');
+});

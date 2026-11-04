@@ -1,14 +1,29 @@
 import { useState } from 'react';
 import type { DialogInfo } from '../protocol';
 
-interface Props { dialog: DialogInfo; hasControl: boolean; onAnswer(action: 'accept' | 'dismiss', promptText?: string): void; onTake(): void }
+interface Props {
+  dialog: DialogInfo;
+  hasControl: boolean;
+  // The label of the tab the dialog came from (null when that tab is not listed) and whether it is the watched tab.
+  tabLabel: string | null;
+  shown: boolean;
+  onShowTab(): void;
+  onAnswer(action: 'accept' | 'dismiss', promptText?: string): void;
+  onTake(): void;
+}
 
 // A JavaScript dialog the page opened. The message is page-controlled and rendered as text.
-export function DialogPrompt({ dialog, hasControl, onAnswer, onTake }: Props) {
+export function DialogPrompt({ dialog, hasControl, tabLabel, shown, onShowTab, onAnswer, onTake }: Props) {
   const [text, setText] = useState(dialog.defaultPrompt);
   return (
     <div className="dialog-backdrop">
       <div role="dialog" aria-modal="true" aria-label="Page dialog" className="dialog">
+        {tabLabel !== null && (
+          <p className="dialog-source">
+            From tab: <strong>{tabLabel}</strong>
+            {!shown && <> <button type="button" onClick={onShowTab}>Show tab</button></>}
+          </p>
+        )}
         <p className="dialog-message">{dialog.message}</p>
         {dialog.dialogType === 'prompt' && (
           <input type="text" aria-label="Prompt answer" value={text} disabled={!hasControl} onChange={(e) => setText(e.target.value)} />

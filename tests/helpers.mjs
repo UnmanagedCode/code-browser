@@ -107,6 +107,7 @@ export function liveStack({ env = {}, leaseMs = 30_000, clock = null, dataDir = 
     createSession: (entry) => createBrowserSession({
       name: entry.name, cdp: entry.cdp, sandbox: entry.sandbox, attached: entry.kind === 'attached', log: { warn() {} },
       controllerOptions: { leaseMs, ...(clock ? { schedule: clock.schedule } : {}) },
+      ...(clock ? { sweep: { schedule: clock.schedule } } : {}),
     }),
   });
   const gateway = createViewerGateway({ manager, log: { error() {} }, pingMs: 60_000 });

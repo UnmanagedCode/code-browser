@@ -23,6 +23,10 @@ const FIXTURE_HTML = `<!doctype html><title>fixture</title>
 <input id="inp" style="position:fixed;left:100px;top:300px;width:300px;height:40px">
 <script>window.n = 0; if (location.search === '?second') document.title = 'second';</script>`;
 
+// Its title is only ever set by script, after load, as a real page's often is (Chromium announces no such change).
+const TABS_HTML = `<!doctype html><title>loading</title>
+<script>setTimeout(() => { document.title = new URLSearchParams(location.search).get('t') ?? 'none'; }, 200);</script>`;
+
 // A page on another origin that tries to reach the backend and CDP, and reports what happened.
 const HOSTILE_HTML = `<!doctype html><title>hostile</title><pre id="result">pending</pre>
 <script>
@@ -80,6 +84,7 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
   let panel;
   const fixture = await serve(FIXTURE_HTML);
   const hostile = await serve(HOSTILE_HTML);
+  const tabsPage = await serve(TABS_HTML);
   const fixtureUrl = `http://127.0.0.1:${fixture.port}/`;
   const cleanup = [];
 
@@ -276,6 +281,61 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
       await p1.getByRole('button', { name: 'Hand back' }).click();
     });
 
+    await t.test('6b. many tabs: search, windows, fresh titles, dialog source', async () => {
+      const tabsUrl = (q) => `http://127.0.0.1:${tabsPage.port}/?t=${q}`;
+      await agent(`for (let i = 1; i <= 30; i++) { const p = await context.newPage(); await p.goto(${JSON.stringify(tabsUrl(''))} + 'tab-' + String(i).padStart(2, '0')); }
+const root = await browser.newBrowserCDPSession();
+await root.send('Target.createTarget', { url: ${JSON.stringify(tabsUrl('far-window'))}, newWindow: true });
+const v = await context.newPage(); await v.goto('chrome://version');`);
+      const trigger = p1.getByRole('button', { name: /\d+ tabs…/ });
+      const search = p1.getByRole('combobox', { name: 'Search tabs' });
+      const optionLabels = () => p1.locator('.tab-option-label').allTextContents();
+
+      // Search and pick: the option is named by the page's script-set title, which only a sweep delivers.
+      await trigger.waitFor({ timeout: 10_000 });
+      await trigger.click();
+      await search.fill('tab-27');
+      await waitFor(async () => (await optionLabels()).join() === 'tab-27', { what: 'one option titled tab-27', timeout: 15_000 });
+      await p1.keyboard.press('Enter');
+      await p1.getByRole('tab', { name: /tab-27/, selected: true }).waitFor({ timeout: 10_000 });
+      assert.ok((await tool(port, 'browser_info', { name: 'e2e' })).meta.tabs.find((x) => x.active).url.endsWith('t=tab-27'));
+      await waitFor(async () => {
+        const strip = await p1.locator('.tab-strip').boundingBox();
+        const tab = await p1.getByRole('tab', { name: /tab-27/ }).boundingBox();
+        return tab.x >= strip.x - 1 && tab.x + tab.width <= strip.x + strip.width + 1;
+      }, { what: 'the selected tab scrolled into the strip', timeout: 5000 });
+
+      // Windows and browser pages.
+      await trigger.click();
+      await p1.getByRole('group', { name: /Window 2/ }).getByRole('option', { name: /far-window/ }).waitFor();
+      assert.equal(await p1.getByRole('option', { name: /About Version/ }).count(), 0, 'browser pages are hidden by default');
+      await p1.getByRole('checkbox', { name: /Show browser pages/ }).check();
+      await p1.getByRole('option', { name: /About Version/ }).waitFor();
+
+      // Recent: the tab just chosen is first.
+      await p1.getByRole('radio', { name: 'Recent' }).check();
+      assert.equal((await optionLabels())[0], 'tab-27');
+      await p1.keyboard.press('Escape');
+
+      // A dialog from a background tab names it, and Show tab selects it without taking control.
+      await agent(`const target = context.pages().find((p) => p.url().endsWith('t=tab-03'));
+await target.evaluate(() => { setTimeout(() => alert('from three'), 300); });`);
+      const dialog = p1.getByRole('dialog', { name: 'Page dialog' });
+      await dialog.getByText('from three').waitFor({ timeout: 10_000 });
+      assert.match(await dialog.locator('.dialog-source').innerText(), /From tab: tab-03/);
+      await p1.getByRole('tab', { name: /tab-03.*Dialog/ }).waitFor();
+      await dialog.getByRole('button', { name: 'Show tab' }).click();
+      await p1.getByRole('tab', { name: /tab-03/, selected: true }).waitFor({ timeout: 10_000 });
+      await dialog.getByRole('button', { name: 'Take control' }).click();
+      await dialog.getByRole('button', { name: 'OK' }).click();
+      await dialog.waitFor({ state: 'detached', timeout: 10_000 });
+      await p1.getByRole('button', { name: 'Hand back' }).click();
+
+      // Cleanup: later steps (restart, session restore) see the old tab set.
+      await agent(`for (const p of context.pages()) if (/[?&]t=/.test(p.url()) || p.url().startsWith('chrome://')) await p.close();`);
+      await waitFor(async () => (await tool(port, 'browser_info', { name: 'e2e' })).meta.tabs.every((x) => !/[?&]t=/.test(x.url) && !x.url.startsWith('chrome://')), { what: 'the extra tabs to close', timeout: 15_000 });
+    });
+
     await t.test('7. a page inside the shared browser cannot drive the backend or CDP', async () => {
       const [cdpPort, wsPath] = fs.readFileSync(path.join(dataDir, 'profiles', 'e2e', 'DevToolsActivePort'), 'utf8').trim().split('\n');
       const params = new URLSearchParams({
@@ -407,6 +467,8 @@ console.log(await page.textContent('#result'));`);
       const viewer = await newPage();
       await viewer.goto(`http://127.0.0.1:${backend.port}/?browser=mine`);
       await viewer.waitForSelector('canvas[data-frame-seq]', { timeout: 20_000 });
+      // The page's real <title>, committed after load, reaches the panel (Chromium sends no event for it).
+      await viewer.getByRole('tab', { name: /fixture/ }).waitFor({ timeout: 10_000 });
       await viewer.getByRole('button', { name: 'Take control', exact: true }).click();
       await viewer.getByText('You have control').waitFor();
       const btn = await clientPoint(viewer, 200, 140);
@@ -489,6 +551,7 @@ console.log(await page.textContent('#result'));`);
     for (const fn of cleanup.reverse()) await fn();
     fixture.server.close();
     hostile.server.close();
+    tabsPage.server.close();
     await sleep(500);
     const leftovers = spawnSync('pgrep', ['-af', projectsRoot], { encoding: 'utf8' }).stdout.split('\n').filter((l) => l && !l.includes('pgrep'));
     assert.deepEqual(leftovers, [], 'processes left running for this data dir');
