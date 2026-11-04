@@ -168,6 +168,22 @@ describe('controller bar', () => {
     await waitFor(() => expect(button.getAttribute('aria-pressed')).toBe('false'));
   });
 
+  // Invariant: pressing the Keyboard button must not take focus from the sink before click (touch fires a compatibility
+  // mousedown), or the click would see an unfocused sink and reopen the keyboard instead of closing it.
+  it('the Keyboard button cancels mousedown so a press toggles the keyboard closed', async () => {
+    stubPointer(true);
+    await openViewer({ kind: 'human', you: true });
+    const button = screen.getByRole('button', { name: 'Keyboard' });
+    const sink = screen.getByRole('textbox', { name: 'Keyboard input' });
+    fireEvent.click(button);
+    expect(document.activeElement).toBe(sink);
+    expect(fireEvent.mouseDown(button)).toBe(false); // false: the default (focus change) was prevented
+    expect(document.activeElement).toBe(sink);
+    fireEvent.click(button);
+    expect(document.activeElement).not.toBe(sink);
+    await waitFor(() => expect(button.getAttribute('aria-pressed')).toBe('false'));
+  });
+
   // Invariant: with no screen mounted (tabs exist but none is selected) there is no sink to focus, so no button.
   it('no Keyboard button while there is no screen', async () => {
     stubPointer(true);

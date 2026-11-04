@@ -317,6 +317,27 @@ console.log(await page.textContent('#result'));`);
       assert.equal((await rest('POST', 'e2e/start')).status, 200);
       assert.equal(await agent(`console.log((await context.cookies('http://example.test/')).length);`), '1');
 
+      // Keyboard focus is visible on every kind of control in both themes: a ghost button, a tab and a text input all
+      // get the 3px ring (computed box-shadow), which no variant, tab or input rule may override.
+      for (const colorScheme of ['light', 'dark']) {
+        const ctx = await panel.newContext({ viewport: { width: 1000, height: 800 }, colorScheme });
+        const page = await ctx.newPage();
+        await page.goto(`http://127.0.0.1:${backend.port}/?browser=e2e`);
+        await page.getByRole('tab').first().waitFor({ timeout: 20_000 });
+        await page.keyboard.press('Tab'); // enters keyboard modality; focuses the first control (a ghost button)
+        const shadowOf = (locator) => locator.evaluate((el) => getComputedStyle(el).boxShadow);
+        for (const [what, locator] of [
+          ['ghost button', page.getByRole('button', { name: 'Back to browsers' })],
+          ['tab', page.getByRole('tab').first()],
+          ['text input', page.getByRole('textbox', { name: 'Address' })],
+        ]) {
+          await locator.evaluate((el) => el.focus());
+          // box-shadow transitions for 150 ms after focus: wait for the settled value.
+          await waitFor(async () => /\b3px\b/.test(await shadowOf(locator)), { what: `${what} to show the focus ring (${colorScheme})`, timeout: 3000 });
+        }
+        await ctx.close();
+      }
+
       // The viewer's own Stop stops the browser and the panel then offers Start; start it again for the steps after.
       const viewer = await (await panel.newContext({ viewport: { width: 1000, height: 800 } })).newPage();
       await viewer.goto(`http://127.0.0.1:${backend.port}/?browser=e2e`);
