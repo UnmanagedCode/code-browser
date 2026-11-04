@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserList } from './components/BrowserList';
+import { TooltipLayer } from './components/TooltipLayer';
 import { Viewer } from './components/Viewer';
 import * as api from './api';
 import type { BrowserState, BrowserSummary, DialogInfo } from './protocol';
@@ -61,10 +62,11 @@ export function App({ socket }: { socket: ViewerSocket }) {
 
   return (
     <>
+      <TooltipLayer />
       {error && (
         <div className="toast" role="alert">
           <span>{error}</span>
-          <button type="button" aria-label="Dismiss" onClick={() => setError(null)}>×</button>
+          <button type="button" data-variant="ghost" data-size="icon-sm" aria-label="Dismiss" data-tip="Dismiss" onClick={() => setError(null)}>×</button>
         </div>
       )}
       {name === null ? (
@@ -79,6 +81,7 @@ export function App({ socket }: { socket: ViewerSocket }) {
           onError={setError}
           onBack={() => open(null)}
           onStart={() => { api.startBrowser(name).catch((e: Error) => { if (!api.isSandboxRefusal(e)) setError(e.message); }); }}
+          onStop={() => { api.stopBrowser(name).catch((e: Error) => setError(e.message)); }}
           onConnect={() => { api.connectBrowser(name).catch((e: Error) => setError(e.message)); }}
         />
       )}

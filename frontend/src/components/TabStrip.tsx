@@ -20,11 +20,11 @@ export function TabStrip({ tabs, activeTabId, hasControl, onActivate, onClose, o
             <button type="button" role="tab" aria-selected={t.targetId === activeTabId} title={t.url} onClick={() => onActivate(t.targetId)}>
               {label}
             </button>
-            <button type="button" className="tab-close" aria-label={`Close tab ${label}`} disabled={!hasControl} onClick={() => onClose(t.targetId)}>×</button>
+            <button type="button" className="tab-close" data-variant="ghost" data-size="icon-sm" aria-label={`Close tab ${label}`} data-tip={`Close tab ${label}`} disabled={!hasControl} onClick={() => onClose(t.targetId)}>×</button>
           </span>
         );
       })}
-      <button type="button" className="tab-new" aria-label="New tab" disabled={!hasControl} onClick={onNew}>+</button>
+      <button type="button" className="tab-new" data-variant="ghost" data-size="icon-sm" aria-label="New tab" data-tip="New tab" disabled={!hasControl} onClick={onNew}>+</button>
     </div>
   );
 }

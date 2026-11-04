@@ -31,13 +31,15 @@ export function BrowserList({ browsers, onOpen, onError }: Props) {
       {b.sandboxUnavailable && !b.allowUnsandboxed && <span className="badge" data-warn="true">not started: no sandbox</span>}
       {b.status === 'stopped' && b.lastExit && <span className="badge" data-warn="true">Crashed</span>}
       <span className="spacer" />
-      <button type="button" onClick={() => onOpen(b.name)}>Open</button>
+      <button type="button" data-size="sm" onClick={() => onOpen(b.name)}>Open</button>
       {b.status === 'stopped'
-        ? <button type="button" onClick={() => run(() => api.startBrowser(b.name), b.name)}>Start</button>
-        : <button type="button" onClick={() => run(() => api.stopBrowser(b.name))}>Stop</button>}
-      {b.allowUnsandboxed && <button type="button" onClick={() => disallow(b)}>Disallow without sandbox</button>}
+        ? <button type="button" data-size="sm" onClick={() => run(() => api.startBrowser(b.name), b.name)}>Start</button>
+        : <button type="button" data-size="sm" onClick={() => run(() => api.stopBrowser(b.name))}>Stop</button>}
+      {b.allowUnsandboxed && <button type="button" data-size="sm" onClick={() => disallow(b)}>Disallow without sandbox</button>}
       <button
         type="button"
+        data-variant="destructive"
+        data-size="sm"
         onClick={() => { if (window.confirm(`Delete browser "${b.name}" and its logins?`)) run(() => api.deleteBrowser(b.name)); }}
       >Delete</button>
     </li>
@@ -57,13 +59,15 @@ export function BrowserList({ browsers, onOpen, onError }: Props) {
         {b.status === 'running' && <span className="badge">{b.controller === 'human' ? 'human control' : 'agent control'}</span>}
         {b.status === 'stopped' && b.lastExit && <span className="badge" data-warn="true">Disconnected</span>}
         <span className="spacer" />
-        <button type="button" onClick={() => onOpen(b.name)}>Open</button>
+        <button type="button" data-size="sm" onClick={() => onOpen(b.name)}>Open</button>
         {b.status === 'stopped'
-          ? <button type="button" onClick={() => run(() => api.connectBrowser(b.name))}>Connect</button>
-          : <button type="button" onClick={() => run(() => api.stopBrowser(b.name))}>Disconnect</button>}
-        <button type="button" onClick={() => setDraft({ name: b.name, address: a.address, via: a.via })}>Change…</button>
+          ? <button type="button" data-size="sm" onClick={() => run(() => api.connectBrowser(b.name))}>Connect</button>
+          : <button type="button" data-size="sm" onClick={() => run(() => api.stopBrowser(b.name))}>Disconnect</button>}
+        <button type="button" data-size="sm" onClick={() => setDraft({ name: b.name, address: a.address, via: a.via })}>Change…</button>
         <button
           type="button"
+          data-variant="destructive"
+          data-size="sm"
           onClick={() => {
             if (window.confirm(`Forget "${b.name}"? code-browser disconnects and forgets it; the browser and its tabs are untouched.`)) run(() => api.deleteBrowser(b.name));
           }}
@@ -89,7 +93,7 @@ export function BrowserList({ browsers, onOpen, onError }: Props) {
         }}
       >
         <input aria-label="New browser name" value={name} onChange={(e) => setName(e.target.value)} placeholder="name (a-z, 0-9, -)" pattern={NAME_RE.source} required />
-        <button type="submit">New browser</button>
+        <button type="submit" data-variant="primary">New browser</button>
       </form>
       <AttachForm draft={draft} onAttached={() => setDraft(null)} onError={onError} />
     </div>

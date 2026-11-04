@@ -34,8 +34,13 @@ const state = (over: Partial<BrowserState> = {}): BrowserState => ({
 const goTo = (search: string) => history.replaceState(null, '', search || location.pathname);
 
 let f: ReturnType<typeof fakeSocket>;
+// happy-dom has no pointer media features: viewer tests default to a mouse-only device.
+function stubPointer(coarse: boolean) {
+  vi.stubGlobal('matchMedia', (query: string) => ({ matches: coarse && query.includes('any-pointer: coarse'), media: query, addEventListener() {}, removeEventListener() {} }));
+}
 beforeEach(() => {
   f = fakeSocket();
+  stubPointer(false);
   goTo('?browser=a');
   vi.stubGlobal('createImageBitmap', async () => ({ width: 200, height: 100, close() {} }));
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage() {} } as unknown as CanvasRenderingContext2D);
@@ -120,17 +125,107 @@ describe('controller bar', () => {
     expect(screen.getByRole('button', { name: 'Take control' })).toBeTruthy();
   });
 
+  // Invariant: the control button is one element across states, so keyboard focus stays on it when control changes hands.
+  it('focus stays on the control button when control is taken and handed back', async () => {
+    await openViewer({ kind: 'agent' });
+    const take = screen.getByRole('button', { name: 'Take control' });
+    take.focus();
+    fireEvent.click(take);
+    await f.emit(state({ controller: { kind: 'human', you: true } }));
+    const handBack = screen.getByRole('button', { name: 'Hand back' });
+    expect(document.activeElement).toBe(handBack);
+    fireEvent.click(handBack);
+    await f.emit(state({ controller: { kind: 'agent' } }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Take control' }));
+  });
+
   // Invariant: actions that need control are disabled without it, and enabled with it.
   it('tab close/new and navigation need control', async () => {
     await openViewer({ kind: 'agent' });
-    for (const name of ['New tab', 'Close tab One', 'Reload', 'Show keyboard']) {
+    for (const name of ['New tab', 'Close tab One', 'Reload']) {
       expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled, name).toBe(true);
     }
     expect((screen.getByRole('textbox', { name: 'Address' }) as HTMLInputElement).readOnly).toBe(true);
     await f.emit(state({ controller: { kind: 'human', you: true } }));
-    for (const name of ['New tab', 'Close tab One', 'Reload', 'Show keyboard']) {
+    for (const name of ['New tab', 'Close tab One', 'Reload']) {
       expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled, name).toBe(false);
     }
+  });
+
+  // Invariant: icon-only toolbar buttons keep an accessible name (the icon is decorative).
+  it('icon-only toolbar buttons are named', async () => {
+    await openViewer({ kind: 'human', you: true });
+    for (const name of ['Back to browsers', 'Go back', 'Go forward', 'Reload']) {
+      expect(screen.getByRole('button', { name }), name).toBeTruthy();
+    }
+  });
+
+  // Invariant: the Keyboard button exists only where a touch pointer does; a mouse device types by clicking the screen.
+  it('the Keyboard button is hidden without a touch pointer', async () => {
+    await openViewer({ kind: 'human', you: true });
+    expect(screen.queryByRole('button', { name: 'Keyboard' })).toBeNull();
+  });
+
+  // Invariant: on touch the button toggles focus on the keyboard sink and mirrors it in aria-pressed; it needs control.
+  it('the Keyboard button toggles focus and aria-pressed on a touch device', async () => {
+    stubPointer(true);
+    await openViewer({ kind: 'agent' });
+    expect((screen.getByRole('button', { name: 'Keyboard' }) as HTMLButtonElement).disabled).toBe(true);
+    await f.emit(state({ controller: { kind: 'human', you: true } }));
+    const button = screen.getByRole('button', { name: 'Keyboard' });
+    const sink = screen.getByRole('textbox', { name: 'Keyboard input' });
+    fireEvent.click(button);
+    expect(document.activeElement).toBe(sink);
+    await waitFor(() => expect(button.getAttribute('aria-pressed')).toBe('true'));
+    fireEvent.click(button);
+    expect(document.activeElement).not.toBe(sink);
+    await waitFor(() => expect(button.getAttribute('aria-pressed')).toBe('false'));
+  });
+
+  // Invariant: pressing the Keyboard button must not take focus from the sink before click (touch fires a compatibility
+  // mousedown), or the click would see an unfocused sink and reopen the keyboard instead of closing it.
+  it('the Keyboard button cancels mousedown so a press toggles the keyboard closed', async () => {
+    stubPointer(true);
+    await openViewer({ kind: 'human', you: true });
+    const button = screen.getByRole('button', { name: 'Keyboard' });
+    const sink = screen.getByRole('textbox', { name: 'Keyboard input' });
+    fireEvent.click(button);
+    expect(document.activeElement).toBe(sink);
+    expect(fireEvent.mouseDown(button)).toBe(false); // false: the default (focus change) was prevented
+    expect(document.activeElement).toBe(sink);
+    fireEvent.click(button);
+    expect(document.activeElement).not.toBe(sink);
+    await waitFor(() => expect(button.getAttribute('aria-pressed')).toBe('false'));
+  });
+
+  // Invariant: with no screen mounted (tabs exist but none is selected) there is no sink to focus, so no button.
+  it('no Keyboard button while there is no screen', async () => {
+    stubPointer(true);
+    await openViewer({ kind: 'human', you: true });
+    await f.emit(state({ controller: { kind: 'human', you: true }, activeTabId: null }));
+    expect(screen.getByText('Select a tab to watch it.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Keyboard' })).toBeNull();
+  });
+
+  // Invariant: the viewer stops a launched browser, or disconnects an attached one, through the same stop route as the list.
+  it('Stop and Disconnect in the viewer post the stop route', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}'));
+    vi.stubGlobal('fetch', fetchMock);
+    await openViewer({ kind: 'human', you: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('api/browsers/a/stop', expect.objectContaining({ method: 'POST' })));
+    expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull();
+  });
+
+  it('an attached browser offers Disconnect, not Stop', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}'));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [{ ...running('a'), kind: 'attached', sandbox: null, attached: { address: '127.0.0.1:9222', via: 'proxy', asksApproval: null } }] });
+    await f.emit(state());
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('api/browsers/a/stop', expect.objectContaining({ method: 'POST' })));
   });
 
   // Invariant: switching the viewed tab needs no control.
@@ -171,10 +266,12 @@ describe('pointer input', () => {
     fireEvent.pointerDown(canvas(), { clientX: 100, clientY: 50, pointerType: 'mouse', pointerId: 1, button: 0, buttons: 1 });
     fireEvent.pointerUp(canvas(), { clientX: 100, clientY: 50, pointerType: 'mouse', pointerId: 1, button: 0, buttons: 0 });
     expect(f.inputs()).toEqual([]);
-    expect(screen.getByText('Take control to interact')).toBeTruthy();
+    // The hint is a button that takes control.
+    fireEvent.click(screen.getByRole('button', { name: 'Take control to interact' }));
+    expect(f.sent).toContainEqual({ msg: 'control', action: 'take' });
 
     await f.emit(state({ controller: { kind: 'human', you: true } }));
-    expect(screen.queryByText('Take control to interact')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Take control to interact' })).toBeNull();
     fireEvent.pointerDown(canvas(), { clientX: 100, clientY: 50, pointerType: 'mouse', pointerId: 1, button: 0, buttons: 1 });
     fireEvent.pointerUp(canvas(), { clientX: 100, clientY: 50, pointerType: 'mouse', pointerId: 1, button: 0, buttons: 0 });
     expect(f.inputs()).toMatchObject([

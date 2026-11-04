@@ -240,7 +240,7 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
       await waitFor(async () => (await canvasInfo(p1)).seq > before.seq, { what: 'frame seq to increase on viewer 1', timeout: 10_000 });
       assert.deepEqual(errors, []);
 
-      await p1.getByRole('button', { name: 'Take control' }).click();
+      await p1.getByRole('button', { name: 'Take control', exact: true }).click();
       await p1.getByText('You have control').waitFor();
       const btn = await clientPoint(p1, 200, 140);
       await p1.mouse.click(btn.x, btn.y);
@@ -316,6 +316,36 @@ console.log(await page.textContent('#result'));`);
       assert.equal((await rest('POST', 'e2e/stop')).status, 200);
       assert.equal((await rest('POST', 'e2e/start')).status, 200);
       assert.equal(await agent(`console.log((await context.cookies('http://example.test/')).length);`), '1');
+
+      // Keyboard focus is visible on every kind of control in both themes: a ghost button, a tab and a text input all
+      // get the 3px ring (computed box-shadow), which no variant, tab or input rule may override.
+      for (const colorScheme of ['light', 'dark']) {
+        const ctx = await panel.newContext({ viewport: { width: 1000, height: 800 }, colorScheme });
+        const page = await ctx.newPage();
+        await page.goto(`http://127.0.0.1:${backend.port}/?browser=e2e`);
+        await page.getByRole('tab').first().waitFor({ timeout: 20_000 });
+        await page.keyboard.press('Tab'); // enters keyboard modality; focuses the first control (a ghost button)
+        const shadowOf = (locator) => locator.evaluate((el) => getComputedStyle(el).boxShadow);
+        for (const [what, locator] of [
+          ['ghost button', page.getByRole('button', { name: 'Back to browsers' })],
+          ['tab', page.getByRole('tab').first()],
+          ['text input', page.getByRole('textbox', { name: 'Address' })],
+        ]) {
+          await locator.evaluate((el) => el.focus());
+          // box-shadow transitions for 150 ms after focus: wait for the settled value.
+          await waitFor(async () => /\b3px\b/.test(await shadowOf(locator)), { what: `${what} to show the focus ring (${colorScheme})`, timeout: 3000 });
+        }
+        await ctx.close();
+      }
+
+      // The viewer's own Stop stops the browser and the panel then offers Start; start it again for the steps after.
+      const viewer = await (await panel.newContext({ viewport: { width: 1000, height: 800 } })).newPage();
+      await viewer.goto(`http://127.0.0.1:${backend.port}/?browser=e2e`);
+      await viewer.getByRole('button', { name: 'Stop', exact: true }).click();
+      await viewer.getByText('This browser is stopped.').waitFor({ timeout: 20_000 });
+      assert.equal((await listed()).status, 'stopped');
+      await viewer.close();
+      assert.equal((await rest('POST', 'e2e/start')).status, 200);
     });
 
     await t.test('9. a human revokes in the panel (stopping the browser), then delete removes profile and opt-in', async () => {
@@ -377,7 +407,7 @@ console.log(await page.textContent('#result'));`);
       const viewer = await newPage();
       await viewer.goto(`http://127.0.0.1:${backend.port}/?browser=mine`);
       await viewer.waitForSelector('canvas[data-frame-seq]', { timeout: 20_000 });
-      await viewer.getByRole('button', { name: 'Take control' }).click();
+      await viewer.getByRole('button', { name: 'Take control', exact: true }).click();
       await viewer.getByText('You have control').waitFor();
       const btn = await clientPoint(viewer, 200, 140);
       await viewer.mouse.click(btn.x, btn.y);

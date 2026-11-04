@@ -40,11 +40,11 @@ The agent talks to Chromium over its own CDP connection; the backend is not on t
 
 Open it from cc's **Code Browser** nav entry, or from the `panelPath` link an agent gives you.
 
-- **Browser list:** each browser with its status (an attached browser's rows are described under [Attach your own browser](#attach-your-own-browser)), who controls it, a *no sandbox* badge while Chromium runs without its sandbox, *allowed without sandbox* (with **Disallow without sandbox**) for a browser a human allowed, *not started: no sandbox* after a refused start, and *Crashed* after an unexpected exit. Open, Start/Stop, Delete (asks first). **Disallow without sandbox** on a browser that is running unsandboxed asks first, because it stops that browser now (the profile and, through session restore, the tabs and logins are kept); on any other browser it takes effect without a prompt. A Start (or New browser) that is refused for want of a sandbox opens that browser's viewer instead of showing an error. **New browser** creates and starts a profile; the name field takes `a-z`, `0-9` and `-`.
-- **Viewer:** toolbar (back to the list, ← → ⟳, address bar, ⌨), tab strip, controller bar, the live screen.
+- **Browser list:** each browser with its status (an attached browser's rows are described under [Attach your own browser](#attach-your-own-browser)), who controls it, a *no sandbox* badge while Chromium runs without its sandbox, *allowed without sandbox* (with **Disallow without sandbox**) for a browser a human allowed, *not started: no sandbox* after a refused start, and *Crashed* after an unexpected exit. Open, Start/Stop, Delete (asks first; Delete and Forget are drawn as destructive). **Disallow without sandbox** on a browser that is running unsandboxed asks first, because it stops that browser now (the profile and, through session restore, the tabs and logins are kept); on any other browser it takes effect without a prompt. A Start (or New browser) that is refused for want of a sandbox opens that browser's viewer instead of showing an error. **New browser** creates and starts a profile; the name field takes `a-z`, `0-9` and `-`.
+- **Viewer:** toolbar (**Browsers** back to the list, back/forward/reload, address bar, **Keyboard** on touch-capable devices only — pressed while typing goes to the page — and **Stop**, which reads **Disconnect** for an attached browser), tab strip, controller bar, the live screen. Every icon button has a tooltip. Stop and Disconnect act at once, need no control, and ask nothing, like the list's.
 - **Address bar:** Enter navigates; a bare host gets `https://`; only `http`, `https` and `about:blank` are accepted.
 - **Tab strip:** each tab shows its title as plain text; selecting one switches the shared view for everyone; × and + need control.
-- **Screen:** a live screencast scaled to fit. Without control it shows *Take control to interact* and sends nothing.
+- **Screen:** a live screencast scaled to fit. Without control it shows *Take control to interact*, a button that takes control, and sends nothing. While you have control the screen has a green frame, which turns to the focus ring while keyboard input goes to the page.
 - **Dialogs:** a JavaScript `alert`, `confirm`, `prompt` or `beforeunload` shows as a modal with its message as text. OK and Cancel need control; the dialog offers *Take control* itself because it covers the controller bar. A dialog open before you joined is shown on arrival.
 - **Stopped browsers:** the viewer shows *This browser is stopped* with a Start button.
 - **No active tab** (an attached browser whose tabs nobody has picked yet): the viewer shows *Select a tab to watch it.* instead of the screen.
@@ -80,7 +80,7 @@ Closing the last tab opens `about:blank`, except in an attached browser. In an a
 | Soft keyboard, IME | `beforeinput`/composition events → text, Backspace, Enter, IME composition |
 | Paste | one text message |
 
-Touch is mapped to mouse and wheel, not to CDP touch events: the shared browser is a desktop Chromium, and touch emulation would change how pages behave for the agent's scripts too. Points on the letterbox bars around the screen are dropped. The ⌨ button focuses a hidden text field to bring up a phone keyboard.
+Touch is mapped to mouse and wheel, not to CDP touch events: the shared browser is a desktop Chromium, and touch emulation would change how pages behave for the agent's scripts too. Points on the letterbox bars around the screen are dropped. The **Keyboard** button (shown on touch-capable devices) focuses a hidden text field to bring up a phone keyboard; pressing it again closes the keyboard.
 
 ## Attach your own browser
 
