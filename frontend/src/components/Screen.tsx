@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 import { createGestureTracker } from '../input/gestures';
 import { isPasteChord, keyMessage, modifiersOf } from '../input/keys';
 import { mapPoint, type FrameGeometry } from '../input/mapPoint';
@@ -6,7 +6,14 @@ import { attachTextInput } from '../input/textInput';
 import type { InputMessage } from '../protocol';
 import type { ViewerSocket } from '../socket';
 
-interface Props { socket: ViewerSocket; hasControl: boolean; keyboardRequest: number }
+interface Props {
+  socket: ViewerSocket;
+  hasControl: boolean;
+  // The keyboard sink; the viewer focuses and blurs it from its Keyboard button.
+  keyboardRef: RefObject<HTMLTextAreaElement | null>;
+  onKeyboardActive(active: boolean): void;
+  onTake(): void;
+}
 
 const BUTTONS = ['left', 'middle', 'right'] as const;
 const MULTI_CLICK_MS = 500;
@@ -16,9 +23,10 @@ const PAGE_PX = 800;
 
 // The canvas shows the screencast; pointer and keyboard input become input messages only while the
 // viewer holds control. Frames are acked after drawing, which paces the backend.
-export function Screen({ socket, hasControl, keyboardRequest }: Props) {
+export function Screen({ socket, hasControl, keyboardRef, onKeyboardActive, onTake }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const textRef = useRef<HTMLTextAreaElement>(null);
+  const activeRef = useRef(onKeyboardActive);
+  activeRef.current = onKeyboardActive;
   const geometry = useRef<FrameGeometry | null>(null);
   const controlRef = useRef(hasControl);
   controlRef.current = hasControl;
@@ -91,7 +99,7 @@ export function Screen({ socket, hasControl, keyboardRequest }: Props) {
       if (!controlRef.current) return;
       canvas.setPointerCapture?.(e.pointerId);
       if (e.pointerType === 'touch') { gestures.down(e.pointerId, e.clientX, e.clientY, e.timeStamp); return; }
-      textRef.current?.focus({ preventScroll: true });
+      keyboardRef.current?.focus({ preventScroll: true });
       const p = toPage(e.clientX, e.clientY);
       if (!p) return;
       const near = Math.hypot(e.clientX - lastDown.x, e.clientY - lastDown.y) <= MULTI_CLICK_PX;
@@ -152,10 +160,12 @@ export function Screen({ socket, hasControl, keyboardRequest }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handlers read refs; the socket is stable
   }, [socket]);
 
-  // Keyboard: the hidden textarea takes focus on click (mouse) or via the keyboard button (touch).
+  // Keyboard: the hidden textarea takes focus on click (mouse) or via the viewer's Keyboard button (touch).
   useEffect(() => {
-    const ta = textRef.current;
+    const ta = keyboardRef.current;
     if (!ta) return undefined;
+    const onFocus = () => activeRef.current(true);
+    const onBlur = () => activeRef.current(false);
     const onKey = (action: 'down' | 'up') => (e: KeyboardEvent) => {
       if (!controlRef.current || isPasteChord(e)) return;
       const m = keyMessage(e, action);
@@ -167,18 +177,25 @@ export function Screen({ socket, hasControl, keyboardRequest }: Props) {
     const up = onKey('up');
     ta.addEventListener('keydown', down);
     ta.addEventListener('keyup', up);
+    ta.addEventListener('focus', onFocus);
+    ta.addEventListener('blur', onBlur);
     const detach = attachTextInput(ta, sendInput);
-    return () => { ta.removeEventListener('keydown', down); ta.removeEventListener('keyup', up); detach(); };
+    return () => {
+      ta.removeEventListener('keydown', down);
+      ta.removeEventListener('keyup', up);
+      ta.removeEventListener('focus', onFocus);
+      ta.removeEventListener('blur', onBlur);
+      activeRef.current(false); // a removed sink fires no blur
+      detach();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handlers read refs; the socket is stable
   }, [socket]);
-
-  useEffect(() => { if (keyboardRequest > 0) textRef.current?.focus(); }, [keyboardRequest]);
 
   return (
     <div className="screen" data-control={hasControl}>
       <canvas ref={canvasRef} className="screen-canvas" aria-label="Browser screen" />
-      <textarea ref={textRef} className="keyboard-sink" aria-label="Keyboard input" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
-      {!hasControl && <div className="screen-hint">Take control to interact</div>}
+      <textarea ref={keyboardRef} className="keyboard-sink" aria-label="Keyboard input" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
+      {!hasControl && <button type="button" className="screen-hint" data-variant="primary" data-size="sm" onClick={onTake}>Take control to interact</button>}
     </div>
   );
 }

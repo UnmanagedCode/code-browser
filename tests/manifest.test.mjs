@@ -79,3 +79,10 @@ test('descriptions explain attached browsers', () => {
   for (const name of ['list_browsers', 'browser_info']) assert.match(desc(name), /attached/, name);
   assert.match(desc('browser_info'), /asksApproval/);
 });
+
+// Invariant: the panel is called one thing everywhere it names itself: manifest name, nav label and page title.
+test('the nav label and the page title equal the manifest name', () => {
+  assert.equal(manifest.frontend.navLabel, manifest.name);
+  const html = fs.readFileSync(new URL('../frontend/index.html', import.meta.url), 'utf8');
+  assert.equal(html.match(/<title>([^<]*)<\/title>/)?.[1], manifest.name);
+});

@@ -16,14 +16,14 @@ export function DialogPrompt({ dialog, hasControl, onAnswer, onTake }: Props) {
         {/* The backdrop covers the controller bar, so the dialog must offer taking control itself. */}
         {!hasControl && (
           <p className="hint">
-            Take control to answer. <button type="button" onClick={onTake}>Take control</button>
+            Take control to answer. <button type="button" data-size="sm" onClick={onTake}>Take control</button>
           </p>
         )}
         <div className="dialog-buttons">
           {dialog.dialogType !== 'alert' && (
-            <button type="button" disabled={!hasControl} onClick={() => onAnswer('dismiss')}>Cancel</button>
+            <button type="button" data-variant="ghost" disabled={!hasControl} onClick={() => onAnswer('dismiss')}>Cancel</button>
           )}
-          <button type="button" disabled={!hasControl} onClick={() => onAnswer('accept', dialog.dialogType === 'prompt' ? text : undefined)}>OK</button>
+          <button type="button" data-variant="primary" disabled={!hasControl} onClick={() => onAnswer('accept', dialog.dialogType === 'prompt' ? text : undefined)}>OK</button>
         </div>
       </div>
     </div>

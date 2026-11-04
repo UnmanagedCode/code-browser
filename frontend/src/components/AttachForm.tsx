@@ -54,7 +54,7 @@ export function AttachForm({ draft, onAttached, onError }: Props) {
         <label><input type="radio" name="via" checked={form.via === 'direct'} onChange={() => set({ via: 'direct' })} /> On this machine — direct</label>
       </fieldset>
       {form.via === 'proxy' && <p className="hint">The proxy forwards only to port {DEFAULT_PORTS} unless it was started with --ports.</p>}
-      <button type="submit">Attach</button>
+      <button type="submit" data-variant="primary">Attach</button>
     </form>
   );
 }

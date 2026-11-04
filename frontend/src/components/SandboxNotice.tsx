@@ -22,13 +22,13 @@ export function SandboxNotice({ summary, onError }: Props) {
       {summary.allowUnsandboxed ? (
         <>
           <p>Allowed to run without the sandbox (turn it off in the browser list).</p>
-          <button type="button" onClick={() => { api.startBrowser(summary.name).catch(fail); }}>Start</button>
+          <button type="button" data-variant="primary" onClick={() => { api.startBrowser(summary.name).catch(fail); }}>Start</button>
         </>
       ) : confirming ? (
         <div className="sandbox-confirm" role="group" aria-label="Confirm running without the sandbox">
           <p>Only allow this if you trust every page this browser will visit.</p>
-          <button type="button" onClick={() => { api.setAllowUnsandboxed(summary.name, true).then(() => setConfirming(false)).catch((e: Error) => onError(e.message)); }}>Allow</button>
-          <button type="button" onClick={() => setConfirming(false)}>Cancel</button>
+          <button type="button" data-variant="primary" onClick={() => { api.setAllowUnsandboxed(summary.name, true).then(() => setConfirming(false)).catch((e: Error) => onError(e.message)); }}>Allow</button>
+          <button type="button" data-variant="ghost" onClick={() => setConfirming(false)}>Cancel</button>
         </div>
       ) : (
         <button type="button" onClick={() => setConfirming(true)}>Allow without sandbox…</button>

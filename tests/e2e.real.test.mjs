@@ -240,7 +240,7 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
       await waitFor(async () => (await canvasInfo(p1)).seq > before.seq, { what: 'frame seq to increase on viewer 1', timeout: 10_000 });
       assert.deepEqual(errors, []);
 
-      await p1.getByRole('button', { name: 'Take control' }).click();
+      await p1.getByRole('button', { name: 'Take control', exact: true }).click();
       await p1.getByText('You have control').waitFor();
       const btn = await clientPoint(p1, 200, 140);
       await p1.mouse.click(btn.x, btn.y);
@@ -316,6 +316,15 @@ console.log(await page.textContent('#result'));`);
       assert.equal((await rest('POST', 'e2e/stop')).status, 200);
       assert.equal((await rest('POST', 'e2e/start')).status, 200);
       assert.equal(await agent(`console.log((await context.cookies('http://example.test/')).length);`), '1');
+
+      // The viewer's own Stop stops the browser and the panel then offers Start; start it again for the steps after.
+      const viewer = await (await panel.newContext({ viewport: { width: 1000, height: 800 } })).newPage();
+      await viewer.goto(`http://127.0.0.1:${backend.port}/?browser=e2e`);
+      await viewer.getByRole('button', { name: 'Stop', exact: true }).click();
+      await viewer.getByText('This browser is stopped.').waitFor({ timeout: 20_000 });
+      assert.equal((await listed()).status, 'stopped');
+      await viewer.close();
+      assert.equal((await rest('POST', 'e2e/start')).status, 200);
     });
 
     await t.test('9. a human revokes in the panel (stopping the browser), then delete removes profile and opt-in', async () => {
@@ -377,7 +386,7 @@ console.log(await page.textContent('#result'));`);
       const viewer = await newPage();
       await viewer.goto(`http://127.0.0.1:${backend.port}/?browser=mine`);
       await viewer.waitForSelector('canvas[data-frame-seq]', { timeout: 20_000 });
-      await viewer.getByRole('button', { name: 'Take control' }).click();
+      await viewer.getByRole('button', { name: 'Take control', exact: true }).click();
       await viewer.getByText('You have control').waitFor();
       const btn = await clientPoint(viewer, 200, 140);
       await viewer.mouse.click(btn.x, btn.y);
