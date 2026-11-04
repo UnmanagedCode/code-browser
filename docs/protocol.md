@@ -133,7 +133,7 @@ Error codes: `UNKNOWN_TOOL`, `INVALID_NAME`, `NOT_FOUND`, `NOT_RUNNING` (for an 
 | `type` | Fields |
 |---|---|
 | `browsers` | `list: [summary]`, on `hello` and on every change |
-| `state` | `name, status, sandbox` (`null` for an attached browser)`, controller: {kind:"agent"} \| {kind:"human", you: boolean}, tabs: [{targetId,url,title}], activeTabId, canGoBack, canGoForward`; on `view` and on every change. A browser that stops sends `{name, status:"stopped"}` and the viewer is un-viewed. |
+| `state` | `name, status, sandbox` (`null` for an attached browser)`, controller: {kind:"agent"} \| {kind:"human", you: boolean}, tabs: [{targetId,url,title,windowId}] (`windowId` is `null` until known), activeTabId, recentTabIds (tab ids, most recently shown through code-browser first), canGoBack, canGoForward`; on `view` and on every change. A browser that stops sends `{name, status:"stopped"}` and the viewer is un-viewed. |
 | `dialog` | `tabId, dialogType` (`alert`\|`confirm`\|`prompt`\|`beforeunload`), `message, defaultPrompt`; a pending dialog is replayed to a viewer that joins late |
 | `dialogClosed` | `tabId` |
 | `error` | `code, message`: `BAD_REQUEST`, `NOT_CONTROLLER`, `NOT_VIEWING`, `NOT_RUNNING`, `INVALID_NAME`, `INVALID_INPUT`, `BAD_URL`, `NO_TAB`, `NO_DIALOG`, `INTERNAL` |

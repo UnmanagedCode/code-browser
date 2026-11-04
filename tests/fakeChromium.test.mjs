@@ -32,3 +32,30 @@ for (const approval of [false, true]) {
     }
   });
 }
+
+// Invariant: like Chromium, the fake changes a title without announcing it (getTargets shows it; no targetInfoChanged),
+// and reports each tab's window, with newWindow targets getting a distinct one.
+test('Fake.setTitle is silent; windows are reported per target', async () => {
+  const f = await externalFake();
+  try {
+    const c = await f.agent();
+    const events = [];
+    c.on('event', (e) => events.push(e.method));
+    await c.send('Target.setDiscoverTargets', { discover: true });
+    const { targetInfos: [first] } = await c.send('Target.getTargets');
+    const { targetId: far } = await c.send('Target.createTarget', { url: 'about:blank', newWindow: true });
+    const { targetId: near } = await c.send('Target.createTarget', { url: 'about:blank' });
+    events.length = 0;
+    await c.send('Fake.setTitle', { targetId: first.targetId, title: 'New' });
+    const { targetInfos } = await c.send('Target.getTargets');
+    assert.equal(targetInfos.find((t) => t.targetId === first.targetId).title, 'New');
+    assert.ok(!events.includes('Target.targetInfoChanged'));
+    const win = async (targetId) => (await c.send('Browser.getWindowForTarget', { targetId })).windowId;
+    assert.equal(await win(first.targetId), await win(near));
+    assert.notEqual(await win(far), await win(first.targetId));
+    await assert.rejects(c.send('Browser.getWindowForTarget', { targetId: 'nope' }));
+    c.close();
+  } finally {
+    await f.kill();
+  }
+});

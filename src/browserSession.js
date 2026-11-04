@@ -2,7 +2,8 @@ import { EventEmitter } from 'node:events';
 import { createController } from './controller.js';
 import { CodedError } from './errors.js';
 import { inputToCdp, normalizeUrl } from './input.js';
-import { MAX_PROMPT_TEXT } from './limits.js';
+import { MAX_PROMPT_TEXT, TAB_SWEEP_MS } from './limits.js';
+import { unrefTimeout } from './schedule.js';
 import { createScreencast } from './screencast.js';
 import { emptyTabs, reduceTabs } from './tabs.js';
 
@@ -16,7 +17,11 @@ const isPage = (ti) => ti.type === 'page' && !ti.subtype;
 // `attached`: the browser is a person's own (attached in the panel). Its existing tabs are seeded without
 // becoming active, a tab is brought to the front only when someone starts watching it, and closing the last
 // tab opens nothing.
-export function createBrowserSession({ name, cdp, sandbox, attached = false, log = console, controllerOptions = {}, screencastOptions = {} }) {
+//
+// Chromium sends no Target.targetInfoChanged when a page's title commits or changes, so a running session re-reads
+// the target list every `sweep.intervalMs` and updates titles only.
+export function createBrowserSession({ name, cdp, sandbox, attached = false, log = console, controllerOptions = {}, screencastOptions = {}, sweep = {} }) {
+  const { intervalMs = TAB_SWEEP_MS, schedule = unrefTimeout } = sweep;
   const events = new EventEmitter();
   const controller = createController({ ...controllerOptions, onChange: () => events.emit('change') });
   const warn = (what) => (err) => { if (!disposed) log.warn(`code-browser: '${name}' ${what}: ${err.message}`); };
@@ -34,6 +39,7 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
   const tabOfSession = new Map();
   const attaching = new Map(); // targetId -> promise of its page session id (null when the attach failed)
   const dialogs = new Map();
+  let cancelSweep = null;
 
   // A listed tab may still be attaching: an action on it waits for its page session rather than failing.
   const callOn = async (tabId, method, params) => {
@@ -67,7 +73,9 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
 
   function apply(ev) {
     const before = tabs.activeId;
+    const prev = tabs;
     tabs = reduceTabs(tabs, ev, controller.kind());
+    if (tabs === prev) return;
     if (tabs.activeId !== before) {
       syncScreencast();
       if (tabs.activeId) {
@@ -76,6 +84,26 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
       }
     }
     events.emit('change');
+  }
+
+  function refreshWindow(targetId) {
+    cdp.send('Browser.getWindowForTarget', { targetId })
+      .then(({ windowId }) => apply({ type: 'window', targetId, windowId }))
+      .catch(warn(`window of ${targetId}`));
+  }
+
+  function scheduleSweep() {
+    if (disposed) return;
+    cancelSweep = schedule(async () => {
+      cancelSweep = null;
+      try {
+        const { targetInfos } = await cdp.send('Target.getTargets');
+        if (!disposed) apply({ type: 'synced', infos: targetInfos.filter(isPage) });
+      } catch (err) {
+        warn('tab sweep')(err);
+      }
+      scheduleSweep();
+    }, intervalMs);
   }
 
   function attach(targetId) {
@@ -114,9 +142,13 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
         // newly active tab) waits for it.
         attach(params.targetInfo.targetId);
         apply({ type: 'created', targetId: params.targetInfo.targetId, url: params.targetInfo.url, title: params.targetInfo.title });
+        refreshWindow(params.targetInfo.targetId);
         return;
       case 'Target.targetInfoChanged':
-        if (isPage(params.targetInfo)) apply({ type: 'changed', targetId: params.targetInfo.targetId, url: params.targetInfo.url, title: params.targetInfo.title });
+        if (!isPage(params.targetInfo)) return;
+        apply({ type: 'changed', targetId: params.targetInfo.targetId, url: params.targetInfo.url, title: params.targetInfo.title });
+        // A tab dragged to another window is noticed when it next navigates.
+        if (tabs.tabs.some((t) => t.targetId === params.targetInfo.targetId)) refreshWindow(params.targetInfo.targetId);
         return;
       case 'Target.targetDestroyed':
         if (!tabs.tabs.some((t) => t.targetId === params.targetId)) return;
@@ -162,19 +194,24 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
         for (const ti of targetInfos.filter(isPage)) {
           attach(ti.targetId);
           apply({ type: 'created', background: true, targetId: ti.targetId, url: ti.url, title: ti.title });
+          refreshWindow(ti.targetId);
         }
       }
       await cdp.send('Target.setDiscoverTargets', { discover: true });
+      scheduleSweep();
     },
     dispose() {
       disposed = true;
+      cancelSweep?.();
+      cancelSweep = null;
       cdp.off('event', onEventBound);
     },
     snapshot: () => ({
       name,
       status: 'running',
       sandbox,
-      tabs: tabs.tabs.map(({ targetId, url, title }) => ({ targetId, url, title })),
+      tabs: tabs.tabs.map(({ targetId, url, title, windowId }) => ({ targetId, url, title, windowId })),
+      recentTabIds: [...tabs.mru],
       activeTabId: tabs.activeId,
       ...nav,
     }),

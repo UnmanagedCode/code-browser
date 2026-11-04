@@ -1,7 +1,8 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useMediaQuery } from '../useMediaQuery';
 import type { BrowserState, BrowserSummary, DialogInfo } from '../protocol';
 import type { ViewerSocket } from '../socket';
+import { tabHost, tabLabel } from '../tabs';
 import { ALLOW_HINT } from './BrowserList';
 import { ControllerBar } from './ControllerBar';
 import { DialogPrompt } from './DialogPrompt';
@@ -28,6 +29,7 @@ export function Viewer({ name, socket, state, dialogs, summary, onError, onBack,
   const keyboardRef = useRef<HTMLTextAreaElement>(null);
   const [keyboardActive, setKeyboardActive] = useState(false);
   const touch = useMediaQuery('(any-pointer: coarse)');
+  const [switcherRequest, setSwitcherRequest] = useState(0);
   const running = state?.status === 'running';
   const controller = state?.controller ?? { kind: 'agent' as const };
   const hasControl = controller.kind === 'human' && controller.you;
@@ -36,7 +38,9 @@ export function Viewer({ name, socket, state, dialogs, summary, onError, onBack,
   // The screen is mounted only while the browser runs and a tab is selected.
   const showScreen = running && !(tabs.length > 0 && !state?.activeTabId);
   const stopLabel = summary?.kind === 'attached' ? 'Disconnect' : 'Stop';
+  const dialogTabIds = useMemo(() => new Set(dialogs.map((d) => d.tabId)), [dialogs]);
   const dialog = dialogs.find((d) => d.tabId === state?.activeTabId) ?? dialogs[0];
+  const dialogTab = dialog ? tabs.find((t) => t.targetId === dialog.tabId) : undefined;
 
   return (
     <div className="viewer">
@@ -92,6 +96,9 @@ export function Viewer({ name, socket, state, dialogs, summary, onError, onBack,
           <TabStrip
             tabs={tabs}
             activeTabId={state?.activeTabId ?? null}
+            recentTabIds={state?.recentTabIds ?? []}
+            dialogTabIds={dialogTabIds}
+            switcherRequest={switcherRequest}
             hasControl={hasControl}
             onActivate={(tabId) => socket.send({ msg: 'tab', action: 'activate', tabId })}
             onClose={(tabId) => socket.send({ msg: 'tab', action: 'close', tabId })}
@@ -104,12 +111,21 @@ export function Viewer({ name, socket, state, dialogs, summary, onError, onBack,
           />
           {showScreen
             ? <Screen socket={socket} hasControl={hasControl} keyboardRef={keyboardRef} onKeyboardActive={setKeyboardActive} onTake={() => socket.send({ msg: 'control', action: 'take' })} />
-            : <p className="stopped" role="status">Select a tab to watch it.</p>}
+            : (
+              <div className="stopped" role="status">
+                <p>Select a tab to watch it.</p>
+                <button type="button" data-variant="primary" onClick={() => setSwitcherRequest((n) => n + 1)}>Find a tab…</button>
+              </div>
+            )}
           {dialog && (
             <DialogPrompt
               key={dialog.tabId}
               dialog={dialog}
               hasControl={hasControl}
+              tabLabel={dialogTab ? tabLabel(dialogTab) : null}
+              tabHost={dialogTab ? tabHost(dialogTab.url) : ''}
+              shown={dialog.tabId === state?.activeTabId}
+              onShowTab={() => socket.send({ msg: 'tab', action: 'activate', tabId: dialog.tabId })}
               onTake={() => socket.send({ msg: 'control', action: 'take' })}
               onAnswer={(action, promptText) => socket.send({ msg: 'dialog', tabId: dialog.tabId, action, ...(promptText === undefined ? {} : { promptText }) })}
             />

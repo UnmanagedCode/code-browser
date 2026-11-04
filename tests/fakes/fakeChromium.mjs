@@ -8,7 +8,10 @@
 // /devtools/browser[/<id>] upgrade is held until a test answers it: `PUT /fake/approval?answer=allow|deny`;
 // `GET /fake/approval` gives {pending}).
 // Test-only CDP methods (Fake.getState lists every Target.activateTarget as `activations`, and counts open CDP
-// `connections`, the caller's included): Fake.crash, Fake.getRecorded, Fake.navigateTarget, Fake.emitFrame, Fake.getState, Fake.openDialog.
+// `connections`, the caller's included): Fake.crash, Fake.getRecorded, Fake.navigateTarget, Fake.emitFrame, Fake.getState, Fake.openDialog,
+// Fake.setTitle ({targetId, title}: changes the title WITHOUT a Target.targetInfoChanged, as Chromium does when a page's
+// title commits; Target.getTargets shows it). Targets have a `windowId` (1; Target.createTarget with newWindow: true
+// takes the next id), answered by Browser.getWindowForTarget.
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -96,13 +99,15 @@ const recorded = [];
 const activations = []; // every Target.activateTarget, in order
 let activeTarget = null;
 let nextTarget = 1;
+let nextWindow = 1;
 let nextSession = 1;
 
 const info = (t) => ({ targetId: t.targetId, type: t.type, url: t.url, title: t.title, attached: false });
 const broadcast = (method, params) => { for (const ws of discoverers) ws.send(JSON.stringify({ method, params })); };
 
-function newTarget(url) {
-  const t = { targetId: `T${nextTarget++}`, type: 'page', url, title: '', history: [url], index: 0 };
+function newTarget(url, { newWindow = false } = {}) {
+  const windowId = newWindow ? ++nextWindow : 1;
+  const t = { targetId: `T${nextTarget++}`, type: 'page', url, title: '', history: [url], index: 0, windowId };
   targets.set(t.targetId, t);
   activeTarget = t.targetId;
   broadcast('Target.targetCreated', { targetInfo: info(t) });
@@ -152,6 +157,11 @@ function handle(ws, msg) {
       process.kill(process.pid, 'SIGSEGV');
       return undefined;
     case 'Fake.getRecorded': return reply({ recorded });
+    case 'Fake.setTitle': targets.get(params.targetId).title = params.title; return reply();
+    case 'Browser.getWindowForTarget': {
+      const t = targets.get(params.targetId);
+      return t ? reply({ windowId: t.windowId }) : fail('No target with given id');
+    }
     case 'Fake.navigateTarget': setUrl(targets.get(params.targetId), params.url); return reply();
     case 'Fake.emitFrame': markChange(params.targetId); return reply();
     case 'Fake.getState': return reply({ activeTarget, activations, connections: wss.clients.size, targets: [...targets.values()].map(info), sessions: [...sessions.keys()] });
@@ -167,7 +177,7 @@ function handle(ws, msg) {
       for (const t of targets.values()) ws.send(JSON.stringify({ method: 'Target.targetCreated', params: { targetInfo: info(t) } }));
       return undefined;
     case 'Target.getTargets': return reply({ targetInfos: [...targets.values()].map(info) });
-    case 'Target.createTarget': return reply({ targetId: newTarget(params.url ?? 'about:blank').targetId });
+    case 'Target.createTarget': return reply({ targetId: newTarget(params.url ?? 'about:blank', { newWindow: params.newWindow === true }).targetId });
     case 'Target.closeTarget':
       if (!targets.delete(params.targetId)) return fail('No target with given id');
       for (const [id, x] of sessions) if (x.targetId === params.targetId) sessions.delete(id);

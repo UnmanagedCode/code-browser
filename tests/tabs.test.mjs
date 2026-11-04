@@ -76,3 +76,48 @@ test('a background tab is added without becoming active', () => {
   assert.deepEqual(s.mru, []);
   assert.equal(run([created('A')], 'agent', s).activeId, 'A');
 });
+
+const synced = (...infos) => ({ type: 'synced', infos });
+
+for (const controller of ['agent', 'human']) {
+  // Invariant: a swept title lands on the tab without activating anything or touching the MRU order, whoever has control.
+  test(`synced sets a background tab's title without activating it (${controller})`, () => {
+    const base = run([created('A', 'https://a.test/'), created('B', 'https://b.test/')], controller);
+    const s = reduceTabs(base, synced({ targetId: 'A', url: 'https://a.test/', title: 'Fresh' }), controller);
+    assert.equal(s.tabs[0].title, 'Fresh');
+    assert.equal(s.activeId, 'B');
+    assert.deepEqual(s.mru, base.mru);
+  });
+}
+
+// Invariant: a sweep never owns URL changes (targetInfoChanged does, with the agent-follow rule) and ignores unknown targets.
+test('synced ignores unknown ids and entries whose url differs', () => {
+  const base = run([created('A', 'https://a.test/')]);
+  const s = reduceTabs(base, synced({ targetId: 'Z', url: 'x', title: 't' }, { targetId: 'A', url: 'https://moved.test/', title: 't' }), 'agent');
+  assert.equal(s, base);
+});
+
+// Invariant: a no-op sync or window event returns the identical state, so the session emits no change.
+test('synced and window return the same state when nothing changes', () => {
+  const base = reduceTabs(run([created('A', 'https://a.test/')]), { type: 'window', targetId: 'A', windowId: 3 }, 'agent');
+  assert.equal(reduceTabs(base, synced({ targetId: 'A', url: 'https://a.test/', title: '' }), 'agent'), base);
+  assert.equal(reduceTabs(base, { type: 'window', targetId: 'A', windowId: 3 }, 'agent'), base);
+  assert.equal(reduceTabs(base, { type: 'window', targetId: 'Z', windowId: 3 }, 'agent'), base);
+});
+
+// Invariant: a tab's window is unknown (null) until a window event sets it.
+test('window sets windowId; created tabs start with null', () => {
+  const s = run([created('A')]);
+  assert.equal(s.tabs[0].windowId, null);
+  assert.equal(reduceTabs(s, { type: 'window', targetId: 'A', windowId: 2 }, 'agent').tabs[0].windowId, 2);
+});
+
+// Invariant: a target-info change never clears the tab's window (only a `window` event sets it), and one that carries
+// nothing new returns the identical state so no viewer is woken.
+test('changed keeps windowId and is a no-op when url and title are unchanged', () => {
+  const base = reduceTabs(run([created('A', 'https://a.test/')]), { type: 'window', targetId: 'A', windowId: 4 }, 'agent');
+  const moved = reduceTabs(base, changed('A', 'https://a.test/next'), 'agent');
+  assert.equal(moved.tabs[0].windowId, 4);
+  assert.equal(moved.tabs[0].url, 'https://a.test/next');
+  assert.equal(reduceTabs(moved, changed('A', 'https://a.test/next'), 'agent'), moved);
+});
