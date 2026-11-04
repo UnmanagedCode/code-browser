@@ -23,7 +23,7 @@ export function DialogPrompt({ dialog, hasControl, tabLabel, tabHost, shown, onS
         {tabLabel !== null && (
           <p className="dialog-source">
             From tab: <strong>{tabLabel}</strong>{tabHost && <> — <span className="dialog-host">{tabHost}</span></>}
-            {!shown && <> <button type="button" onClick={onShowTab}>Show tab</button></>}
+            {!shown && <> <button type="button" data-size="sm" onClick={onShowTab}>Show tab</button></>}
           </p>
         )}
         <p className="dialog-message">{dialog.message}</p>

@@ -56,7 +56,7 @@ export function TabStrip({ tabs, activeTabId, recentTabIds, dialogTabIds, hasCon
 
   return (
     <div className="tab-bar">
-      <button type="button" ref={triggerRef} className="tab-switcher-trigger" title="Search tabs" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button type="button" ref={triggerRef} className="tab-switcher-trigger" data-size="sm" data-tip="Search tabs" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         {`${tabs.length} tabs…`}
       </button>
       <div className="tab-strip" role="tablist" aria-label="Browser tabs" onKeyDown={onKeyDown}>
@@ -71,7 +71,7 @@ export function TabStrip({ tabs, activeTabId, recentTabIds, dialogTabIds, hasCon
                 ref={(el) => { if (el) tabEls.current.set(t.targetId, el); else tabEls.current.delete(t.targetId); }}
                 aria-selected={active}
                 tabIndex={t.targetId === tabStop ? 0 : -1}
-                title={`${label}\n${t.url}`}
+                data-tip={`${label} · ${t.url}`}
                 onClick={() => onActivate(t.targetId)}
               >
                 <span className="tab-label">{label}</span>

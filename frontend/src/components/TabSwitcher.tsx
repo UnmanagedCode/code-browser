@@ -17,7 +17,7 @@ interface Props {
 export const SHARED_TIP = "Everyone watching sees this tab; the agent's next script starts on it";
 
 // The badges' accessible names are fixed text in parentheses, which a page title is unlikely to pass off as a badge.
-export const SharedBadge = () => <span className="tab-badge" data-kind="shared" role="img" aria-label="(shared with agent)" title={SHARED_TIP}>Shared</span>;
+export const SharedBadge = () => <span className="tab-badge" data-kind="shared" role="img" aria-label="(shared with agent)" data-tip={SHARED_TIP}>Shared</span>;
 export const DialogBadge = () => <span className="tab-badge" data-kind="dialog" role="img" aria-label="(has open dialog)">Dialog</span>;
 
 type Mode = 'window' | 'recent';
@@ -93,7 +93,7 @@ export function TabSwitcher({ tabs, activeTabId, recentTabIds, dialogTabIds, sho
         {t.targetId === activeTabId && <SharedBadge />}
         {dialogTabIds.has(t.targetId) && <DialogBadge />}
         {mode === 'recent' && windowOf.get(t.targetId) != null && groups.length > 1 && <span className="tab-badge">{`Window ${windowOf.get(t.targetId)}`}</span>}
-        <span className="tab-option-host" title={t.url}>{tabDetail(t.url)}</span>
+        <span className="tab-option-host" data-tip={t.url}>{tabDetail(t.url)}</span>
       </li>
     );
   };
