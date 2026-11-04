@@ -19,7 +19,9 @@ export function reduceTabs(state, ev, controller) {
     case 'changed': {
       const prev = state.tabs.find((t) => t.targetId === ev.targetId);
       if (!prev) return state;
-      const tabs = state.tabs.map((t) => (t === prev ? { ...t, url: ev.url, title: ev.title, windowId: null } : t));
+      if (prev.url === ev.url && prev.title === ev.title) return state;
+      // The window is kept: only a `window` event changes it.
+      const tabs = state.tabs.map((t) => (t === prev ? { ...t, url: ev.url, title: ev.title } : t));
       const next = { ...state, tabs };
       // The agent navigating a background tab pulls the view to it; a human driving does not.
       return controller === 'agent' && ev.url !== prev.url && state.activeId !== ev.targetId ? activate(next, ev.targetId) : next;

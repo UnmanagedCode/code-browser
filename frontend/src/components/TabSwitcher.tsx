@@ -16,8 +16,14 @@ interface Props {
 
 export const SHARED_TIP = "Everyone watching sees this tab; the agent's next script starts on it";
 
+// The badges' accessible names are fixed text in parentheses, which a page title is unlikely to pass off as a badge.
+export const SharedBadge = () => <span className="tab-badge" data-kind="shared" role="img" aria-label="(shared with agent)" title={SHARED_TIP}>Shared</span>;
+export const DialogBadge = () => <span className="tab-badge" data-kind="dialog" role="img" aria-label="(has open dialog)">Dialog</span>;
+
 type Mode = 'window' | 'recent';
 const PAGE = 10;
+
+const count = (shown: number, total: number) => (shown === total ? `${total} ${total === 1 ? 'tab' : 'tabs'}` : `${shown} of ${total} tabs`);
 
 // A searchable list of every tab, by window or by recent use. Page-controlled text is only ever rendered as React text,
 // and element ids never derive from it.
@@ -34,7 +40,7 @@ export function TabSwitcher({ tabs, activeTabId, recentTabIds, dialogTabIds, sho
   const groups = windowGroups(visible);
   const windowOf = new Map(groups.flatMap((g) => g.tabs.map((t) => [t.targetId, g.number] as const)));
   const matches = (t: Tab) => matchesQuery(t, query);
-  const shownGroups = groups.map((g) => ({ ...g, tabs: g.tabs.filter(matches) })).filter((g) => g.tabs.length > 0);
+  const shownGroups = groups.map((g) => ({ ...g, total: g.tabs.length, tabs: g.tabs.filter(matches) })).filter((g) => g.tabs.length > 0);
   const grouped = mode === 'window' && groups.length > 1;
   const items = grouped ? shownGroups.flatMap((g) => g.tabs) : mode === 'recent' ? recentOrder(visible, recentTabIds).filter(matches) : visible.filter(matches);
   const hiddenInternal = tabs.filter((t) => isInternal(t.url) && t.targetId !== activeTabId).length;
@@ -57,13 +63,14 @@ export function TabSwitcher({ tabs, activeTabId, recentTabIds, dialogTabIds, sho
 
   const pick = (id: string) => { onPick(id); onClose(true); };
   const move = (to: number) => setHighlight(Math.max(0, Math.min(items.length - 1, to)));
-  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+  // On the whole popover, so the keys keep working after a click on the sort or browser-pages controls.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     switch (e.key) {
       case 'ArrowDown': e.preventDefault(); move(hi + 1); break;
       case 'ArrowUp': e.preventDefault(); move(hi - 1); break;
       case 'PageDown': e.preventDefault(); move(hi + PAGE); break;
       case 'PageUp': e.preventDefault(); move(hi - PAGE); break;
-      case 'Enter': e.preventDefault(); if (hi >= 0) pick(items[hi].targetId); break;
+      case 'Enter': if (e.target === inputRef.current) { e.preventDefault(); if (hi >= 0) pick(items[hi].targetId); } break;
       case 'Escape': e.preventDefault(); onClose(true); break;
       default:
     }
@@ -83,9 +90,9 @@ export function TabSwitcher({ tabs, activeTabId, recentTabIds, dialogTabIds, sho
         onClick={() => pick(t.targetId)}
       >
         <span className="tab-option-label">{label}</span>
-        {t.targetId === activeTabId && <span className="tab-badge" data-kind="shared" title={SHARED_TIP}>Shared</span>}
-        {dialogTabIds.has(t.targetId) && <span className="tab-badge" data-kind="dialog">Dialog</span>}
-        {mode === 'recent' && groups.length > 1 && <span className="tab-badge">{`Window ${windowOf.get(t.targetId)}`}</span>}
+        {t.targetId === activeTabId && <SharedBadge />}
+        {dialogTabIds.has(t.targetId) && <DialogBadge />}
+        {mode === 'recent' && windowOf.get(t.targetId) != null && groups.length > 1 && <span className="tab-badge">{`Window ${windowOf.get(t.targetId)}`}</span>}
         <span className="tab-option-host" title={t.url}>{tabDetail(t.url)}</span>
       </li>
     );
@@ -93,7 +100,7 @@ export function TabSwitcher({ tabs, activeTabId, recentTabIds, dialogTabIds, sho
 
   let index = 0;
   return (
-    <div className="tab-switcher" role="dialog" aria-label="Search tabs" ref={rootRef}>
+    <div className="tab-switcher" role="dialog" aria-label="Search tabs" ref={rootRef} onKeyDown={onKeyDown}>
       <p className="hint">Choosing a tab shows it to everyone watching, and the agent&apos;s next script starts on it.</p>
       <input
         ref={inputRef}
@@ -106,7 +113,6 @@ export function TabSwitcher({ tabs, activeTabId, recentTabIds, dialogTabIds, sho
         aria-activedescendant={hi >= 0 ? optionId(hi) : undefined}
         value={query}
         onChange={(e) => { setQuery(e.target.value); setHighlight(0); }}
-        onKeyDown={onKeyDown}
       />
       <div className="tab-switcher-options">
         <div role="radiogroup" aria-label="Sort tabs by">
@@ -125,8 +131,8 @@ export function TabSwitcher({ tabs, activeTabId, recentTabIds, dialogTabIds, sho
       <ul id={`${uid}-list`} role="listbox" aria-label="Tabs">
         {grouped
           ? shownGroups.map((g) => (
-            <li key={g.number} role="group" aria-labelledby={`${uid}-grp-${g.number}`}>
-              <span id={`${uid}-grp-${g.number}`} className="tab-switcher-heading">{`Window ${g.number} · ${g.tabs.length} tabs`}</span>
+            <li key={g.windowId ?? 'other'} role="group" aria-labelledby={`${uid}-grp-${g.windowId ?? 'other'}`}>
+              <span id={`${uid}-grp-${g.windowId ?? 'other'}`} className="tab-switcher-heading">{`${g.number === null ? 'Other tabs' : `Window ${g.number}`} · ${count(g.tabs.length, g.total)}`}</span>
               <ul role="presentation">{g.tabs.map((t) => renderOption(t, index++))}</ul>
             </li>
           ))

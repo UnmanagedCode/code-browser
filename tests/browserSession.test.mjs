@@ -346,3 +346,33 @@ test('a failed sweep is logged and the loop continues', async () => {
   assert.match(warns[0], /tab sweep: boom/);
   session.dispose();
 });
+
+// Invariant: disposing while a sweep's Target.getTargets is still pending means no change is emitted when it answers and
+// no further sweep is scheduled.
+test('dispose while a sweep is in flight neither applies it nor reschedules', async () => {
+  const targets = [{ targetId: 'T1', type: 'page', url: 'https://a.test/', title: '' }];
+  const cdp = listCdp(targets);
+  let release;
+  const send = cdp.send;
+  let held = false;
+  cdp.send = (method, params) => {
+    if (method === 'Target.getTargets' && held) return new Promise((resolve) => { release = () => resolve({ targetInfos: [{ ...targets[0], title: 'Late' }] }); });
+    return send(method, params);
+  };
+  const clock = fakeClock();
+  const session = createBrowserSession({ name: 'a', cdp, sandbox: true, log: { warn() {} }, sweep: { schedule: clock.schedule } });
+  await session.start();
+  cdp.emit('event', { method: 'Target.targetCreated', params: { targetInfo: targets[0] } });
+  await waitFor(() => session.snapshot().tabs[0]?.windowId !== null, { what: 'tab and window' });
+  held = true;
+  clock.advance(SWEEP);
+  await waitFor(() => release, { what: 'the sweep to be in flight' });
+  let changes = 0;
+  session.events.on('change', () => { changes += 1; });
+  session.dispose();
+  release();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(changes, 0);
+  assert.equal(session.snapshot().tabs[0].title, '');
+  assert.equal(clock.pending(), 0);
+});

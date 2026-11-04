@@ -44,24 +44,32 @@ export function tabLabel(tab: Tab): string {
   return tab.url;
 }
 
-// Every whitespace-separated term must appear (case-insensitively, as plain text) in the label or the URL.
+// Every whitespace-separated term must appear (case-insensitively, as plain text) in the tab's text. A word matches the
+// label or the whole URL, so site names are searchable. A purely numeric term matches only the real title and the URL's
+// path, query and fragment: it never matches the host or port, so `27` or `3000` does not select every loopback tab.
 export function matchesQuery(tab: Tab, query: string): boolean {
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const hay = `${tabLabel(tab)} ${tab.url}`.toLowerCase();
-  return terms.every((t) => hay.includes(t));
+  const words = `${tabLabel(tab)} ${tab.url}`.toLowerCase();
+  const u = parse(tab.url);
+  const numbers = `${isUrlTitle(tab.title, tab.url) ? '' : tab.title} ${u && HOSTED.includes(u.protocol) ? u.pathname + u.search + u.hash : tab.url}`.toLowerCase();
+  return terms.every((t) => (/^\d+$/.test(t) ? numbers : words).includes(t));
 }
 
-export interface WindowGroup { windowId: number | null; number: number; tabs: Tab[] }
+// `number` counts real windows from 1; the group of tabs whose window is unknown has none.
+export interface WindowGroup { windowId: number | null; number: number | null; tabs: Tab[] }
 
-// Tabs by window, windows in order of their first tab, numbered from 1; tabs of unknown window form one group.
+// Tabs by window, windows in order of their first tab and numbered from 1; tabs of unknown window form one
+// unnumbered group, last.
 export function windowGroups(tabs: Tab[]): WindowGroup[] {
   const groups: WindowGroup[] = [];
   for (const t of tabs) {
     let g = groups.find((x) => x.windowId === t.windowId);
-    if (!g) { g = { windowId: t.windowId, number: groups.length + 1, tabs: [] }; groups.push(g); }
+    if (!g) { g = { windowId: t.windowId, number: null, tabs: [] }; groups.push(g); }
     g.tabs.push(t);
   }
-  return groups;
+  const real = groups.filter((g) => g.windowId !== null);
+  real.forEach((g, i) => { g.number = i + 1; });
+  return [...real, ...groups.filter((g) => g.windowId === null)];
 }
 
 // Most recently used first, then the tabs the backend has not seen used, in list order.
@@ -84,5 +92,5 @@ export function visibleTabs(tabs: Tab[], showInternal: boolean, activeTabId: str
 // The muted second line of a switcher option: host and path of a network URL, else the whole URL.
 export function tabDetail(url: string): string {
   const u = parse(url);
-  return u && HOSTED.includes(u.protocol) ? u.host + u.pathname : url;
+  return u && HOSTED.includes(u.protocol) ? tabHost(url) + u.pathname : url;
 }

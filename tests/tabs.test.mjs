@@ -111,3 +111,13 @@ test('window sets windowId; created tabs start with null', () => {
   assert.equal(s.tabs[0].windowId, null);
   assert.equal(reduceTabs(s, { type: 'window', targetId: 'A', windowId: 2 }, 'agent').tabs[0].windowId, 2);
 });
+
+// Invariant: a target-info change never clears the tab's window (only a `window` event sets it), and one that carries
+// nothing new returns the identical state so no viewer is woken.
+test('changed keeps windowId and is a no-op when url and title are unchanged', () => {
+  const base = reduceTabs(run([created('A', 'https://a.test/')]), { type: 'window', targetId: 'A', windowId: 4 }, 'agent');
+  const moved = reduceTabs(base, changed('A', 'https://a.test/next'), 'agent');
+  assert.equal(moved.tabs[0].windowId, 4);
+  assert.equal(moved.tabs[0].url, 'https://a.test/next');
+  assert.equal(reduceTabs(moved, changed('A', 'https://a.test/next'), 'agent'), moved);
+});

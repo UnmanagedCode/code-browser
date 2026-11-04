@@ -323,7 +323,7 @@ await target.evaluate(() => { setTimeout(() => alert('from three'), 300); });`);
       const dialog = p1.getByRole('dialog', { name: 'Page dialog' });
       await dialog.getByText('from three').waitFor({ timeout: 10_000 });
       assert.match(await dialog.locator('.dialog-source').innerText(), /From tab: tab-03/);
-      await p1.getByRole('tab', { name: /tab-03.*Dialog/ }).waitFor();
+      await p1.getByRole('tab', { name: /tab-03.*\(has open dialog\)/ }).waitFor();
       await dialog.getByRole('button', { name: 'Show tab' }).click();
       await p1.getByRole('tab', { name: /tab-03/, selected: true }).waitFor({ timeout: 10_000 });
       await dialog.getByRole('button', { name: 'Take control' }).click();

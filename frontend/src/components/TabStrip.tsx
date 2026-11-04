@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { Tab } from '../protocol';
 import { tabLabel, visibleTabs, windowGroups } from '../tabs';
-import { SHARED_TIP, TabSwitcher } from './TabSwitcher';
+import { DialogBadge, SharedBadge, TabSwitcher } from './TabSwitcher';
 
 interface Props {
   tabs: Tab[];
@@ -75,8 +75,8 @@ export function TabStrip({ tabs, activeTabId, recentTabIds, dialogTabIds, hasCon
                 onClick={() => onActivate(t.targetId)}
               >
                 <span className="tab-label">{label}</span>
-                {dialogTabIds.has(t.targetId) && <span className="tab-badge" data-kind="dialog">Dialog</span>}
-                {active && <span className="tab-badge" data-kind="shared" title={SHARED_TIP}>Shared</span>}
+                {dialogTabIds.has(t.targetId) && <DialogBadge />}
+                {active && <SharedBadge />}
               </button>
               <button type="button" className="tab-close" data-variant="ghost" data-size="icon-sm" tabIndex={-1} aria-label={`Close tab ${label}`} data-tip={`Close tab ${label}`} disabled={!hasControl} onClick={() => onClose(t.targetId)}>×</button>
             </span>

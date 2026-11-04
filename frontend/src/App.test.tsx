@@ -350,7 +350,7 @@ describe('dialogs', () => {
     await f.emit(state({ tabs: [mkTab('T1', 'One'), mkTab('T2', 'Two')] }));
     await f.emit({ type: 'dialog', tabId: 'T2', dialogType: 'alert', message: 'hi', defaultPrompt: '' });
     const dialog = screen.getByRole('dialog', { name: 'Page dialog' });
-    expect(within(dialog).getByText('Two').closest('p')?.textContent).toMatch(/^From tab: Two/);
+    expect(within(dialog).getByText('Two').closest('p')?.textContent).toMatch(/^From tab: Two — t2\.test/);
     fireEvent.click(within(dialog).getByRole('button', { name: 'Show tab' }));
     expect(f.sent).toContainEqual({ msg: 'tab', action: 'activate', tabId: 'T2' });
     await f.emit(state({ tabs: [mkTab('T1', 'One'), mkTab('T2', 'Two')], activeTabId: 'T2' }));
@@ -877,7 +877,54 @@ describe('tab switcher', () => {
     await openViewer();
     await f.emit(state({ tabs: three }));
     await f.emit({ type: 'dialog', tabId: 'T2', dialogType: 'alert', message: 'hi', defaultPrompt: '' });
-    expect(screen.getByRole('tab', { name: /Alpha.*Shared/ })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: /Beta.*Dialog/ })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /Alpha.*\(shared with agent\)/ })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /Beta.*\(has open dialog\)/ })).toBeTruthy();
+  });
+
+  // Invariant: a page titled like a badge does not get the badge's accessible name.
+  it('a title that says "Shared" is not mistaken for the badge', async () => {
+    await openViewer();
+    await f.emit(state({ tabs: [mkTab('T1', 'Alpha'), mkTab('T2', 'Shared')] }));
+    expect(screen.getByRole('tab', { name: 'Shared' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /Alpha.*\(shared with agent\)/ })).toBeTruthy();
+  });
+
+  // Invariant: sort and browser-pages controls keep the keyboard working; Escape closes from any control inside.
+  it('arrows and Escape work after clicking Recent', async () => {
+    await open(three);
+    const recent = screen.getByRole('radio', { name: 'Recent' });
+    fireEvent.click(recent);
+    fireEvent.keyDown(recent, { key: 'ArrowDown' });
+    expect(search().getAttribute('aria-activedescendant')).toBe(screen.getAllByRole('option')[1].id);
+    fireEvent.keyDown(recent, { key: 'Enter' });
+    expect(f.sent.filter((m) => m.msg === 'tab')).toEqual([]);
+    fireEvent.keyDown(recent, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Search tabs' })).toBeNull();
+  });
+
+  // Invariant: the unknown-window group is named "Other tabs", never a numbered window; headings count matches clearly.
+  it('names the unknown-window group and counts filtered tabs', async () => {
+    await open([mkTab('T1', 'Alpha', undefined, 7), mkTab('T2', 'Beta', undefined, 9), mkTab('T3', 'Gamma', undefined, null), mkTab('T4', 'Beta two', undefined, 9)]);
+    expect(screen.getByRole('group', { name: 'Other tabs · 1 tab' })).toBeTruthy();
+    fireEvent.change(search(), { target: { value: 'two' } });
+    expect(screen.getByRole('group', { name: 'Window 2 · 1 of 2 tabs' })).toBeTruthy();
+  });
+
+  // Invariant: with several windows, Recent badges number real windows only.
+  it('Recent shows no Window badge for unknown-window tabs', async () => {
+    await open([mkTab('T1', 'Alpha', undefined, 7), mkTab('T2', 'Beta', undefined, null)]);
+    fireEvent.click(screen.getByRole('radio', { name: 'Recent' }));
+    const [first, second] = screen.getAllByRole('option');
+    expect(first.textContent).toContain('Window 1');
+    expect(second.textContent).not.toMatch(/Window/);
+  });
+
+  // Invariant: an attached browser with no tab picked offers the switcher from its empty state.
+  it('Find a tab… opens the switcher', async () => {
+    await openViewer();
+    await f.emit(state({ tabs: three, activeTabId: null }));
+    fireEvent.click(screen.getByRole('button', { name: 'Find a tab…' }));
+    expect(screen.getByRole('dialog', { name: 'Search tabs' })).toBeTruthy();
+    expect(document.activeElement).toBe(search());
   });
 });

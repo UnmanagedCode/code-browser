@@ -387,3 +387,23 @@ test('state carries windowId and recentTabIds; sweeps push fresh titles only whe
   clock.advance(1000);
   await v.waitFor((x) => x.last('state').tabs[0].title === 'Swept', 'swept title');
 });
+
+// Invariant: a navigation never blanks a tab's window in any state a viewer receives, and a target-info change that
+// carries nothing new pushes no state.
+test('navigation keeps windowId; an unchanged targetInfoChanged pushes nothing', async () => {
+  const { session, agent } = await boot();
+  await waitFor(() => session.snapshot().tabs[0].windowId !== null, { what: 'window id' });
+  const v = await stack.viewer();
+  await view(v);
+  await v.waitFor((x) => typeof x.last('state').tabs[0].windowId === 'number', 'window id in state');
+  const tab = v.last('state').activeTabId;
+  const from = v.of('state').length;
+  await agent.send('Fake.navigateTarget', { targetId: tab, url: 'https://moved.test/' });
+  await v.waitFor((x) => x.last('state').tabs[0].url === 'https://moved.test/', 'navigated state');
+  await sleep(100);
+  assert.ok(v.of('state').slice(from).every((m) => typeof m.tabs[0].windowId === 'number'), 'windowId never null after a navigation');
+  const count = v.of('state').length;
+  await agent.send('Fake.navigateTarget', { targetId: tab, url: 'https://moved.test/' });
+  await sleep(150);
+  assert.equal(v.of('state').length, count, 'a same-url targetInfoChanged pushes nothing');
+});

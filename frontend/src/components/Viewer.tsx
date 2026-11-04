@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useMediaQuery } from '../useMediaQuery';
 import type { BrowserState, BrowserSummary, DialogInfo } from '../protocol';
 import type { ViewerSocket } from '../socket';
-import { tabLabel } from '../tabs';
+import { tabHost, tabLabel } from '../tabs';
 import { ALLOW_HINT } from './BrowserList';
 import { ControllerBar } from './ControllerBar';
 import { DialogPrompt } from './DialogPrompt';
@@ -123,6 +123,7 @@ export function Viewer({ name, socket, state, dialogs, summary, onError, onBack,
               dialog={dialog}
               hasControl={hasControl}
               tabLabel={dialogTab ? tabLabel(dialogTab) : null}
+              tabHost={dialogTab ? tabHost(dialogTab.url) : ''}
               shown={dialog.tabId === state?.activeTabId}
               onShowTab={() => socket.send({ msg: 'tab', action: 'activate', tabId: dialog.tabId })}
               onTake={() => socket.send({ msg: 'control', action: 'take' })}
