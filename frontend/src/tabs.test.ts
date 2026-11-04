@@ -76,3 +76,10 @@ describe('windowGroups / recentOrder', () => {
     expect(recentOrder(tabs, []).map((t) => t.targetId)).toEqual(['a', 'b', 'c']);
   });
 });
+
+describe('stripBidi', () => {
+  // Invariant: a label never carries directional controls.
+  it('removes overrides, embeddings, isolates and marks from labels', () => {
+    expect(tabLabel(tab('a', 'https://x.test/', 'a\u202Eb\u2066c\u200Fd'))).toBe('abcd');
+  });
+});

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import type { Tab } from '../protocol';
-import { isInternal, matchesQuery, recentOrder, tabDetail, tabLabel, visibleTabs, windowGroups } from '../tabs';
+import { isInternal, matchesQuery, recentOrder, stripBidi, tabDetail, tabLabel, visibleTabs, windowGroups } from '../tabs';
 
 interface Props {
   tabs: Tab[];
@@ -14,7 +14,7 @@ interface Props {
   onClose(restoreFocus: boolean): void;
 }
 
-export const SHARED_TIP = "Everyone watching sees this tab; the agent's next script starts on it";
+const SHARED_TIP = "Everyone watching sees this tab; the agent's next script starts on it";
 
 // The badges' accessible names are fixed text in parentheses, which a page title is unlikely to pass off as a badge.
 export const SharedBadge = () => <span className="tab-badge" data-kind="shared" role="img" aria-label="(shared with agent)" data-tip={SHARED_TIP}>Shared</span>;
@@ -65,6 +65,8 @@ export function TabSwitcher({ tabs, activeTabId, recentTabIds, dialogTabIds, sho
   const move = (to: number) => setHighlight(Math.max(0, Math.min(items.length - 1, to)));
   // On the whole popover, so the keys keep working after a click on the sort or browser-pages controls.
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // On a sort radio the arrows are the radio group's own.
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && (e.target as HTMLElement).matches('input[type="radio"]')) return;
     switch (e.key) {
       case 'ArrowDown': e.preventDefault(); move(hi + 1); break;
       case 'ArrowUp': e.preventDefault(); move(hi - 1); break;
@@ -89,11 +91,11 @@ export function TabSwitcher({ tabs, activeTabId, recentTabIds, dialogTabIds, sho
         onMouseEnter={() => setHighlight(i)}
         onClick={() => pick(t.targetId)}
       >
-        <span className="tab-option-label">{label}</span>
+        <span className="tab-option-label"><bdi>{label}</bdi></span>
         {t.targetId === activeTabId && <SharedBadge />}
         {dialogTabIds.has(t.targetId) && <DialogBadge />}
         {mode === 'recent' && windowOf.get(t.targetId) != null && groups.length > 1 && <span className="tab-badge">{`Window ${windowOf.get(t.targetId)}`}</span>}
-        <span className="tab-option-host" data-tip={t.url}>{tabDetail(t.url)}</span>
+        <span className="tab-option-host" data-tip={stripBidi(t.url)}><bdi>{tabDetail(t.url)}</bdi></span>
       </li>
     );
   };

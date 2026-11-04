@@ -22,7 +22,7 @@ export function DialogPrompt({ dialog, hasControl, tabLabel, tabHost, shown, onS
       <div role="dialog" aria-modal="true" aria-label="Page dialog" className="dialog">
         {tabLabel !== null && (
           <p className="dialog-source">
-            From tab: <strong>{tabLabel}</strong>{tabHost && <> — <span className="dialog-host">{tabHost}</span></>}
+            From tab: <strong><bdi>{tabLabel}</bdi></strong>{tabHost && <> — <span className="dialog-host"><bdi>{tabHost}</bdi></span></>}
             {!shown && <> <button type="button" data-size="sm" onClick={onShowTab}>Show tab</button></>}
           </p>
         )}

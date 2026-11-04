@@ -894,7 +894,10 @@ describe('tab switcher', () => {
     await open(three);
     const recent = screen.getByRole('radio', { name: 'Recent' });
     fireEvent.click(recent);
-    fireEvent.keyDown(recent, { key: 'ArrowDown' });
+    const before = search().getAttribute('aria-activedescendant');
+    expect(fireEvent.keyDown(recent, { key: 'ArrowDown' }), 'the radio keeps its arrow keys').toBe(true);
+    expect(search().getAttribute('aria-activedescendant')).toBe(before);
+    fireEvent.keyDown(search(), { key: 'ArrowDown' });
     expect(search().getAttribute('aria-activedescendant')).toBe(screen.getAllByRole('option')[1].id);
     fireEvent.keyDown(recent, { key: 'Enter' });
     expect(f.sent.filter((m) => m.msg === 'tab')).toEqual([]);
@@ -926,5 +929,22 @@ describe('tab switcher', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Find a tab…' }));
     expect(screen.getByRole('dialog', { name: 'Search tabs' })).toBeTruthy();
     expect(document.activeElement).toBe(search());
+  });
+
+  // Invariant: a title with bidi controls cannot reorder the trusted text beside it: controls are stripped, and every
+  // page-derived label is isolated in its own element with the host span last.
+  it('bidi controls in a title do not reach or reorder the host', async () => {
+    const title = 'evil\u202E gnp.exe';
+    await openViewer();
+    await f.emit(state({ tabs: [mkTab('T1', 'Alpha'), mkTab('T2', title, 'https://t2.test/')] }));
+    await f.emit({ type: 'dialog', tabId: 'T2', dialogType: 'alert', message: 'hi', defaultPrompt: '' });
+    const source = document.querySelector('.dialog-source') as HTMLElement;
+    expect(source.textContent).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/);
+    expect(source.querySelector('strong > bdi')?.textContent).toBe('evil gnp.exe');
+    expect(source.querySelector('.dialog-host')?.compareDocumentPosition(source.querySelector('strong')!)).toBe(Node.DOCUMENT_POSITION_PRECEDING);
+    fireEvent.click(screen.getByRole('button', { name: /tabs…/ }));
+    expect(document.querySelectorAll('.tab-option-label bdi, .tab-label bdi').length).toBe(4);
+    const tip = screen.getByRole('tab', { name: /evil/ }).getAttribute('data-tip') ?? '';
+    expect(tip).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/);
   });
 });

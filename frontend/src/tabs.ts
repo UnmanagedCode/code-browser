@@ -36,12 +36,16 @@ export function isUrlTitle(title: string, url: string): boolean {
   return forms.some((f) => title === f || title === safeDecode(f));
 }
 
+// Bidirectional overrides, embeddings, isolates and marks: a page must not reorder the text around its own.
+const BIDI_CONTROLS = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+export const stripBidi = (text: string): string => text.replace(BIDI_CONTROLS, '');
+
 export function tabLabel(tab: Tab): string {
-  if (!isUrlTitle(tab.title, tab.url)) return tab.title;
+  if (!isUrlTitle(tab.title, tab.url)) return stripBidi(tab.title);
   if (tab.url === '' || tab.url === 'about:blank') return 'Untitled';
   const u = parse(tab.url);
   if (u && (u.protocol === 'http:' || u.protocol === 'https:')) return (u.host + u.pathname + u.search).replace(/\/$/, '');
-  return tab.url;
+  return stripBidi(tab.url);
 }
 
 // Every whitespace-separated term must appear (case-insensitively, as plain text) in the tab's text. A word matches the
@@ -56,7 +60,7 @@ export function matchesQuery(tab: Tab, query: string): boolean {
 }
 
 // `number` counts real windows from 1; the group of tabs whose window is unknown has none.
-export interface WindowGroup { windowId: number | null; number: number | null; tabs: Tab[] }
+interface WindowGroup { windowId: number | null; number: number | null; tabs: Tab[] }
 
 // Tabs by window, windows in order of their first tab and numbered from 1; tabs of unknown window form one
 // unnumbered group, last.

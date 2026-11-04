@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { Tab } from '../protocol';
-import { tabLabel, visibleTabs, windowGroups } from '../tabs';
+import { stripBidi, tabLabel, visibleTabs, windowGroups } from '../tabs';
 import { DialogBadge, SharedBadge, TabSwitcher } from './TabSwitcher';
 
 interface Props {
@@ -71,10 +71,10 @@ export function TabStrip({ tabs, activeTabId, recentTabIds, dialogTabIds, hasCon
                 ref={(el) => { if (el) tabEls.current.set(t.targetId, el); else tabEls.current.delete(t.targetId); }}
                 aria-selected={active}
                 tabIndex={t.targetId === tabStop ? 0 : -1}
-                data-tip={`${label} · ${t.url}`}
+                data-tip={stripBidi(`${label} · ${t.url}`)}
                 onClick={() => onActivate(t.targetId)}
               >
-                <span className="tab-label">{label}</span>
+                <span className="tab-label"><bdi>{label}</bdi></span>
                 {dialogTabIds.has(t.targetId) && <DialogBadge />}
                 {active && <SharedBadge />}
               </button>
