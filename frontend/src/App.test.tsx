@@ -1103,6 +1103,32 @@ describe('toasts', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  // Invariant: a new toast arriving while the current one is hovered or focused stays up (the hold carries over).
+  it('a new toast does not start the timer while the toast is hovered or focused', async () => {
+    vi.useFakeTimers();
+    try {
+      await openViewer();
+      for (const hold of ['hover', 'focus'] as const) {
+        await f.emit({ type: 'error', code: 'NO_TAB', message: 'first' });
+        const toast = screen.getByRole('alert');
+        if (hold === 'hover') fireEvent.mouseEnter(toast); else fireEvent.focus(toast);
+        await f.emit({ type: 'error', code: 'NO_DIALOG', message: 'second' });
+        act(() => { vi.advanceTimersByTime(TOAST_MS * 2); });
+        expect(screen.getByRole('alert').textContent).toContain('already closed');
+        if (hold === 'hover') fireEvent.mouseLeave(screen.getByRole('alert')); else fireEvent.blur(screen.getByRole('alert'));
+        act(() => { vi.advanceTimersByTime(TOAST_MS); });
+        expect(screen.queryByRole('alert')).toBeNull();
+      }
+    } finally { vi.useRealTimers(); }
+  });
+
+  // Invariant: a ws error frame with non-string fields shows a toast and does not throw in the handler.
+  it('a malformed error frame does not throw', async () => {
+    await openViewer();
+    await f.emit({ type: 'error', code: 7, message: { x: 1 } } as unknown as ServerMessage);
+    expect(screen.getByRole('alert')).toBeTruthy();
+  });
+
   // Invariant: a backend message is rendered as text, never markup.
   it('a hostile error message becomes text', async () => {
     await openViewer();
@@ -1134,6 +1160,19 @@ describe('browser list layout', () => {
     fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
     expect(screen.queryByRole('menu')).toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  // Invariant: choosing a menu item that leaves its row in place (Stop) returns focus to the row's menu button, not <body>; Tab closes the menu.
+  it('focus returns to the trigger after a menu choice; Tab closes the menu', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')));
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [running('a')] });
+    pick('a', 'Stop');
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'More actions for a' }));
+    openMenu('a');
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Tab' });
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 
   // Invariant: the new-browser field has a visible label and a hint wired to it.

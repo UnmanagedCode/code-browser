@@ -15,7 +15,10 @@ const PLAIN: Record<string, string> = {
   INVALID_NAME: NAME_HINT,
 };
 
-export function toToast(code: string | null, message: string): ToastContent {
+// Arguments come off the wire, so a malformed frame must not throw: both are coerced to strings.
+export function toToast(rawCode: unknown, rawMessage: unknown): ToastContent {
+  const code = typeof rawCode === 'string' ? rawCode : null;
+  const message = String(rawMessage ?? '');
   if (code !== null && Object.hasOwn(PLAIN, code)) return { text: PLAIN[code], code };
   return { text: message.charAt(0).toUpperCase() + message.slice(1), code };
 }

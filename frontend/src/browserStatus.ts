@@ -2,12 +2,12 @@ import type { BrowserSummary } from './protocol';
 
 export interface StatusPart { text: string; warn?: true }
 
-const STATUS_WORD = { running: 'Running', stopped: 'Stopped', connecting: 'Connecting' } as const;
+const STATUS_WORD: Record<string, string> = { running: 'Running', stopped: 'Stopped', connecting: 'Connecting' };
 const controllerPart = (b: BrowserSummary): StatusPart => ({ text: b.controller === 'human' ? 'human control' : 'agent control' });
 
 // The facts shown on a browser row's one status line, in order.
 export function statusParts(b: BrowserSummary): StatusPart[] {
-  const parts: StatusPart[] = [{ text: STATUS_WORD[b.status] }];
+  const parts: StatusPart[] = [{ text: Object.hasOwn(STATUS_WORD, b.status) ? STATUS_WORD[b.status] : 'Unknown' }];
   if (b.kind === 'attached' && b.attached) {
     const a = b.attached;
     parts.push({ text: 'attached' }, { text: a.via === 'proxy' ? 'via proxy' : 'direct' }, { text: a.address });

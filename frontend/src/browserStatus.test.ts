@@ -23,4 +23,9 @@ describe('statusParts', () => {
     expect(texts({ kind: 'attached', status: 'connecting', attached: { ...attached, via: 'direct', asksApproval: null } })).toEqual(['Connecting', 'attached', 'direct', '127.0.0.1:9222']);
     expect(texts({ kind: 'attached', status: 'stopped', attached, lastExit: { code: null, signal: null, at: 1 } })).toEqual(['Stopped', 'attached', 'via proxy', '127.0.0.1:9222', 'asks approval', 'Disconnected']);
   });
+
+  // Invariant: an unknown or prototype-named status renders a neutral word instead of throwing.
+  it('unknown statuses do not throw', () => {
+    for (const status of ['__proto__', 'toString', 'weird']) expect(texts({ status: status as BrowserSummary['status'] })[0]).toBe('Unknown');
+  });
 });

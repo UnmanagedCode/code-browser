@@ -165,7 +165,7 @@ function handle(ws, msg) {
     }
     case 'Fake.navigateTarget': setUrl(targets.get(params.targetId), params.url); return reply();
     case 'Fake.emitFrame': markChange(params.targetId); return reply();
-    case 'Fake.getState': return reply({ activeTarget, activations, screencastStarts, connections: wss.clients.size, targets: [...targets.values()].map(info), sessions: [...sessions.keys()], overrides: Object.fromEntries([...sessions].filter(([, x]) => x.override).map(([id, x]) => [id, x.override])) });
+    case 'Fake.getState': return reply({ activeTarget, activations, screencastStarts, connections: wss.clients.size, targets: [...targets.values()].map(info), sessions: [...sessions.keys()] });
     case 'Fake.openDialog': {
       for (const [sid, s] of sessions) {
         if (s.targetId === params.targetId) s.ws.send(JSON.stringify({ method: 'Page.javascriptDialogOpening', sessionId: sid, params: { url: targets.get(params.targetId).url, message: params.message, type: params.type ?? 'alert', defaultPrompt: params.defaultPrompt ?? '' } }));
@@ -192,7 +192,6 @@ function handle(ws, msg) {
       return reply({ sessionId: id });
     }
     case 'Page.enable': return reply();
-    case 'Emulation.setDeviceMetricsOverride': sess.override = params; return reply();
     case 'Page.startScreencast':
       screencastStarts.push(params);
       sess.screencast = true; sess.inFlight = true; sess.pendingChanges = 0;

@@ -23,6 +23,15 @@ describe('toToast', () => {
   });
 });
 
+describe('toToast with malformed input', () => {
+  // Invariant: a non-string message or code from a bad frame yields a toast, never a throw.
+  it('coerces non-strings', () => {
+    expect(toToast(5, { a: 1 }).code).toBeNull();
+    expect(toToast(undefined, undefined)).toEqual({ text: '', code: null });
+    expect(toToast('NO_TAB', null).text).toBe('That tab is gone.');
+  });
+});
+
 describe('splitCode', () => {
   // Invariant: one parser splits "CODE: message" and leaves other text whole.
   it('splits a prefixed message', () => {

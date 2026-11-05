@@ -126,3 +126,15 @@ test('send failures are reported, not thrown', async () => {
   await new Promise((r) => setImmediate(r));
   assert.deepEqual(errors, ['gone']);
 });
+
+// Invariant: when the last usable viewer goes, a resize already scheduled is cancelled: a closed panel never re-lays-out the page.
+test('losing every viewer cancels a pending apply', () => {
+  const { fit, clock, calls } = setup();
+  fit.addTab('S1');
+  calls.length = 0;
+  fit.setViewers([{ maxWidth: 1280, maxHeight: 676 }]);
+  fit.setViewers([]);
+  settle(clock);
+  assert.equal(calls.length, 0);
+  assert.equal(clock.pending(), 0);
+});

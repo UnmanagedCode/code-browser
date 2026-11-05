@@ -38,7 +38,7 @@ export function createViewportFit({
         if (!(s.maxWidth > 0 && s.maxHeight > 0)) continue;
         if (!best || s.maxWidth * s.maxHeight > best.maxWidth * best.maxHeight) best = s;
       }
-      if (!best) return;
+      if (!best) { pending?.cancel(); pending = null; return; }
       const target = Math.min(maxHeight, Math.max(minHeight, Math.round(width * best.maxHeight / best.maxWidth)));
       if (target === (pending?.height ?? current)) return;
       pending?.cancel();

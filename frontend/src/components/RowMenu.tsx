@@ -5,7 +5,8 @@ export interface RowMenuItem { label: string; onSelect(): void; tone?: 'destruct
 interface Props { label: string; items: RowMenuItem[]; triggerRef?: Ref<HTMLButtonElement> }
 
 // A "More actions" overflow menu: focus enters on the first item, arrows wrap, Escape/Tab close and return focus
-// to the trigger, and a press outside closes it.
+// to the trigger, Tab closes it and moves on, and a press outside closes it. Choosing an item returns focus to the
+// trigger first, so a row that survives keeps focus; a flow that follows (a confirmation, the attach form) then takes it.
 export function RowMenu({ label, items, triggerRef }: Props) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -60,7 +61,7 @@ export function RowMenu({ label, items, triggerRef }: Props) {
               type="button"
               role="menuitem"
               data-tone={item.tone}
-              onClick={() => { close(false); item.onSelect(); }}
+              onClick={() => { close(true); item.onSelect(); }}
             >{item.label}</button>
           ))}
         </div>

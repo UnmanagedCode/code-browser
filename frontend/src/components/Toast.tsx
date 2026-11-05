@@ -16,8 +16,6 @@ export function Toast({ toast, onDismiss }: Props) {
     const t = setTimeout(() => dismiss.current(), TOAST_MS);
     return () => clearTimeout(t);
   }, [toast, held]);
-  // A new toast starts unheld.
-  useEffect(() => setHeld(false), [toast]);
 
   return (
     <div
