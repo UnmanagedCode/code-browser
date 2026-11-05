@@ -57,7 +57,7 @@ export function Viewer({ name, socket, state, dialogs, summary, offline, focusHe
     <main className="viewer" aria-labelledby={headingId}>
       <header className="toolbar" inert={!!shownDialog}>
         <button type="button" data-variant="ghost" data-size="sm" onClick={onBack} aria-label="Back to browsers" data-tip="Back to browsers"><ChevronLeftIcon />Browsers</button>
-        <h1 ref={headingRef} id={headingId} className="viewer-name" tabIndex={-1} data-tip={name}>{name}</h1>
+        <h1 ref={headingRef} id={headingId} className="viewer-name" tabIndex={-1} data-tip={name}><span className="viewer-name-text">{name}</span></h1>
         <button type="button" data-variant="ghost" data-size="icon-sm" aria-label="Go back" data-tip="Go back" disabled={!hasControl || !state?.canGoBack} onClick={() => socket.send({ msg: 'nav', action: 'back' })}><ArrowLeftIcon /></button>
         <button type="button" data-variant="ghost" data-size="icon-sm" aria-label="Go forward" data-tip="Go forward" disabled={!hasControl || !state?.canGoForward} onClick={() => socket.send({ msg: 'nav', action: 'forward' })}><ArrowRightIcon /></button>
         <button type="button" data-variant="ghost" data-size="icon-sm" aria-label="Reload" data-tip="Reload" disabled={!hasControl} onClick={() => socket.send({ msg: 'nav', action: 'reload' })}><RotateCwIcon /></button>

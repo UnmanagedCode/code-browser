@@ -19,6 +19,7 @@ const TABS = Array.from({ length: 12 }, (_, i) => longTab(i + 1, i < 6 ? 1 : 2))
 const summary = (over) => ({ name: 'x', kind: 'launched', status: 'running', controller: 'human', sandbox: true, allowUnsandboxed: false, sandboxUnavailable: false, lastExit: null, attached: null, attachError: null, ...over });
 const ATTACHED = { address: '127.0.0.1:9222', via: 'proxy', asksApproval: true };
 const BROWSERS = [
+  summary({ name: 'work', kind: 'attached', attached: ATTACHED }),
   summary({ name: 'a', kind: 'attached', attached: ATTACHED }),
   summary({ name: NAME, kind: 'attached', attached: { address: '127.0.0.1:9222', via: 'proxy', asksApproval: true } }),
   summary({ name: 'unsandboxed-launch', status: 'stopped', allowUnsandboxed: true, lastExit: { code: null, signal: 'SIGSEGV', at: 1 } }),
@@ -120,6 +121,23 @@ test('panel layout and keyboard in real Chromium', { skip: process.env.RUN_REAL_
       const tops = (await boxes(page, 'header button, header input, header h1')).map((b) => b.mid);
       assert.ok(tops.length >= 6);
       assert.ok(Math.max(...tops) - Math.min(...tops) <= 2, `controls share a row (centres ${tops.join(', ')})`);
+      await page.context().close();
+    });
+  }
+
+  for (const name of ['a', 'work', NAME]) {
+    await t.test(`2b. at 1000px the heading of "${name}" is no wider than its text (capped at 8rem)`, async () => {
+      const page = await open(`http://127.0.0.1:${fake.port}/?browser=${name}`, { width: 1000, height: 800 });
+      await page.getByRole('textbox', { name: 'Address' }).waitFor();
+      const { box, text, min, cap } = await page.evaluate(() => {
+        const h = document.querySelector('header h1');
+        const range = document.createRange();
+        range.selectNodeContents(h.firstChild);
+        const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+        return { box: h.getBoundingClientRect().width, text: range.getBoundingClientRect().width, min: 3 * rem, cap: 8 * rem };
+      });
+      if (name === NAME) assert.ok(box <= cap + 2, `heading ${box}px within the 8rem cap`);
+      else assert.ok(box <= Math.max(min, text) + 2, `heading ${box}px hugs its text (${text}px)`);
       await page.context().close();
     });
   }
