@@ -11,7 +11,13 @@ const PING_MS = 20_000;
 // The envelope's `type` is the message tag, so the dialog's own kind travels as `dialogType`.
 const dialogMsg = ({ tabId, type, message, defaultPrompt }) => ({ type: 'dialog', tabId, dialogType: type, message, defaultPrompt });
 
-const dim = (v) => (Number.isFinite(v) ? Math.min(MAX_FRAME_DIM, Math.max(0, Math.round(v))) : 0);
+const clean = (v) => (Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0);
+// A requested size, scaled down as a whole when it exceeds MAX_FRAME_DIM so the panel's aspect survives.
+const fitDims = (w, h) => {
+  const [cw, ch] = [clean(w), clean(h)];
+  const k = Math.max(cw, ch) > MAX_FRAME_DIM ? MAX_FRAME_DIM / Math.max(cw, ch) : 1;
+  return { maxWidth: Math.round(cw * k), maxHeight: Math.round(ch * k) };
+};
 
 // The panel's WebSocket. Everything a human can do to a browser goes through here, and every action
 // except watching and switching the viewed tab requires the sender to hold control of that browser.
@@ -58,7 +64,7 @@ export function createViewerGateway({ manager, log = console, pingMs = PING_MS }
     refreshHolder(session);
   }
 
-  function join(conn, name, maxWidth, maxHeight) {
+  function join(conn, name, { maxWidth, maxHeight }) {
     leave(conn);
     const session = manager.session(assertName(name));
     if (!session) throw new CodedError('NOT_RUNNING', `browser '${name}' is not running`);
@@ -95,10 +101,10 @@ export function createViewerGateway({ manager, log = console, pingMs = PING_MS }
     },
     view(conn, msg) {
       if (msg.name === null) { leave(conn); return; }
-      join(conn, msg.name, dim(msg.maxWidth), dim(msg.maxHeight));
+      join(conn, msg.name, fitDims(msg.maxWidth, msg.maxHeight));
     },
     viewport(conn, msg) {
-      conn.session?.screencast.updateViewer(conn.id, { maxWidth: dim(msg.maxWidth), maxHeight: dim(msg.maxHeight) });
+      conn.session?.screencast.updateViewer(conn.id, fitDims(msg.maxWidth, msg.maxHeight));
     },
     ack(conn) { conn.session?.screencast.viewerAck(conn.id); },
     control(conn, msg) {

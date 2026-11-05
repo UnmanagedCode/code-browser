@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { locateChromium } from '../src/chromium/locate.js';
+import { DEFAULT_WINDOW, VIEWPORT_DEBOUNCE_MS, VIEWPORT_MAX_HEIGHT, VIEWPORT_MIN_HEIGHT } from '../src/limits.js';
 import { PROTOCOL } from '../src/proxyProtocol.js';
 import { pidAlive } from '../src/runState.js';
 import { sleep, startProxy, storeDir, tmpDir, waitFor } from './helpers.mjs';
@@ -245,6 +246,14 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
       await waitFor(async () => (await canvasInfo(p1)).seq > before.seq, { what: 'frame seq to increase on viewer 1', timeout: 10_000 });
       assert.deepEqual(errors, []);
 
+      // The launched page's viewport takes the panel's shape (width fixed), so the frame fills the canvas.
+      const panelShape = await canvasInfo(p1);
+      const wantHeight = Math.min(VIEWPORT_MAX_HEIGHT, Math.max(VIEWPORT_MIN_HEIGHT, Math.round(DEFAULT_WINDOW.width * panelShape.h / panelShape.w)));
+      const innerSize = async () => JSON.parse(await agent(`console.log(JSON.stringify(await page.evaluate(() => ({ w: innerWidth, h: innerHeight }))));`));
+      await waitFor(async () => Math.abs((await innerSize()).h - wantHeight) <= 1, { what: 'the page viewport to follow the panel', timeout: 10_000 });
+      assert.equal((await innerSize()).w, DEFAULT_WINDOW.width);
+      await waitFor(async () => { const c = await canvasInfo(p1); return Math.abs(c.dw / c.dh - c.w / c.h) < 0.02; }, { what: 'the frame to have the canvas aspect', timeout: 10_000 });
+
       await p1.getByRole('button', { name: 'Take control', exact: true }).click();
       await p1.getByText('You have control').waitFor();
       const btn = await clientPoint(p1, 200, 140);
@@ -413,8 +422,9 @@ console.log(await page.textContent('#result'));`);
         assert.equal((await listed()).status, 'running');
         const page = await newPage();
         await page.goto(`http://127.0.0.1:${backend.port}/`);
-        page.once('dialog', (d) => d.accept());
-        await page.getByRole('button', { name: 'Disallow without sandbox' }).click();
+        await page.getByRole('button', { name: 'More actions for e2e' }).click();
+        await page.getByRole('menuitem', { name: 'Disallow without sandbox' }).click();
+        await page.getByRole('group', { name: 'Confirm stop and disallow' }).getByRole('button', { name: 'Stop and disallow' }).click();
         await waitFor(async () => { const b = await listed(); return b.status === 'stopped' && b.allowUnsandboxed === false; }, { what: 'revoke to stop the browser', timeout: 20_000 });
         assert.equal((await listed()).lastExit, null, 'a revoke is a deliberate stop, not a crash');
         assert.ok(!fs.existsSync(settingsFile));
@@ -432,6 +442,12 @@ console.log(await page.textContent('#result'));`);
     const listedIn = async (name) => (await tool(backend.port, 'list_browsers')).result.find((b) => b.name === name);
     const secretOf = () => JSON.parse(fs.readFileSync(path.join(dataDir, 'proxy', PROTOCOL.rendezvous.backendFile), 'utf8')).secret;
     const noSandbox = refused ? ['--no-sandbox'] : [];
+    // Forget through the row's menu and its inline confirmation.
+    const forget = async (row, page) => {
+      await row.getByRole('button', { name: /^More actions for / }).click();
+      await page.getByRole('menuitem', { name: 'Forget' }).click();
+      await page.getByRole('group', { name: 'Confirm forget' }).getByRole('button', { name: 'Forget' }).click();
+    };
 
     await t.test('10. a human attaches their own Chromium through the real proxy; agents use it; only sockets close', async () => {
       const own = await launchOwnChromium(path.join(projectsRoot, 'external'), ['--remote-debugging-port=0', ...noSandbox]);
@@ -441,6 +457,7 @@ console.log(await page.textContent('#result'));`);
       cleanup.push(() => proxy.kill());
       const page = await newPage();
       await page.goto(`http://127.0.0.1:${backend.port}/`);
+      await page.getByRole('button', { name: 'Attach a browser…' }).click();
       const form = page.getByRole('form', { name: 'Attach a browser' });
       await form.getByRole('textbox', { name: 'Name' }).fill('mine');
       await form.getByRole('textbox', { name: 'Debug address' }).fill(`127.0.0.1:${own.port}`);
@@ -462,6 +479,8 @@ console.log(await page.textContent('#result'));`);
       for (const text of [JSON.stringify(info), JSON.stringify(await tool(backend.port, 'list_browsers'))]) assert.ok(!text.includes(secretOf()));
       assert.match(info.text, /your own tab/);
       await agent(`await page.goto(${JSON.stringify(fixtureUrl)});`, 'mine');
+      const shapeOf = async () => agent(`console.log(JSON.stringify(await page.evaluate(() => ({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio }))));`, 'mine');
+      const attachedShape = await shapeOf();
 
       // The panel watches it, a human takes control and clicks, the agent sees the click and the controller.
       const viewer = await newPage();
@@ -469,6 +488,12 @@ console.log(await page.textContent('#result'));`);
       await viewer.waitForSelector('canvas[data-frame-seq]', { timeout: 20_000 });
       // The page's real <title>, committed after load, reaches the panel (Chromium sends no event for it).
       await viewer.getByRole('tab', { name: /fixture/ }).waitFor({ timeout: 10_000 });
+      // A user's own browser is never resized, whatever shape the panel takes.
+      await viewer.setViewportSize({ width: 700, height: 900 });
+      await sleep(VIEWPORT_DEBOUNCE_MS + 400);
+      await viewer.setViewportSize({ width: 1100, height: 500 });
+      await sleep(VIEWPORT_DEBOUNCE_MS + 400);
+      assert.equal(await shapeOf(), attachedShape, 'an attached browser keeps its own viewport');
       await viewer.getByRole('button', { name: 'Take control', exact: true }).click();
       await viewer.getByText('You have control').waitFor();
       const btn = await clientPoint(viewer, 200, 140);
@@ -496,8 +521,7 @@ console.log(await page.textContent('#result'));`);
       await waitFor(async () => (await listedIn('mine')).status === 'running', { what: 'Connect after the proxy came back', timeout: 20_000 });
 
       // Forget removes the record only.
-      page.once('dialog', (d) => d.accept());
-      await row.getByRole('button', { name: 'Forget' }).click();
+      await forget(row, page);
       await waitFor(async () => !(await listedIn('mine')), { what: 'the record to go', timeout: 10_000 });
       assert.ok(!fs.existsSync(path.join(dataDir, 'attached', 'mine.json')));
       await sleep(200);
@@ -521,6 +545,7 @@ console.log(await page.textContent('#result'));`);
       assert.equal(await res.text(), '');
       const page = await newPage();
       await page.goto(`http://127.0.0.1:${backend.port}/`);
+      await page.getByRole('button', { name: 'Attach a browser…' }).click();
       const form = page.getByRole('form', { name: 'Attach a browser' });
       await form.getByRole('textbox', { name: 'Name' }).fill('approval');
       await form.getByRole('textbox', { name: 'Debug address' }).fill(`127.0.0.1:${own.port}`);
@@ -541,9 +566,11 @@ console.log(await page.textContent('#result'));`);
         await row.getByText(/click Allow/).waitFor();
         await row.getByText('asks approval').waitFor();
       }
-      if (!settled) await row.getByRole('button', { name: 'Disconnect' }).click();
-      page.once('dialog', (d) => d.accept());
-      await row.getByRole('button', { name: 'Forget' }).click();
+      if (!settled) {
+        await row.getByRole('button', { name: 'More actions for approval' }).click();
+        await page.getByRole('menuitem', { name: 'Disconnect' }).click();
+      }
+      await forget(row, page);
       await waitFor(async () => !(await listedIn('approval')), { what: 'the record to go', timeout: 10_000 });
       await page.close();
     });

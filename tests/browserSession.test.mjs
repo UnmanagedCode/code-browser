@@ -1,8 +1,10 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { createBrowserSession } from '../src/browserSession.js';
-import { MAX_PROMPT_TEXT, TAB_SWEEP_MS } from '../src/limits.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createBrowserSession, createSessionForEntry } from '../src/browserSession.js';
+import { DEFAULT_WINDOW, MAX_PROMPT_TEXT, TAB_SWEEP_MS, VIEWPORT_DEBOUNCE_MS } from '../src/limits.js';
 import { fakeClock, liveStack, waitFor } from './helpers.mjs';
 
 let stack;
@@ -375,4 +377,72 @@ test('dispose while a sweep is in flight neither applies it nor reschedules', as
   assert.equal(changes, 0);
   assert.equal(session.snapshot().tabs[0].title, '');
   assert.equal(clock.pending(), 0);
+});
+
+const tick = () => new Promise((r) => setImmediate(r));
+const viewer = (maxWidth, maxHeight) => ({ send() {}, bufferedAmount: () => 0, maxWidth, maxHeight });
+const resizeCommand = /^Emulation\.|^Browser\.(setWindowBounds|setContentsSize)$/;
+
+// Invariant: a launched browser's tab gets the default viewport on attach, then the panel's aspect after the debounce.
+test('a launched session fits the viewport to the viewer', async () => {
+  const clock = fakeClock();
+  const cdp = slowAttachCdp();
+  const session = createBrowserSession({ name: 'a', cdp, sandbox: true, attached: false, log: { warn() {} }, viewportOptions: { schedule: clock.schedule } });
+  await session.start();
+  cdp.created('T1');
+  cdp.release();
+  await tick();
+  const overrides = () => cdp.calls.filter((c) => c.method === 'Emulation.setDeviceMetricsOverride');
+  assert.deepEqual(overrides().map((c) => [c.sessionId, c.params.width, c.params.height]), [['S-T1', DEFAULT_WINDOW.width, DEFAULT_WINDOW.height]]);
+  session.screencast.addViewer('v', viewer(1280, 676));
+  clock.advance(VIEWPORT_DEBOUNCE_MS);
+  assert.deepEqual(overrides().map((c) => c.params.height), [DEFAULT_WINDOW.height, 676]);
+  session.dispose();
+});
+
+// Invariant (owner requirement): an attached browser never receives an emulation, window-size or content-size command,
+// whatever the panel does.
+test('an attached session never sends a resize or emulation command', async () => {
+  const clock = fakeClock();
+  const cdp = slowAttachCdp({ targets: [{ targetId: 'U1', type: 'page', url: 'https://mail.test/', title: 'Mail' }] });
+  const session = createBrowserSession({ name: 'a', cdp, sandbox: null, attached: true, log: { warn() {} }, viewportOptions: { schedule: clock.schedule }, sweep: { schedule: clock.schedule } });
+  await session.start();
+  session.activateTab('U1');
+  cdp.release();
+  await tick();
+  session.screencast.addViewer('v', viewer(1280, 676));
+  clock.advance(VIEWPORT_DEBOUNCE_MS * 2);
+  session.screencast.updateViewer('v', { maxWidth: 800, maxHeight: 1200 });
+  clock.advance(VIEWPORT_DEBOUNCE_MS * 2);
+  session.screencast.updateViewer('v', { maxWidth: 1920, maxHeight: 1014 });
+  clock.advance(VIEWPORT_DEBOUNCE_MS * 2);
+  session.screencast.removeViewer('v');
+  clock.advance(VIEWPORT_DEBOUNCE_MS * 2);
+  assert.ok(cdp.calls.some((c) => c.method === 'Page.startScreencast'), 'the screencast did run');
+  assert.deepEqual(cdp.calls.filter((c) => resizeCommand.test(c.method)), []);
+  session.dispose();
+});
+
+// Invariant: the session factory treats anything not positively `launched` as a person's own browser (no viewport fit).
+test('createSessionForEntry resizes only entries of kind launched', async () => {
+  for (const [kind, resized] of [['launched', true], ['attached', false], ['mystery', false], [undefined, false]]) {
+    const cdp = slowAttachCdp();
+    const session = createSessionForEntry({ name: 'a', kind, cdp, sandbox: true }, { log: { warn() {} } });
+    await session.start();
+    cdp.created('T1');
+    cdp.release();
+    await tick();
+    assert.equal(cdp.calls.some((c) => c.method === 'Emulation.setDeviceMetricsOverride'), resized, `kind ${kind}`);
+    session.dispose();
+  }
+});
+
+// Invariant: resize and emulation commands exist only in src/viewportFit.js, which only browserSession.js imports.
+test('source guard: only viewportFit.js sends resize commands', () => {
+  const srcDir = new URL('../src/', import.meta.url).pathname;
+  const files = fs.readdirSync(srcDir, { recursive: true }).filter((f) => f.endsWith('.js'));
+  const sink = /Emulation\.|setWindowBounds|setContentsSize/;
+  assert.deepEqual(files.filter((f) => sink.test(fs.readFileSync(path.join(srcDir, f), 'utf8'))), ['viewportFit.js']);
+  const importers = files.filter((f) => /viewportFit\.js/.test(fs.readFileSync(path.join(srcDir, f), 'utf8')) && f !== 'viewportFit.js');
+  assert.deepEqual(importers, ['browserSession.js']);
 });

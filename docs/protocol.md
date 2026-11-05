@@ -105,7 +105,7 @@ Error codes: `UNKNOWN_TOOL`, `INVALID_NAME`, `NOT_FOUND`, `NOT_RUNNING` (for an 
 | `msg` | Fields | Needs control |
 |---|---|---|
 | `hello` | `viewerId` (8–64 chars of `A-Za-z0-9_-`; the panel keeps it in `sessionStorage` under `code-browser:viewerId`) | no |
-| `view` | `name` (string, or `null` to pause), `maxWidth`, `maxHeight` | no |
+| `view` | `name` (string, or `null` to pause), `maxWidth`, `maxHeight` (the panel sends `view` only after a `browsers` list on the current connection, and always its real size) | no |
 | `viewport` | `maxWidth`, `maxHeight` | no |
 | `ack` | `seq` | no |
 | `control` | `action`: `take` \| `release` (release: holder only) | no |
@@ -150,7 +150,8 @@ Owned by `src/screencast.js`; the numbers are `MAX_FPS`, `VIEWER_HIGH_WATER` in 
 - Each viewer has at most one frame in flight. A frame goes out only when the viewer has sent `ack` for the previous one and its socket's `bufferedAmount` is below the high-water mark; until then only the newest frame is kept (latest wins), and a retry timer delivers it once the buffer drains.
 - A viewer that never acks receives no further frames. The panel acks after drawing.
 - A viewer that joins gets the cached latest frame at once. A tab switch drops the cache and discards frames of the old tab.
-- The screencast runs only on the active tab and only while some viewer has a view; its size is the largest viewer's request, clamped to `MAX_FRAME_DIM`.
+- The screencast runs only on the active tab and only while some viewer has a view; its size is the largest viewer's request. A `view` or `viewport` size above `MAX_FRAME_DIM` is scaled down as a whole (`fitDims` in `src/viewerGateway.js`), keeping its aspect.
+- For a **launched** browser the largest viewer by area (`maxWidth * maxHeight`, both > 0) also sets the page viewport's height from its aspect, after a debounce ([architecture.md](architecture.md#viewport-fit)); an attached browser is never resized.
 
 ## CDP proxy wire protocol
 

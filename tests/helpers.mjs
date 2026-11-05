@@ -7,7 +7,7 @@ import path from 'node:path';
 import WebSocket from 'ws';
 import { createApp } from '../src/app.js';
 import { createBrowserManager } from '../src/browserManager.js';
-import { createBrowserSession } from '../src/browserSession.js';
+import { createSessionForEntry } from '../src/browserSession.js';
 import { CdpConnection } from '../src/cdp.js';
 import { createViewerGateway } from '../src/viewerGateway.js';
 
@@ -104,8 +104,8 @@ export function liveStack({ env = {}, leaseMs = 30_000, clock = null, dataDir = 
     env: { ...process.env, CODE_BROWSER_CHROMIUM: FAKE_CHROMIUM, CODE_BROWSER_PROXY_DIAL_HOST: '127.0.0.1', ...env },
     log: { warn() {}, error() {} },
     timeouts: { launch: 4000, stopGrace: 1500, killGrace: 200, shutdownGrace: 500 },
-    createSession: (entry) => createBrowserSession({
-      name: entry.name, cdp: entry.cdp, sandbox: entry.sandbox, attached: entry.kind === 'attached', log: { warn() {} },
+    createSession: (entry) => createSessionForEntry(entry, {
+      log: { warn() {} },
       controllerOptions: { leaseMs, ...(clock ? { schedule: clock.schedule } : {}) },
       ...(clock ? { sweep: { schedule: clock.schedule } } : {}),
     }),

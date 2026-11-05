@@ -2,7 +2,7 @@ import { decodeFrame } from './frame';
 import type { ClientMessage, FrameHeader, ServerMessage } from './protocol';
 
 export type SocketStatus = 'connecting' | 'open' | 'closed';
-export interface View { name: string; maxWidth: number; maxHeight: number }
+export interface View { name: string }
 
 export interface ViewerSocket {
   send(msg: ClientMessage): boolean;
@@ -10,7 +10,10 @@ export interface ViewerSocket {
   setViewport(maxWidth: number, maxHeight: number): void;
   onMessage(fn: (m: ServerMessage) => void): () => void;
   onFrame(fn: (header: FrameHeader, jpeg: Uint8Array) => void): () => void;
-  onStatus(fn: (s: SocketStatus) => void): () => void;
+  // `failures`: consecutive closes since the last open. A new subscriber is called at once with the current status.
+  onStatus(fn: (s: SocketStatus, failures: number) => void): () => void;
+  // Reconnects now instead of waiting out the backoff; a no-op while connecting or open.
+  retry(): void;
   close(): void;
 }
 
@@ -29,9 +32,13 @@ export const BACKOFF_MAX_MS = 10_000;
 export function createViewerSocket({ url, viewerId, createSocket = (u) => new WebSocket(u), doc = document }: SocketOptions): ViewerSocket {
   const messageFns = new Set<(m: ServerMessage) => void>();
   const frameFns = new Set<(h: FrameHeader, j: Uint8Array) => void>();
-  const statusFns = new Set<(s: SocketStatus) => void>();
+  const statusFns = new Set<(s: SocketStatus, failures: number) => void>();
   let ws: WebSocket | null = null;
   let desired: View | null = null;
+  // The panel's size outlives the view: every (re)join sends the current one, not a placeholder.
+  let viewport = { maxWidth: 0, maxHeight: 0 };
+  let currentStatus: SocketStatus = 'connecting';
+  let failures = 0;
   let sentName: string | null = null; // the server starts a connection with no view
   let backoff = BACKOFF_START_MS;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -52,7 +59,7 @@ export function createViewerSocket({ url, viewerId, createSocket = (u) => new We
     heldMessages.set(key, m);
   };
 
-  const status = (s: SocketStatus) => statusFns.forEach((fn) => fn(s));
+  const status = (s: SocketStatus) => { currentStatus = s; statusFns.forEach((fn) => fn(s, failures)); };
   const isOpen = () => ws !== null && ws.readyState === 1;
   const rawSend = (msg: ClientMessage) => { if (isOpen()) ws!.send(JSON.stringify(msg)); return isOpen(); };
   const effective = (): View | null => (doc.visibilityState === 'hidden' ? null : desired);
@@ -63,7 +70,7 @@ export function createViewerSocket({ url, viewerId, createSocket = (u) => new We
     const name = v ? v.name : null;
     if (name === sentName) return;
     sentName = name;
-    rawSend({ msg: 'view', name, maxWidth: v?.maxWidth ?? 0, maxHeight: v?.maxHeight ?? 0 });
+    rawSend({ msg: 'view', name, ...(v ? viewport : { maxWidth: 0, maxHeight: 0 }) });
   }
 
   function connect() {
@@ -72,6 +79,7 @@ export function createViewerSocket({ url, viewerId, createSocket = (u) => new We
     ws.binaryType = 'arraybuffer';
     ws.onopen = () => {
       backoff = BACKOFF_START_MS;
+      failures = 0;
       sentName = null;
       status('open');
       rawSend({ msg: 'hello', viewerId });
@@ -90,6 +98,7 @@ export function createViewerSocket({ url, viewerId, createSocket = (u) => new We
     };
     ws.onclose = () => {
       ws = null;
+      failures += 1;
       status('closed');
       if (closed) return;
       timer = setTimeout(connect, backoff);
@@ -113,8 +122,7 @@ export function createViewerSocket({ url, viewerId, createSocket = (u) => new We
       syncView();
     },
     setViewport(maxWidth, maxHeight) {
-      if (!desired) return;
-      desired = { ...desired, maxWidth, maxHeight };
+      viewport = { maxWidth, maxHeight };
       if (effective()) rawSend({ msg: 'viewport', maxWidth, maxHeight });
     },
     onMessage(fn) {
@@ -133,7 +141,17 @@ export function createViewerSocket({ url, viewerId, createSocket = (u) => new We
       }
       return off;
     },
-    onStatus: (fn) => subscribe(statusFns, fn),
+    onStatus(fn) {
+      const off = subscribe(statusFns, fn);
+      fn(currentStatus, failures);
+      return off;
+    },
+    retry() {
+      if (closed || ws !== null) return;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      connect();
+    },
     close() {
       closed = true;
       if (timer) clearTimeout(timer);

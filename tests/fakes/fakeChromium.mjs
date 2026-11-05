@@ -96,6 +96,7 @@ const targets = new Map(); // targetId -> {targetId, type, url, title, history, 
 const sessions = new Map(); // sessionId -> {ws, targetId, screencast, pendingChanges, ackSeq}
 const discoverers = new Set();
 const recorded = [];
+const screencastStarts = []; // params of every Page.startScreencast
 const activations = []; // every Target.activateTarget, in order
 let activeTarget = null;
 let nextTarget = 1;
@@ -164,7 +165,7 @@ function handle(ws, msg) {
     }
     case 'Fake.navigateTarget': setUrl(targets.get(params.targetId), params.url); return reply();
     case 'Fake.emitFrame': markChange(params.targetId); return reply();
-    case 'Fake.getState': return reply({ activeTarget, activations, connections: wss.clients.size, targets: [...targets.values()].map(info), sessions: [...sessions.keys()] });
+    case 'Fake.getState': return reply({ activeTarget, activations, screencastStarts, connections: wss.clients.size, targets: [...targets.values()].map(info), sessions: [...sessions.keys()] });
     case 'Fake.openDialog': {
       for (const [sid, s] of sessions) {
         if (s.targetId === params.targetId) s.ws.send(JSON.stringify({ method: 'Page.javascriptDialogOpening', sessionId: sid, params: { url: targets.get(params.targetId).url, message: params.message, type: params.type ?? 'alert', defaultPrompt: params.defaultPrompt ?? '' } }));
@@ -192,6 +193,7 @@ function handle(ws, msg) {
     }
     case 'Page.enable': return reply();
     case 'Page.startScreencast':
+      screencastStarts.push(params);
       sess.screencast = true; sess.inFlight = true; sess.pendingChanges = 0;
       reply();
       emitFrame(sessionId);

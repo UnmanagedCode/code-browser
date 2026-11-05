@@ -1,11 +1,17 @@
 import type { AttachVia, BrowserSummary } from './protocol';
 
+// Splits the backend's "CODE: message" text; `code` is null when it sent no prefix.
+export function splitCode(text: string): { code: string | null; message: string } {
+  const m = /^([A-Z_]+): /.exec(text);
+  return m ? { code: m[1], message: text.slice(m[0].length) } : { code: null, message: text };
+}
+
 // A failed request: `code` is the backend's "CODE: message" prefix, when it sent one.
 export class ApiError extends Error {
   readonly code: string | null;
   constructor(message: string) {
     super(message);
-    this.code = /^([A-Z_]+): /.exec(message)?.[1] ?? null;
+    this.code = splitCode(message).code;
   }
 }
 

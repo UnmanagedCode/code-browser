@@ -1,7 +1,7 @@
 // Entry: build state, wire each feature once, listen. Order: config → migration → manager → mcp → boot → listen.
 import { createApp } from './src/app.js';
 import { createBrowserManager } from './src/browserManager.js';
-import { createBrowserSession } from './src/browserSession.js';
+import { createSessionForEntry } from './src/browserSession.js';
 import { loadConfig } from './src/config.js';
 import { migrateLegacyStore } from './src/migrateLegacyStore.js';
 import { createMcp } from './src/mcp.js';
@@ -12,7 +12,7 @@ const config = loadConfig();
 migrateLegacyStore({ env: process.env, dataDir: config.dataDir });
 const manager = createBrowserManager({
   dataDir: config.dataDir,
-  createSession: (entry) => createBrowserSession({ name: entry.name, cdp: entry.cdp, sandbox: entry.sandbox, attached: entry.kind === 'attached' }),
+  createSession: (entry) => createSessionForEntry(entry),
 });
 const mcp = createMcp({ manager, pluginDir: config.pluginDir, pluginId: config.pluginId });
 

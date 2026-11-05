@@ -20,3 +20,4 @@ export const KeyboardIcon = icon(
   </>,
 );
 export const SquareIcon = icon(<rect width="18" height="18" x="3" y="3" rx="2" />);
+export const EllipsisIcon = icon(<><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" /></>);

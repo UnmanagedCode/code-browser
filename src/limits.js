@@ -1,5 +1,6 @@
 // Every tunable constant, in one place.
-export const NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+export const NAME_RE = /^[a-z0-9][a-z0-9\-]{0,39}$/;
+// The hyphen is escaped so the same source is also valid as an HTML `pattern`, which Chrome compiles with the v flag.
 export const DEFAULT_BROWSER_NAME = 'default';
 
 export const DEFAULT_WINDOW = { width: 1280, height: 800 };
@@ -9,6 +10,12 @@ export const MAX_FPS = 15;
 export const JPEG_QUALITY = 60;
 export const MAX_FRAME_DIM = 1920;
 export const VIEWER_HIGH_WATER = 512 * 1024;
+
+// A launched page's width is DEFAULT_WINDOW.width; its height follows the shape of the largest viewer's panel,
+// clamped to this range and applied after the panel has stopped changing for VIEWPORT_DEBOUNCE_MS.
+export const VIEWPORT_DEBOUNCE_MS = 500;
+export const VIEWPORT_MIN_HEIGHT = 480;
+export const VIEWPORT_MAX_HEIGHT = MAX_FRAME_DIM;
 
 // Tabs: how often a running session re-reads tab titles (Chromium sends no event for a title commit)
 export const TAB_SWEEP_MS = 1000;

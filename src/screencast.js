@@ -15,6 +15,7 @@ const defaultSchedule = (fn, ms) => {
 // Chromium or the other viewers.
 //
 // `onStart(tabId)` runs whenever a screencast starts on a tab (someone started watching it).
+// `onViewers(sizes)` runs after every viewer change with each viewer's requested {maxWidth, maxHeight}.
 export function createScreencast({
   send,
   schedule = defaultSchedule,
@@ -25,6 +26,7 @@ export function createScreencast({
   highWater = VIEWER_HIGH_WATER,
   retryMs = 100,
   onStart = () => {},
+  onViewers = () => {},
   onError = (err) => console.warn('code-browser: screencast:', err.message),
 }) {
   const viewers = new Map();
@@ -58,6 +60,8 @@ export function createScreencast({
       onStart(target.tabId);
     }
   }
+
+  const notifyViewers = () => onViewers([...viewers.values()].map(({ maxWidth, maxHeight }) => ({ maxWidth, maxHeight })));
 
   function deliver(v, frame) {
     if (!target || frame.tabId !== target.tabId) return;
@@ -99,6 +103,7 @@ export function createScreencast({
       const v = { send: sendFrame, bufferedAmount, maxWidth, maxHeight, inFlight: false, pending: null, cancelRetry: null };
       viewers.set(id, v);
       sync();
+      notifyViewers();
       if (latest) deliver(v, latest);
     },
     updateViewer(id, { maxWidth = 0, maxHeight = 0 }) {
@@ -107,11 +112,13 @@ export function createScreencast({
       v.maxWidth = maxWidth;
       v.maxHeight = maxHeight;
       sync();
+      notifyViewers();
     },
     removeViewer(id) {
       viewers.get(id)?.cancelRetry?.();
-      viewers.delete(id);
+      const had = viewers.delete(id);
       sync();
+      if (had) notifyViewers();
     },
     // Page.screencastFrame from the CDP session `cdpSessionId`; `params.sessionId` is the frame's ack id.
     onFrame(cdpSessionId, params) {

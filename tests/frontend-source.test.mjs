@@ -24,6 +24,7 @@ const BANNED = [
   { name: 'setAttribute href/src/style', re: /setAttribute\(\s*['"](href|src|style|srcdoc)['"]/i, sample: 'el.setAttribute("href", x)' },
   { name: 'javascript: URL', re: /javascript:/i, sample: 'const u = "javascript:alert(1)"' },
   { name: 'location.hash (the bridge forbids navigating by hash)', re: /location\.hash|\.hash\s*=/, sample: 'location.hash = "x"' },
+  { name: 'native confirm/alert/prompt', re: /\b(?:window|globalThis|self|top|parent)\s*(?:\?\.|\.)\s*(?:confirm|alert|prompt)\b|\b(?:window|globalThis|self|top|parent)\s*\[\s*['"`](?:confirm|alert|prompt)['"`]\s*\]|(?<![\w.])(?:confirm|alert|prompt)\s*\(/, sample: 'window.confirm("x")' },
   { name: 'unprefixed storage key', re: /(local|session)Storage\.\w+Item\(\s*['"](?!code-browser:)/, sample: 'localStorage.getItem("k")' },
 ];
 // Root-relative URL literal, e.g. '/api/browsers': the page lives under /plugins/<id>/ and must use relative URLs.
@@ -31,6 +32,7 @@ const ROOT_RELATIVE = /(['"`])\/[A-Za-z_]/;
 
 test('the scan patterns match their own samples', () => {
   for (const b of BANNED) assert.match(b.sample, b.re, b.name);
+  for (const sample of ['globalThis.alert(1)', "self['prompt']('x')", 'top?.confirm(1)']) assert.match(sample, BANNED.find((b) => b.name.startsWith('native')).re, sample);
   assert.match("fetch('/api/x')", ROOT_RELATIVE);
   assert.match('fetch(`/api/x`)', ROOT_RELATIVE);
   assert.doesNotMatch("fetch('api/x')", ROOT_RELATIVE);

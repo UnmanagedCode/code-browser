@@ -18,6 +18,8 @@ interface Props {
   state: BrowserState | null;
   dialogs: DialogInfo[];
   summary?: BrowserSummary;
+  // The socket is down: the last frame stays, dimmed, and nothing can be driven.
+  offline: boolean;
   onError(message: string): void;
   onBack(): void;
   onStart(): void;
@@ -25,14 +27,14 @@ interface Props {
   onConnect(): void;
 }
 
-export function Viewer({ name, socket, state, dialogs, summary, onError, onBack, onStart, onStop, onConnect }: Props) {
+export function Viewer({ name, socket, state, dialogs, summary, offline, onError, onBack, onStart, onStop, onConnect }: Props) {
   const keyboardRef = useRef<HTMLTextAreaElement>(null);
   const [keyboardActive, setKeyboardActive] = useState(false);
   const touch = useMediaQuery('(any-pointer: coarse)');
   const [switcherRequest, setSwitcherRequest] = useState(0);
   const running = state?.status === 'running';
   const controller = state?.controller ?? { kind: 'agent' as const };
-  const hasControl = controller.kind === 'human' && controller.you;
+  const hasControl = !offline && controller.kind === 'human' && controller.you;
   const tabs = state?.tabs ?? [];
   const activeTab = tabs.find((t) => t.targetId === state?.activeTabId);
   // The screen is mounted only while the browser runs and a tab is selected.
@@ -69,69 +71,71 @@ export function Viewer({ name, socket, state, dialogs, summary, onError, onBack,
           <button type="button" data-size="sm" data-tip={stopLabel} onClick={onStop}><SquareIcon />{stopLabel}</button>
         )}
       </div>
-      {!running && summary?.kind === 'attached' && summary.status !== 'running' ? (
-        <div className="stopped" role="status" data-status={summary.status}>
-          {summary.status === 'connecting' ? (
-            <>
-              <p>Connecting…</p>
-              <p className="hint">{ALLOW_HINT}</p>
-            </>
-          ) : (
-            <>
-              <p>This browser is disconnected.</p>
-              {summary.attachError && <p className="hint" data-warn="true">{summary.attachError}</p>}
-              <button type="button" data-variant="primary" onClick={onConnect}>Connect</button>
-            </>
-          )}
-        </div>
-      ) : !running && state?.status === 'stopped' && summary?.sandboxUnavailable ? (
-        <SandboxNotice summary={summary} onError={onError} />
-      ) : !running ? (
-        <div className="stopped" role="status" data-status={state?.status ?? 'connecting'}>
-          <p>{state?.status === 'stopped' ? 'This browser is stopped.' : 'Connecting…'}</p>
-          {state?.status === 'stopped' && <button type="button" data-variant="primary" onClick={onStart}>Start</button>}
-        </div>
-      ) : (
-        <>
-          <TabStrip
-            tabs={tabs}
-            activeTabId={state?.activeTabId ?? null}
-            recentTabIds={state?.recentTabIds ?? []}
-            dialogTabIds={dialogTabIds}
-            switcherRequest={switcherRequest}
-            hasControl={hasControl}
-            onActivate={(tabId) => socket.send({ msg: 'tab', action: 'activate', tabId })}
-            onClose={(tabId) => socket.send({ msg: 'tab', action: 'close', tabId })}
-            onNew={() => socket.send({ msg: 'tab', action: 'new' })}
-          />
-          <ControllerBar
-            controller={controller}
-            onTake={() => socket.send({ msg: 'control', action: 'take' })}
-            onRelease={() => socket.send({ msg: 'control', action: 'release' })}
-          />
-          {showScreen
-            ? <Screen socket={socket} hasControl={hasControl} keyboardRef={keyboardRef} onKeyboardActive={setKeyboardActive} onTake={() => socket.send({ msg: 'control', action: 'take' })} />
-            : (
-              <div className="stopped" role="status">
-                <p>Select a tab to watch it.</p>
-                <button type="button" data-variant="primary" onClick={() => setSwitcherRequest((n) => n + 1)}>Find a tab…</button>
-              </div>
+      <div className="viewer-body" inert={offline} data-offline={offline || undefined}>
+        {!running && summary?.kind === 'attached' && summary.status !== 'running' ? (
+          <div className="stopped" role="status" data-status={summary.status}>
+            {summary.status === 'connecting' ? (
+              <>
+                <p>Connecting…</p>
+                <p className="hint">{ALLOW_HINT}</p>
+              </>
+            ) : (
+              <>
+                <p>This browser is disconnected.</p>
+                {summary.attachError && <p className="hint" data-warn="true">{summary.attachError}</p>}
+                <button type="button" data-variant="primary" onClick={onConnect}>Connect</button>
+              </>
             )}
-          {dialog && (
-            <DialogPrompt
-              key={dialog.tabId}
-              dialog={dialog}
+          </div>
+        ) : !running && state?.status === 'stopped' && summary?.sandboxUnavailable ? (
+          <SandboxNotice summary={summary} onError={onError} />
+        ) : !running ? (
+          <div className="stopped" role="status" data-status={state?.status ?? 'connecting'}>
+            <p>{state?.status === 'stopped' ? 'This browser is stopped.' : 'Connecting…'}</p>
+            {state?.status === 'stopped' && <button type="button" data-variant="primary" onClick={onStart}>Start</button>}
+          </div>
+        ) : (
+          <>
+            <TabStrip
+              tabs={tabs}
+              activeTabId={state?.activeTabId ?? null}
+              recentTabIds={state?.recentTabIds ?? []}
+              dialogTabIds={dialogTabIds}
+              switcherRequest={switcherRequest}
               hasControl={hasControl}
-              tabLabel={dialogTab ? tabLabel(dialogTab) : null}
-              tabHost={dialogTab ? tabHost(dialogTab.url) : ''}
-              shown={dialog.tabId === state?.activeTabId}
-              onShowTab={() => socket.send({ msg: 'tab', action: 'activate', tabId: dialog.tabId })}
-              onTake={() => socket.send({ msg: 'control', action: 'take' })}
-              onAnswer={(action, promptText) => socket.send({ msg: 'dialog', tabId: dialog.tabId, action, ...(promptText === undefined ? {} : { promptText }) })}
+              onActivate={(tabId) => socket.send({ msg: 'tab', action: 'activate', tabId })}
+              onClose={(tabId) => socket.send({ msg: 'tab', action: 'close', tabId })}
+              onNew={() => socket.send({ msg: 'tab', action: 'new' })}
             />
-          )}
-        </>
-      )}
+            <ControllerBar
+              controller={controller}
+              onTake={() => socket.send({ msg: 'control', action: 'take' })}
+              onRelease={() => socket.send({ msg: 'control', action: 'release' })}
+            />
+            {showScreen
+              ? <Screen socket={socket} hasControl={hasControl} keyboardRef={keyboardRef} onKeyboardActive={setKeyboardActive} onTake={() => socket.send({ msg: 'control', action: 'take' })} />
+              : (
+                <div className="stopped" role="status">
+                  <p>Select a tab to watch it.</p>
+                  <button type="button" data-variant="primary" onClick={() => setSwitcherRequest((n) => n + 1)}>Find a tab…</button>
+                </div>
+              )}
+            {dialog && (
+              <DialogPrompt
+                key={dialog.tabId}
+                dialog={dialog}
+                hasControl={hasControl}
+                tabLabel={dialogTab ? tabLabel(dialogTab) : null}
+                tabHost={dialogTab ? tabHost(dialogTab.url) : ''}
+                shown={dialog.tabId === state?.activeTabId}
+                onShowTab={() => socket.send({ msg: 'tab', action: 'activate', tabId: dialog.tabId })}
+                onTake={() => socket.send({ msg: 'control', action: 'take' })}
+                onAnswer={(action, promptText) => socket.send({ msg: 'dialog', tabId: dialog.tabId, action, ...(promptText === undefined ? {} : { promptText }) })}
+              />
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
