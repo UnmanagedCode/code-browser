@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { focusInPanel } from '../focus';
 import type { Tab } from '../protocol';
 import { stripBidi, tabLabel, visibleTabs, windowGroups } from '../tabs';
 import { DialogBadge, SharedBadge, TabSwitcher } from './TabSwitcher';
@@ -41,7 +42,7 @@ export function TabStrip({ tabs, activeTabId, recentTabIds, dialogTabIds, hasCon
     const active = document.activeElement;
     if (active && active !== document.body && !barRef.current?.contains(active)) return;
     const next = ordered[Math.min(c.index, ordered.length - 1)];
-    (next ? tabEls.current.get(next.targetId) : newRef.current)?.focus();
+    focusInPanel(next ? tabEls.current.get(next.targetId) : newRef.current);
   });
   useEffect(() => { if (switcherRequest > 0) setOpen(true); }, [switcherRequest]);
   useEffect(() => {

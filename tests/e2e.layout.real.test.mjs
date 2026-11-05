@@ -17,12 +17,14 @@ const NAME = 'attached-browser-name-xx-27'; // 27 characters: the longest a tool
 const longTab = (i, windowId) => ({ targetId: `T${i}`, windowId, url: `https://example.test/${'path/'.repeat(8)}${i}`, title: `A rather long page title number ${i} that never fits a tab` });
 const TABS = Array.from({ length: 12 }, (_, i) => longTab(i + 1, i < 6 ? 1 : 2));
 const summary = (over) => ({ name: 'x', kind: 'launched', status: 'running', controller: 'human', sandbox: true, allowUnsandboxed: false, sandboxUnavailable: false, lastExit: null, attached: null, attachError: null, ...over });
+const ATTACHED = { address: '127.0.0.1:9222', via: 'proxy', asksApproval: true };
 const BROWSERS = [
+  summary({ name: 'a', kind: 'attached', attached: ATTACHED }),
   summary({ name: NAME, kind: 'attached', attached: { address: '127.0.0.1:9222', via: 'proxy', asksApproval: true } }),
   summary({ name: 'unsandboxed-launch', status: 'stopped', allowUnsandboxed: true, lastExit: { code: null, signal: 'SIGSEGV', at: 1 } }),
   summary({ name: 'mine', kind: 'attached', status: 'stopped', sandbox: null, attached: { address: 'host.docker.internal:9222', via: 'proxy', asksApproval: true }, attachError: 'Chrome did not answer: the remote debugging prompt was not allowed in time, so nothing was attached' }),
 ];
-const STATE = { type: 'state', name: NAME, status: 'running', sandbox: true, controller: { kind: 'human', you: true }, tabs: TABS, activeTabId: 'T1', recentTabIds: [], canGoBack: true, canGoForward: false };
+const STATE = { type: 'state', status: 'running', sandbox: true, controller: { kind: 'human', you: true }, tabs: TABS, activeTabId: 'T1', recentTabIds: [], canGoBack: true, canGoForward: false };
 
 // Serves the built panel and speaks just enough of the panel protocol; records what the panel sends.
 async function startFake(dist) {
@@ -40,7 +42,7 @@ async function startFake(dist) {
       const m = JSON.parse(String(data));
       received.push(m);
       if (m.msg === 'hello') ws.send(JSON.stringify({ type: 'browsers', list: BROWSERS }));
-      if (m.msg === 'view' && m.name) ws.send(JSON.stringify(STATE));
+      if (m.msg === 'view' && m.name) ws.send(JSON.stringify({ ...STATE, name: m.name }));
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -87,14 +89,36 @@ test('panel layout and keyboard in real Chromium', { skip: process.env.RUN_REAL_
     });
   }
 
-  await t.test('2. viewer at 1000px (mouse): one toolbar row', async () => {
-    const page = await open(viewerUrl, { width: 1000, height: 800 });
-    await page.getByRole('textbox', { name: 'Address' }).waitFor();
-    const tops = (await boxes(page, 'header button, header input, header h1')).map((b) => b.mid);
-    assert.ok(tops.length >= 6);
-    assert.ok(Math.max(...tops) - Math.min(...tops) <= 2, `controls share a row (centres ${tops.join(', ')})`);
-    await page.context().close();
-  });
+  const WIDTHS = Array.from({ length: 62 }, (_, i) => 390 + i * 10); // 390..1000
+
+  for (const touch of [true, false]) {
+    for (const name of [NAME, 'a']) {
+      await t.test(`1b. viewer sweep 390..1000px, ${touch ? 'touch' : 'mouse'}, name ${name.length} chars: no overflow, every control inside`, async () => {
+        const page = await open(`http://127.0.0.1:${fake.port}/?browser=${name}`, { width: 390, height: 800 }, { hasTouch: touch });
+        await page.getByRole('textbox', { name: 'Address' }).waitFor();
+        for (const width of WIDTHS) {
+          await page.setViewportSize({ width, height: 800 });
+          await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+          assert.ok((await overflow(page)) <= 0, `no horizontal scroll at ${width}px`);
+          for (const b of await boxes(page, 'header button, header input, header h1')) {
+            assert.ok(b.left >= -0.5 && b.right <= width + 0.5, `${b.label} lies within the viewport at ${width}px (${b.left}..${b.right})`);
+          }
+        }
+        await page.context().close();
+      });
+    }
+  }
+
+  for (const touch of [false, true]) {
+    await t.test(`2. viewer at 1000px (${touch ? 'touch' : 'mouse'}): one toolbar row`, async () => {
+      const page = await open(viewerUrl, { width: 1000, height: 800 }, { hasTouch: touch });
+      await page.getByRole('textbox', { name: 'Address' }).waitFor();
+      const tops = (await boxes(page, 'header button, header input, header h1')).map((b) => b.mid);
+      assert.ok(tops.length >= 6);
+      assert.ok(Math.max(...tops) - Math.min(...tops) <= 2, `controls share a row (centres ${tops.join(', ')})`);
+      await page.context().close();
+    });
+  }
 
   await t.test('3. list at 390px: nothing ellipsized or pushed off, buttons beside the name', async () => {
     const page = await open(`http://127.0.0.1:${fake.port}/`, { width: 390, height: 800 });
@@ -112,6 +136,20 @@ test('panel layout and keyboard in real Chromium', { skip: process.env.RUN_REAL_
     for (const r of rows) {
       assert.ok(r.primaryRight <= 390 && r.menuRight <= 390, 'buttons lie within the viewport');
       assert.ok(r.primaryTop < r.mainBottom && r.menuTop < r.mainBottom, 'buttons share a line with the name block');
+    }
+    await page.context().close();
+  });
+
+  await t.test('3b. list sweep 390..1000px: no overflow, no status cut, buttons inside', async () => {
+    const page = await open(`http://127.0.0.1:${fake.port}/`, { width: 390, height: 800 });
+    await page.getByRole('button', { name: `Open ${NAME}` }).waitFor();
+    for (const width of WIDTHS) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      assert.ok((await overflow(page)) <= 0, `no horizontal scroll at ${width}px`);
+      const cut = await page.$$eval('.row-status', (els) => els.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent));
+      assert.deepEqual(cut, [], `no status line is cut at ${width}px`);
+      for (const b of await boxes(page, '.browser-row button')) assert.ok(b.right <= width + 0.5, `${b.label} lies within the viewport at ${width}px`);
     }
     await page.context().close();
   });

@@ -126,7 +126,7 @@ export function Viewer({ name, socket, state, dialogs, summary, offline, focusHe
               onRelease={() => socket.send({ msg: 'control', action: 'release' })}
             />
             {showScreen
-              ? <Screen panelId={panelId} socket={socket} hasControl={hasControl} keyboardRef={keyboardRef} onKeyboardActive={setKeyboardActive} onTake={() => socket.send({ msg: 'control', action: 'take' })} />
+              ? <Screen panelId={panelId} labelled={!!activeTab} socket={socket} hasControl={hasControl} keyboardRef={keyboardRef} onKeyboardActive={setKeyboardActive} onTake={() => socket.send({ msg: 'control', action: 'take' })} />
               : (
                 <div className="stopped" role="status">
                   <p>Select a tab to watch it.</p>

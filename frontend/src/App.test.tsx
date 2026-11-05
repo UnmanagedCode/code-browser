@@ -1219,6 +1219,7 @@ describe('accessibility and focus', () => {
 
   // Invariant: Delete on a focused tab closes it only with control, and focus then lands on the tab that took its place.
   it('Delete closes the focused tab and focus moves to its neighbour', async () => {
+    focused();
     await openViewer({ kind: 'human', you: true });
     await f.emit(threeTabs());
     tabEl('Beta').focus();
@@ -1229,6 +1230,31 @@ describe('accessibility and focus', () => {
     fireEvent.keyDown(tabEl('Gamma'), { key: 'Delete' });
     await f.emit(threeTabs({ tabs: [mkTab('T1', 'One')] }));
     expect(document.activeElement).toBe(tabEl('One'));
+  });
+
+  // Invariant: the focus move after a Delete close never happens once the panel has lost focus (the person went elsewhere meanwhile).
+  it('the focus move after Delete is skipped when the panel no longer has focus', async () => {
+    const has = focused();
+    await openViewer({ kind: 'human', you: true });
+    await f.emit(threeTabs());
+    tabEl('Beta').focus();
+    fireEvent.keyDown(tabEl('Beta'), { key: 'Delete' });
+    has.mockReturnValue(false);
+    document.body.focus();
+    await f.emit(threeTabs({ tabs: [mkTab('T1', 'One'), mkTab('T3', 'Gamma')] }));
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  // Invariant: every tabpanel that renders is labelled by a tab that exists; with no rendered active tab there is no tabpanel.
+  it('the screen is a tabpanel only when its tab is rendered', async () => {
+    await openViewer({ kind: 'human', you: true });
+    await f.emit(threeTabs({ tabs: [], activeTabId: 'T1' }));
+    expect(screen.queryByRole('tabpanel')).toBeNull();
+    await f.emit(threeTabs({ activeTabId: 'GONE' }));
+    expect(screen.queryByRole('tabpanel')).toBeNull();
+    await f.emit(threeTabs());
+    const panel = screen.getByRole('tabpanel');
+    expect(document.getElementById(panel.getAttribute('aria-labelledby')!)).toBeTruthy();
   });
 
   // Invariant: without control Delete sends nothing.
