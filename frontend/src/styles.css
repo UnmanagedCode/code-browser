@@ -124,12 +124,13 @@ input:not([type='radio']):not([type='checkbox']):focus-visible { border-color: v
 
 .viewer { display: flex; flex-direction: column; height: 100%; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; row-gap: 0.25rem; padding: 0.375rem 0.5rem; border-bottom: 1px solid var(--border); }
-.viewer-name { flex: 0 1 auto; min-width: 3rem; max-width: 8rem; margin: 0; font-size: inherit; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-name { flex: 1 1 3rem; min-width: 3rem; max-width: 8rem; margin: 0; font-size: inherit; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The address group wraps onto its own row once the first row and this basis no longer fit. */
-/* The basis is at least the group's min-content (address minimum, Keyboard with its label, Stop), so a group that fits the line never overflows it. */
-.toolbar-end { flex: 1 1 22rem; min-width: 0; display: flex; align-items: center; gap: 0.25rem; }
+/* min-content is the group's floor (address minimum, Keyboard with its label, Stop): the line breaks on that, never below it. The name's 3rem basis lets it shrink before the group wraps, then grow into spare room up to its cap. */
+.toolbar-end { flex: 1 1 12rem; min-width: min-content; display: flex; align-items: center; gap: 0.25rem; }
 .url-bar { flex: 1; display: flex; min-width: 6rem; }
-.url-bar input { flex: 1; height: 2rem; }
+/* An explicit width keeps the input's intrinsic size out of the group's min-content. */
+.url-bar input { flex: 1; width: 6rem; height: 2rem; }
 .tab-bar { position: relative; display: flex; align-items: center; gap: 0.25rem; padding: 0.25rem; border-bottom: 1px solid var(--border); }
 .tab-strip { flex: 1; min-width: 0; display: flex; gap: 0.25rem; overflow-x: auto; }
 .tab-switcher-trigger, .tab-new { flex: none; }

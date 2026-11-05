@@ -93,7 +93,7 @@ test('panel layout and keyboard in real Chromium', { skip: process.env.RUN_REAL_
 
   for (const touch of [true, false]) {
     for (const name of [NAME, 'a']) {
-      await t.test(`1b. viewer sweep 390..1000px, ${touch ? 'touch' : 'mouse'}, name ${name.length} chars: no overflow, every control inside`, async () => {
+      await t.test(`1b. viewer sweep 390..1000px, ${touch ? 'touch' : 'mouse'}, name ${name.length} chars: no overflow, every control inside, one row from 640px`, async () => {
         const page = await open(`http://127.0.0.1:${fake.port}/?browser=${name}`, { width: 390, height: 800 }, { hasTouch: touch });
         await page.getByRole('textbox', { name: 'Address' }).waitFor();
         for (const width of WIDTHS) {
@@ -102,6 +102,10 @@ test('panel layout and keyboard in real Chromium', { skip: process.env.RUN_REAL_
           assert.ok((await overflow(page)) <= 0, `no horizontal scroll at ${width}px`);
           for (const b of await boxes(page, 'header button, header input, header h1')) {
             assert.ok(b.left >= -0.5 && b.right <= width + 0.5, `${b.label} lies within the viewport at ${width}px (${b.left}..${b.right})`);
+          }
+          if (width >= 640) {
+            const mids = (await boxes(page, 'header button, header input, header h1')).map((b) => b.mid);
+            assert.ok(Math.max(...mids) - Math.min(...mids) <= 2, `one toolbar row at ${width}px (centres ${mids.join(', ')})`);
           }
         }
         await page.context().close();
