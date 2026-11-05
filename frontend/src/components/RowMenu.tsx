@@ -4,7 +4,7 @@ import { EllipsisIcon } from './icons';
 export interface RowMenuItem { label: string; onSelect(): void; tone?: 'destructive' }
 interface Props { label: string; items: RowMenuItem[]; triggerRef?: Ref<HTMLButtonElement> }
 
-// A "More actions" overflow menu: focus enters on the first item, arrows wrap, Escape/Tab close and return focus
+// A "More actions" overflow menu: focus enters on the first item, arrows wrap, Escape closes it and returns focus
 // to the trigger, Tab closes it and moves on, and a press outside closes it. Choosing an item returns focus to the
 // trigger first, so a row that survives keeps focus; a flow that follows (a confirmation, the attach form) then takes it.
 export function RowMenu({ label, items, triggerRef }: Props) {
