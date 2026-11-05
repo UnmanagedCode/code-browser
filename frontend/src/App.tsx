@@ -1,18 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserList } from './components/BrowserList';
+import { ConnectionBanner } from './components/ConnectionBanner';
+import { Toast } from './components/Toast';
 import { TooltipLayer } from './components/TooltipLayer';
 import { Viewer } from './components/Viewer';
 import * as api from './api';
+import { toToast, type ToastContent } from './errorText';
 import type { BrowserState, BrowserSummary, DialogInfo } from './protocol';
 import { browserFromSearch, pushBrowser } from './route';
-import type { ViewerSocket } from './socket';
+import type { SocketStatus, ViewerSocket } from './socket';
 
 export function App({ socket }: { socket: ViewerSocket }) {
   const [name, setName] = useState(() => browserFromSearch(location.search));
   const [browsers, setBrowsers] = useState<BrowserSummary[]>([]);
   const [state, setState] = useState<BrowserState | null>(null);
   const [dialogs, setDialogs] = useState<DialogInfo[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastContent | null>(null);
+  const [conn, setConn] = useState<{ status: SocketStatus; failures: number }>({ status: 'connecting', failures: 0 });
+  // A `browsers` list has arrived since the socket last opened. Until then the list is not known to be current,
+  // and no browser is joined.
+  const [synced, setSynced] = useState(false);
+
+  const showError = useCallback((text: string) => {
+    const { code, message } = api.splitCode(text);
+    setToast(toToast(code, message));
+  }, []);
 
   useEffect(() => {
     const onPop = () => setName(browserFromSearch(location.search));
@@ -22,55 +34,54 @@ export function App({ socket }: { socket: ViewerSocket }) {
 
   useEffect(() => socket.onMessage((m) => {
     switch (m.type) {
-      case 'browsers': setBrowsers(m.list); break;
+      case 'browsers': setBrowsers(m.list); setSynced(true); break;
       case 'state': setState(m); break;
       case 'dialog': setDialogs((d) => [...d.filter((x) => x.tabId !== m.tabId), { tabId: m.tabId, dialogType: m.dialogType, message: m.message, defaultPrompt: m.defaultPrompt }]); break;
       case 'dialogClosed': setDialogs((d) => d.filter((x) => x.tabId !== m.tabId)); break;
-      case 'error': setError(`${m.code}: ${m.message}`); break;
+      case 'error': setToast(toToast(m.code, m.message)); break;
       default:
     }
   }), [socket]);
 
-  // A dropped socket means we no longer know which dialogs are open or what the tabs are. Forget both; the
-  // rejoin on reconnect makes the server replay its state and any dialog that is still open.
-  useEffect(() => socket.onStatus((status) => {
+  // A dropped socket means the list and the open dialogs are unknown: clear both. The viewer keeps its last state
+  // (dimmed and inert) so the person still sees what was there; the rejoin after a fresh list replaces it.
+  useEffect(() => socket.onStatus((status, failures) => {
+    setConn({ status, failures });
     if (status === 'closed') {
-      setState(null);
+      setSynced(false);
+      setBrowsers([]);
       setDialogs([]);
     }
   }), [socket]);
 
-  // The view follows the route, and only while that browser runs; a browser that stops is un-viewed
-  // so that its next start is joined again.
+  // The view follows the route, and only while a fresh list says that browser runs: a rejoin never races a backend
+  // restart, and a browser that stops is un-viewed so that its next start is joined again.
   const summary = useMemo(() => browsers.find((b) => b.name === name), [browsers, name]);
-  const viewable = name !== null && summary?.status === 'running';
-  // State and dialogs belong to one run of one browser: clear them when the route changes browser or the
-  // browser stops, but not on mount or when it starts (a reply replayed by the socket must survive).
+  const viewable = synced && name !== null && summary?.status === 'running';
+  // State and dialogs belong to one run of one browser: clear them when the route changes browser or a fresh list
+  // says it stopped, but not on mount, when it starts, or on a disconnect (a reply replayed by the socket must survive).
   const lastView = useRef<{ name: string | null; viewable: boolean } | null>(null);
   useEffect(() => {
     const last = lastView.current;
-    if (last && (last.name !== name || (last.viewable && !viewable))) {
+    if (last && (last.name !== name || (synced && last.viewable && !viewable))) {
       setState(null);
       setDialogs([]);
     }
-    lastView.current = { name, viewable };
-    socket.setView(viewable && name ? { name, maxWidth: 0, maxHeight: 0 } : null);
-  }, [socket, name, viewable]);
+    if (synced || last?.name !== name) lastView.current = { name, viewable };
+    socket.setView(viewable && name ? { name } : null);
+  }, [socket, name, viewable, synced]);
 
   const open = useCallback((n: string | null) => pushBrowser(n), []);
   const shownState = state && state.name === name ? state : summary?.status === 'stopped' ? { type: 'state' as const, name: name ?? '', status: 'stopped' as const } : null;
+  const offline = !synced;
 
   return (
-    <>
+    <div className="app">
       <TooltipLayer />
-      {error && (
-        <div className="toast" role="alert">
-          <span>{error}</span>
-          <button type="button" data-variant="ghost" data-size="icon-sm" aria-label="Dismiss" data-tip="Dismiss" onClick={() => setError(null)}>×</button>
-        </div>
-      )}
+      <ConnectionBanner status={conn.status} failures={conn.failures} onRetry={() => socket.retry()} />
+      {toast && <Toast toast={toast} onDismiss={() => setToast(null)} />}
       {name === null ? (
-        <BrowserList browsers={browsers} onOpen={open} onError={setError} />
+        <BrowserList browsers={browsers} loading={offline} onOpen={open} onError={showError} />
       ) : (
         <Viewer
           name={name}
@@ -78,13 +89,14 @@ export function App({ socket }: { socket: ViewerSocket }) {
           state={shownState}
           dialogs={dialogs}
           summary={summary}
-          onError={setError}
+          offline={offline}
+          onError={showError}
           onBack={() => open(null)}
-          onStart={() => { api.startBrowser(name).catch((e: Error) => { if (!api.isSandboxRefusal(e)) setError(e.message); }); }}
-          onStop={() => { api.stopBrowser(name).catch((e: Error) => setError(e.message)); }}
-          onConnect={() => { api.connectBrowser(name).catch((e: Error) => setError(e.message)); }}
+          onStart={() => { api.startBrowser(name).catch((e: Error) => { if (!api.isSandboxRefusal(e)) showError(e.message); }); }}
+          onStop={() => { api.stopBrowser(name).catch((e: Error) => showError(e.message)); }}
+          onConnect={() => { api.connectBrowser(name).catch((e: Error) => showError(e.message)); }}
         />
       )}
-    </>
+    </div>
   );
 }

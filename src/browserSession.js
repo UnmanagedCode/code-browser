@@ -6,6 +6,7 @@ import { MAX_PROMPT_TEXT, TAB_SWEEP_MS } from './limits.js';
 import { unrefTimeout } from './schedule.js';
 import { createScreencast } from './screencast.js';
 import { emptyTabs, reduceTabs } from './tabs.js';
+import { createViewportFit } from './viewportFit.js';
 
 // Prerender and other subtyped targets are not tabs a person can see.
 const isPage = (ti) => ti.type === 'page' && !ti.subtype;
@@ -18,14 +19,24 @@ const isPage = (ti) => ti.type === 'page' && !ti.subtype;
 // becoming active, a tab is brought to the front only when someone starts watching it, and closing the last
 // tab opens nothing.
 //
+// A launched browser (`attached` false) also keeps its pages' viewport the shape of the largest viewer's panel
+// (viewportFit.js). An attached browser gets no viewportFit, so nothing in the session can resize it.
+// `viewportOptions` overrides that module's timing and limits.
+//
 // Chromium sends no Target.targetInfoChanged when a page's title commits or changes, so a running session re-reads
 // the target list every `sweep.intervalMs` and updates titles only.
-export function createBrowserSession({ name, cdp, sandbox, attached = false, log = console, controllerOptions = {}, screencastOptions = {}, sweep = {} }) {
+export function createBrowserSession({ name, cdp, sandbox, attached = false, log = console, controllerOptions = {}, screencastOptions = {}, viewportOptions = {}, sweep = {} }) {
   const { intervalMs = TAB_SWEEP_MS, schedule = unrefTimeout } = sweep;
   const events = new EventEmitter();
   const controller = createController({ ...controllerOptions, onChange: () => events.emit('change') });
   const warn = (what) => (err) => { if (!disposed) log.warn(`code-browser: '${name}' ${what}: ${err.message}`); };
+  const viewport = attached ? null : createViewportFit({
+    send: (method, params, sessionId) => cdp.send(method, params, { sessionId }),
+    onError: (err) => warn('viewport')(err),
+    ...viewportOptions,
+  });
   const screencast = createScreencast({
+    onViewers: (sizes) => viewport?.setViewers(sizes),
     send: (method, params, sessionId) => cdp.send(method, params, { sessionId }),
     onError: (err) => log.warn(`code-browser: '${name}' screencast: ${err.message}`),
     ...(attached ? { onStart: (tabId) => { cdp.send('Target.activateTarget', { targetId: tabId }).catch(warn('activateTarget')); } } : {}),
@@ -114,6 +125,7 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
         sessionOfTab.set(targetId, sessionId);
         tabOfSession.set(sessionId, targetId);
         await cdp.send('Page.enable', {}, { sessionId });
+        viewport?.addTab(sessionId);
         syncScreencast();
         if (targetId === tabs.activeId) refreshNav().catch(warn('navigation state'));
         return sessionId;
@@ -130,7 +142,7 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
   function forgetTab(targetId) {
     const sessionId = sessionOfTab.get(targetId);
     sessionOfTab.delete(targetId);
-    if (sessionId) tabOfSession.delete(sessionId);
+    if (sessionId) { tabOfSession.delete(sessionId); viewport?.removeTab(sessionId); }
     if (dialogs.delete(targetId)) events.emit('dialogClosed', { tabId: targetId });
   }
 
@@ -204,6 +216,7 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
       disposed = true;
       cancelSweep?.();
       cancelSweep = null;
+      viewport?.dispose();
       cdp.off('event', onEventBound);
     },
     snapshot: () => ({
@@ -254,3 +267,9 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
     },
   };
 }
+
+// The session for a running entry. Only an entry positively `kind: 'launched'` is code-browser's to resize; anything
+// else is treated as a person's own browser.
+export const createSessionForEntry = (entry, options = {}) => createBrowserSession({
+  name: entry.name, cdp: entry.cdp, sandbox: entry.sandbox, attached: entry.kind !== 'launched', ...options,
+});

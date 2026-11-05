@@ -37,7 +37,8 @@ describe('viewer socket', () => {
   // Invariant: every open says hello first, then the current view.
   it('sends hello then the view on open', () => {
     const s = make();
-    s.setView({ name: 'a', maxWidth: 800, maxHeight: 600 });
+    s.setViewport(800, 600);
+    s.setView({ name: 'a' });
     expect(last().sent).toEqual([]);
     last().open();
     expect(last().sent).toEqual([{ msg: 'hello', viewerId: 'viewer-123456' }, { msg: 'view', name: 'a', maxWidth: 800, maxHeight: 600 }]);
@@ -69,7 +70,8 @@ describe('viewer socket', () => {
   // Invariant: after a reconnect the new socket says hello again and re-joins the same view.
   it('re-hellos and re-views on reconnect', () => {
     const s = make();
-    s.setView({ name: 'a', maxWidth: 1, maxHeight: 2 });
+    s.setViewport(1, 2);
+    s.setView({ name: 'a' });
     last().open();
     last().drop();
     vi.advanceTimersByTime(BACKOFF_START_MS);
@@ -80,7 +82,8 @@ describe('viewer socket', () => {
   // Invariant: a hidden page pauses its view (so the host stops screencasting for it) and resumes it when visible.
   it('pauses the view while hidden and resumes when visible', () => {
     const s = make();
-    s.setView({ name: 'a', maxWidth: 1, maxHeight: 2 });
+    s.setViewport(1, 2);
+    s.setView({ name: 'a' });
     last().open();
     doc.setVisibility('hidden');
     doc.setVisibility('visible');
@@ -92,7 +95,7 @@ describe('viewer socket', () => {
     const s = make();
     last().open();
     doc.setVisibility('hidden');
-    s.setView({ name: 'a', maxWidth: 1, maxHeight: 2 });
+    s.setView({ name: 'a' });
     expect(last().sent).toEqual([{ msg: 'hello', viewerId: 'viewer-123456' }]);
     doc.setVisibility('visible');
     expect(last().sent.at(-1)).toMatchObject({ msg: 'view', name: 'a' });
@@ -102,8 +105,8 @@ describe('viewer socket', () => {
   it('deduplicates identical views', () => {
     const s = make();
     last().open();
-    s.setView({ name: 'a', maxWidth: 1, maxHeight: 2 });
-    s.setView({ name: 'a', maxWidth: 1, maxHeight: 2 });
+    s.setView({ name: 'a' });
+    s.setView({ name: 'a' });
     s.setView(null);
     expect(last().sent.filter((m) => (m as { msg: string }).msg === 'view')).toHaveLength(2);
   });
@@ -111,7 +114,8 @@ describe('viewer socket', () => {
   // Invariant: resizes send `viewport` (never a re-join) and are remembered for the next reconnect.
   it('viewport is sent while viewing and remembered across reconnects', () => {
     const s = make();
-    s.setView({ name: 'a', maxWidth: 1, maxHeight: 2 });
+    s.setViewport(1, 2);
+    s.setView({ name: 'a' });
     last().open();
     s.setViewport(300, 400);
     expect(last().sent.at(-1)).toEqual({ msg: 'viewport', maxWidth: 300, maxHeight: 400 });
@@ -119,6 +123,57 @@ describe('viewer socket', () => {
     vi.advanceTimersByTime(BACKOFF_START_MS);
     last().open();
     expect(last().sent.at(-1)).toEqual({ msg: 'view', name: 'a', maxWidth: 300, maxHeight: 400 });
+  });
+
+  // Invariant: the panel's size outlives the view: leaving and re-joining sends the real size, never a placeholder.
+  it('the viewport is remembered across setView(null) and a later join', () => {
+    const s = make();
+    last().open();
+    s.setViewport(640, 480);
+    expect(last().sent).toEqual([{ msg: 'hello', viewerId: 'viewer-123456' }]);
+    s.setView({ name: 'a' });
+    s.setView(null);
+    s.setView({ name: 'a' });
+    expect(last().sent.filter((m) => (m as { msg: string }).msg === 'view')).toEqual([
+      { msg: 'view', name: 'a', maxWidth: 640, maxHeight: 480 },
+      { msg: 'view', name: null, maxWidth: 0, maxHeight: 0 },
+      { msg: 'view', name: 'a', maxWidth: 640, maxHeight: 480 },
+    ]);
+  });
+
+  // Invariant: `failures` counts consecutive closes, resets on open, and a new subscriber is told the current state at once.
+  it('onStatus reports failures and replays the current status to a late subscriber', () => {
+    const s = make();
+    const seen: [string, number][] = [];
+    s.onStatus((st, n) => seen.push([st, n]));
+    expect(seen).toEqual([['connecting', 0]]);
+    last().drop();
+    vi.advanceTimersByTime(BACKOFF_START_MS);
+    last().drop();
+    expect(seen.at(-1)).toEqual(['closed', 2]);
+    vi.advanceTimersByTime(BACKOFF_START_MS * 2);
+    last().open();
+    expect(seen.at(-1)).toEqual(['open', 0]);
+    const late: [string, number][] = [];
+    s.onStatus((st, n) => late.push([st, n]));
+    expect(late).toEqual([['open', 0]]);
+  });
+
+  // Invariant: retry() reconnects at once from closed, and does nothing while connecting or open.
+  it('retry connects immediately when closed and is a no-op otherwise', () => {
+    const s = make();
+    s.retry();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    last().open();
+    s.retry();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    last().drop();
+    s.retry();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    vi.advanceTimersByTime(BACKOFF_MAX_MS);
+    expect(FakeWebSocket.instances, 'the pending backoff timer was cancelled').toHaveLength(2);
+    s.retry();
+    expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
   // Invariant: send reports whether the message went out; nothing is queued while closed.
@@ -184,10 +239,10 @@ describe('viewer socket', () => {
   // Invariant: a held frame of a previous browser is discarded when the view changes.
   it('drops a held frame when the viewed browser changes', () => {
     const s = make();
-    s.setView({ name: 'a', maxWidth: 0, maxHeight: 0 });
+    s.setView({ name: 'a' });
     last().open();
     last().onmessage?.({ data: frameBuffer(1) });
-    s.setView({ name: 'b', maxWidth: 0, maxHeight: 0 });
+    s.setView({ name: 'b' });
     const seen: number[] = [];
     s.onFrame((h) => seen.push(h.seq));
     expect(seen).toEqual([]);
@@ -243,12 +298,12 @@ describe('viewer socket', () => {
   // the browser list is not tied to a view and stays.
   it('drops held state and dialogs, but not the list, when the viewed browser changes', () => {
     const s = make();
-    s.setView({ name: 'a', maxWidth: 0, maxHeight: 0 });
+    s.setView({ name: 'a' });
     last().open();
     deliver({ type: 'browsers', list: [] });
     deliver(tabState('a', 1));
     deliver({ type: 'dialog', tabId: 'd1', dialogType: 'alert', message: 'm', defaultPrompt: '' });
-    s.setView({ name: 'b', maxWidth: 0, maxHeight: 0 });
+    s.setView({ name: 'b' });
     const seen: { type: string }[] = [];
     s.onMessage((m) => seen.push(m));
     expect(seen.map((m) => m.type)).toEqual(['browsers']);

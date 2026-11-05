@@ -1,5 +1,5 @@
 import { CodedError } from './errors.js';
-import { DEFAULT_BROWSER_NAME } from './limits.js';
+import { DEFAULT_BROWSER_NAME, DEFAULT_WINDOW } from './limits.js';
 import { assertName } from './browserManager.js';
 import { panelPath } from './panelLink.js';
 import { buildSnippet } from './snippet.js';
@@ -61,6 +61,7 @@ export function createMcp({ manager, pluginDir, pluginId }) {
       'Rules:',
       '- Use `browser.contexts()[0]`, never `newContext()`: a new context is incognito and not shared with the panel.',
       '- `browser.close()` only disconnects; the browser keeps running.',
+      ...(info.kind === 'launched' ? [`- The page viewport is ${DEFAULT_WINDOW.width} px wide; its height follows the shape of the person's panel and can change between scripts. Read innerHeight instead of assuming it, and do not set your own viewport (page.setViewportSize): it conflicts with the panel's.`] : []),
       '',
       'Save this as an .mjs file and run it with node via Bash:',
       '```js',

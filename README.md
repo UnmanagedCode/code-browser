@@ -24,7 +24,7 @@ Tests: `npm test` (includes the CDP proxy's Python tests: needs Python 3.9+, or 
 ## Key defaults
 
 - Data: `$CONDUCTOR_PLUGIN_DATA_DIR` (cc sets `<projectsRoot>/.code-conductor/plugins/data/code-browser`): profiles, run state, logs; see [architecture.md → On-disk layout](docs/architecture.md#on-disk-layout-conductor_plugin_data_dir).
-- Chromium: headless, 1280×800, CDP on a random loopback port, sandboxed; unsandboxed only for a browser a human allowed (see *Runs unsandboxed* below).
+- Chromium: headless, 1280 px wide with the viewport height following the panel ([features](docs/features.md)), CDP on a random loopback port, sandboxed; unsandboxed only for a browser a human allowed (see *Runs unsandboxed* below).
 - The controller lock is advisory for agents and enforced for people (see below).
 
 ## Known limitations

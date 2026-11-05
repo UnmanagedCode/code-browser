@@ -24,6 +24,7 @@ const BANNED = [
   { name: 'setAttribute href/src/style', re: /setAttribute\(\s*['"](href|src|style|srcdoc)['"]/i, sample: 'el.setAttribute("href", x)' },
   { name: 'javascript: URL', re: /javascript:/i, sample: 'const u = "javascript:alert(1)"' },
   { name: 'location.hash (the bridge forbids navigating by hash)', re: /location\.hash|\.hash\s*=/, sample: 'location.hash = "x"' },
+  { name: 'native confirm/alert/prompt', re: /\bwindow\.(confirm|alert|prompt)\b|(?<![\w.])(confirm|alert|prompt)\s*\(/, sample: 'window.confirm("x")' },
   { name: 'unprefixed storage key', re: /(local|session)Storage\.\w+Item\(\s*['"](?!code-browser:)/, sample: 'localStorage.getItem("k")' },
 ];
 // Root-relative URL literal, e.g. '/api/browsers': the page lives under /plugins/<id>/ and must use relative URLs.

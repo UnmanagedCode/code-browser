@@ -16,6 +16,7 @@ code-browser gives an agent and a person one shared headless Chromium. The agent
 - The snippet resolves `playwright-core` from the plugin's own `node_modules`; the agent's project needs no install.
 - The snippet's page selection picks the tab the person is looking at (the active tab).
 - Give the user the `panelPath` as is. It is relative to the address they open cc at; do not add a host.
+- **Viewport:** a launched browser's pages are `DEFAULT_WINDOW.width` px wide (`src/limits.js`) and their height follows the shape of the person's panel, so the screen has no letterbox bars. It can change between scripts: read `innerHeight`, and do not call `page.setViewportSize`. `browser_info` says so for launched browsers. An attached browser is never resized ([Screen](#panel)).
 - A browser **name** is a persistent profile: the same name keeps logins and cookies across stops, including session cookies.
 - **No usable sandbox:** `start_browser` fails with `SANDBOX_UNAVAILABLE`. The error carries the `panelPath`. Tell the user to open it and enable *Allow without sandbox* for that browser, then call `start_browser` again. The agent cannot enable it: no tool or argument does. A running browser with `sandbox: false` must not browse untrusted pages.
 
@@ -40,7 +41,14 @@ The agent talks to Chromium over its own CDP connection; the backend is not on t
 
 Open it from cc's **Code Browser** nav entry, or from the `panelPath` link an agent gives you.
 
-- **Browser list:** each browser with its status (an attached browser's rows are described under [Attach your own browser](#attach-your-own-browser)), who controls it, a *no sandbox* badge while Chromium runs without its sandbox, *allowed without sandbox* (with **Disallow without sandbox**) for a browser a human allowed, *not started: no sandbox* after a refused start, and *Crashed* after an unexpected exit. Open, Start/Stop, Delete (asks first; Delete and Forget are drawn as destructive). **Disallow without sandbox** on a browser that is running unsandboxed asks first, because it stops that browser now (the profile and, through session restore, the tabs and logins are kept); on any other browser it takes effect without a prompt. A Start (or New browser) that is refused for want of a sandbox opens that browser's viewer instead of showing an error. **New browser** creates and starts a profile; the name field takes `a-z`, `0-9` and `-`.
+- **Browser list:** one row per browser: its name, a one-line status, one primary button, and a **More actions for <name>** menu.
+  - **Status line** (`statusParts` in `frontend/src/browserStatus.ts`): *Running*, *Stopped* or *Connecting*, then who controls it, then warnings: *no sandbox* while Chromium runs without its sandbox, *allowed without sandbox* for a browser a human allowed, *not started: no sandbox* after a refused start, *Crashed* after an unexpected exit. An attached row's line is described under [Attach your own browser](#attach-your-own-browser).
+  - **Primary button:** **Open** for a running or connecting browser, **Start** for a stopped launched one, **Connect** for a stopped attached one. A Start that is refused for want of a sandbox opens that browser's viewer instead of showing an error.
+  - **More actions** menu (arrow keys wrap; Escape or Tab closes it and returns focus to its button): Open (when it is not the primary), Stop or Disconnect (not stopped), Change… (attached), **Disallow without sandbox** (launched, allowed), then Delete or Forget, drawn as destructive.
+  - **Inline confirmations** replace native dialogs; focus starts on **Cancel**, Escape cancels, and focus returns to the row's menu button. Delete asks first; **Forget** asks first; **Disallow without sandbox** on a browser running unsandboxed asks first (**Stop and disallow**), because it stops that browser now (the profile and, through session restore, the tabs and logins are kept), and on any other browser it takes effect without a prompt.
+  - **Create:** a labelled *New browser name* field with its rule beside it (`NAME_RE` in `src/limits.js`, worded in `frontend/src/names.ts`); **Create** creates and starts a profile, and a refused start opens its viewer.
+  - **Attach a browser…** is a disclosure button; the attach form appears only while it is open.
+  - Until the first list arrives, and after a disconnect, the list shows *Waiting for code-browser…*.
 - **Viewer:** toolbar (**Browsers** back to the list, back/forward/reload, address bar, **Keyboard** on touch-capable devices only — pressed while typing goes to the page — and **Stop**, which reads **Disconnect** for an attached browser), tab strip, controller bar, the live screen. Every icon button has a tooltip. Stop and Disconnect act at once, need no control, and ask nothing, like the list's.
 - **Address bar:** Enter navigates; a bare host gets `https://`; only `http`, `https` and `about:blank` are accepted.
 - **Tabs:** a strip of the tabs, in window order, next to an `N tabs…` button that opens the switcher.
@@ -50,13 +58,14 @@ Open it from cc's **Code Browser** nav entry, or from the `panelPath` link an ag
   - **Strip keys:** ← → Home End move focus only; Enter or Space selects; Delete closes (needs control). The watched tab scrolls into view.
   - **Badges:** *Shared* (accessible name "shared with agent") on the watched tab, which everyone watching sees and where the agent's next script starts; *Dialog* ("has open dialog") on a tab with a pending dialog.
   - Selecting a tab switches the shared view for everyone and needs no control; × and + need control. The choices (browser pages, sort) are not saved across reloads.
-- **Screen:** a live screencast scaled to fit. Without control it shows *Take control to interact*, a button that takes control, and sends nothing. While you have control the screen has a green frame, which turns to the focus ring while keyboard input goes to the page.
+- **Screen:** a live screencast scaled to fit. For a launched browser the page's viewport height follows the largest viewer's panel shape, clamped to `VIEWPORT_MIN_HEIGHT`..`VIEWPORT_MAX_HEIGHT` and applied after the panel has been steady for `VIEWPORT_DEBOUNCE_MS` (`src/limits.js`), so dragging the panel does not thrash the agent's page; with no viewer the height is unchanged. An attached browser is the person's own and is never resized (no viewport, window or scale change), so its frame is letterboxed when its shape differs from the panel's. Without control it shows *Take control to interact*, a button that takes control, and sends nothing. While you have control the screen has a green frame, which turns to the focus ring while keyboard input goes to the page.
 - **Dialogs:** a JavaScript `alert`, `confirm`, `prompt` or `beforeunload` shows as a modal with its message as text. OK and Cancel need control; the dialog offers *Take control* itself because it covers the controller bar. The dialog names its tab and its host (*From tab: title — host*) and, when that tab is not the watched one, offers **Show tab** (no control needed). A dialog open before you joined is shown on arrival.
 - **Stopped browsers:** the viewer shows *This browser is stopped* with a Start button.
 - **No active tab** (an attached browser whose tabs nobody has picked yet): the viewer shows *Select a tab to watch it.* and a **Find a tab…** button that opens the switcher, instead of the screen.
 - **Refused start (no sandbox):** the viewer shows *Not started: no usable sandbox*, the risks (the profile keeps logins and cookies, pages reach loopback and LAN services, a compromised page runs code as the host user), and **Allow without sandbox…**. That opens a confirmation step with **Allow** and **Cancel**; nothing is sent before **Allow**. Once allowed, the notice offers **Start**. The notice appears for whoever opens the browser, including after an agent's refused start.
 - **Hidden page:** while the page is hidden it pauses its view, so a background tab costs the host no screencast.
-- **Reconnect:** the panel reconnects with backoff and rejoins its view. While disconnected it forgets the tabs and any open dialog; the rejoin shows only what is still open.
+- **Reconnect:** the panel reconnects with backoff. From the first failed attempt a banner reads *Lost the connection to code-browser. Retrying (attempt N)…* with **Retry now**, then *Reconnecting… (attempt N)* while a socket is opening; it is gone once the socket opens. While disconnected the viewer keeps the last frame and tabs, dimmed and inert (the toolbar's navigation, address bar and Keyboard are disabled; **Browsers** still works), open dialogs are forgotten, and the browser list is cleared. The panel joins a browser only after a fresh list on the new connection says it is running, so a browser stopped while the backend was away shows as stopped instead of an error.
+- **Errors:** a toast at the bottom centre shows a plain sentence with the error code beneath it (`toToast` in `frontend/src/errorText.ts`). It closes itself after `TOAST_MS` (`Toast.tsx`), and stays while the pointer or keyboard focus is on it.
 
 ### Control
 
@@ -111,22 +120,21 @@ Never add `--remote-allow-origins`: Chrome's refusal of WebSocket connections th
 
 ### 2. Attach it in the panel
 
-In the browser list, **Attach a browser**:
+In the browser list, **Attach a browser…** opens the form:
 
 - **Name:** `a-z`, `0-9`, `-`; one namespace with code-browser's own browsers.
 - **Debug address:** `127.0.0.1:<port>` or `localhost:<port>` (default `127.0.0.1:9222`): the *Server running at* address on `chrome://inspect/#remote-debugging`, or your `--remote-debugging-port`. Chrome's debug server listens on loopback only, so nothing else is accepted.
 - **Where the browser runs:**
   - *On the Docker host — through code-browser's proxy*: code-browser runs in a container and the browser on its Docker host. Start the proxy there first ([proxy.md](proxy.md)). The proxy forwards only to port 9222 unless it was started with `--ports`.
   - *On this machine — direct*: code-browser runs directly on the machine where the browser runs.
-- **Attach** saves the browser and connects. The row shows *connecting*; if Chrome asks *Allow remote debugging?*, click **Allow**. A failed connect shows its reason on the row as text (for example Chrome's refusal, nothing listening, or the proxy's `--ports` hint).
+- **Cancel** closes the form and returns to the button. **Attach** saves the browser and connects, then closes the form. The row shows *connecting*; if Chrome asks *Allow remote debugging?*, click **Allow**. A failed connect shows its reason on the row as text (for example Chrome's refusal, nothing listening, or the proxy's `--ports` hint).
 
-An attached row shows badges *attached*, *via proxy* or *direct*, the address, *asks approval* when Chrome asks per connection, and *Disconnected* after the connection dropped. Buttons:
+An attached row's status line reads the status, *attached*, *via proxy* or *direct*, the address, *asks approval* when Chrome asks per connection, who controls it, and *Disconnected* after the connection dropped. **Connect** is its primary button when it is stopped; the rest are in its menu:
 
-| Button | Does |
+| Item | Does |
 |---|---|
-| **Connect** | connects again (stopped rows) |
 | **Disconnect** | closes code-browser's connection; cancels a connect that waits on Chrome's dialog |
-| **Change…** | prefills the form; attaching under the same name re-points it |
+| **Change…** | opens the form prefilled, scrolls it into view and focuses *Name*; attaching under the same name re-points it |
 | **Forget** | asks first, disconnects and removes the entry; the browser and its tabs are untouched |
 
 There are no sandbox controls: code-browser did not launch the browser and cannot vouch for its sandbox or profile (`sandbox` is `null`).

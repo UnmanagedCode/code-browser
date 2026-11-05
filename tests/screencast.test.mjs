@@ -146,3 +146,19 @@ test('onStart fires when a screencast starts on a tab, not without viewers', () 
   sc.setTarget('S1', 'T1');
   assert.deepEqual(started, ['T1', 'T2']);
 });
+
+// Invariant: onViewers reports every viewer's requested size after each add, update and remove.
+test('onViewers fires with the sizes on add, update and remove', () => {
+  const seen = [];
+  const { sc, viewer } = setup({ onViewers: (s) => seen.push(s) });
+  sc.addViewer('a', viewer(800, 600));
+  sc.addViewer('b', viewer(400, 300));
+  sc.updateViewer('a', { maxWidth: 1000, maxHeight: 500 });
+  sc.removeViewer('b');
+  assert.deepEqual(seen, [
+    [{ maxWidth: 800, maxHeight: 600 }],
+    [{ maxWidth: 800, maxHeight: 600 }, { maxWidth: 400, maxHeight: 300 }],
+    [{ maxWidth: 1000, maxHeight: 500 }, { maxWidth: 400, maxHeight: 300 }],
+    [{ maxWidth: 1000, maxHeight: 500 }],
+  ]);
+});

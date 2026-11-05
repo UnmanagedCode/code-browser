@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import type { BrowserState, BrowserSummary, ClientMessage, FrameHeader, ServerMessage, Tab } from './protocol';
+import { TOAST_MS } from './components/Toast';
 import { createViewerSocket, type SocketStatus, type ViewerSocket, type View } from './socket';
 
 function fakeSocket() {
@@ -9,17 +10,21 @@ function fakeSocket() {
   const frameFns = new Set<(h: FrameHeader, j: Uint8Array) => void>();
   const sent: ClientMessage[] = [];
   const views: (View | null)[] = [];
+  const statusFns = new Set<(s: SocketStatus, n: number) => void>();
+  const retry = vi.fn();
   const socket: ViewerSocket = {
     send: (m) => { sent.push(m); return true; },
     setView: (v) => { views.push(v); },
     setViewport: () => {},
     onMessage: (fn) => { msgFns.add(fn); return () => { msgFns.delete(fn); }; },
     onFrame: (fn) => { frameFns.add(fn); return () => { frameFns.delete(fn); }; },
-    onStatus: (fn: (s: SocketStatus) => void) => { void fn; return () => {}; },
+    onStatus: (fn) => { statusFns.add(fn); return () => { statusFns.delete(fn); }; },
+    retry,
     close: () => {},
   };
   return {
-    socket, sent, views,
+    socket, sent, views, retry,
+    status: (s: SocketStatus, n = 0) => act(() => { statusFns.forEach((fn) => fn(s, n)); }),
     emit: (m: ServerMessage) => act(() => { msgFns.forEach((fn) => fn(m)); }),
     frame: (h: FrameHeader) => act(async () => { frameFns.forEach((fn) => fn(h, new Uint8Array([1]))); await Promise.resolve(); await Promise.resolve(); }),
     inputs: () => sent.filter((m) => m.msg === 'input'),
@@ -33,6 +38,10 @@ const state = (over: Partial<BrowserState> = {}): BrowserState => ({
 });
 const mkTab = (targetId: string, title: string, url = `https://${targetId.toLowerCase()}.test/`, windowId: number | null = 1): Tab => ({ targetId, url, title, windowId });
 const goTo = (search: string) => history.replaceState(null, '', search || location.pathname);
+
+const openMenu = (name: string) => { fireEvent.click(screen.getByRole('button', { name: `More actions for ${name}` })); return screen.getByRole('menu'); };
+const pick = (name: string, item: string) => { fireEvent.click(within(openMenu(name)).getByRole('menuitem', { name: item })); };
+const group = (name: string) => screen.getByRole('group', { name });
 
 let f: ReturnType<typeof fakeSocket>;
 // happy-dom has no pointer media features: viewer tests default to a mouse-only device.
@@ -69,7 +78,8 @@ describe('App routing', () => {
     render(<App socket={f.socket} />);
     await f.emit({ type: 'browsers', list: [running('a'), { ...running('b'), status: 'stopped', controller: 'agent', lastExit: { code: null, signal: 'SIGSEGV', at: 1 } }] });
     expect(screen.getByRole('heading', { name: 'Code Browser' })).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'Open' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Open' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
     expect(screen.getByText('Crashed')).toBeTruthy();
     expect(f.views.at(-1)).toBeNull();
   });
@@ -360,9 +370,10 @@ describe('dialogs', () => {
 
 describe('errors and the list', () => {
   // Invariant: a server error is shown to the user, not swallowed.
-  it('shows server errors in an alert', async () => {
+  it('shows server errors in an alert, in plain words with the code as detail', async () => {
     await openViewer();
     await f.emit({ type: 'error', code: 'NOT_CONTROLLER', message: 'take control first' });
+    expect(screen.getByRole('alert').textContent).toContain('Take control first.');
     expect(screen.getByRole('alert').textContent).toContain('NOT_CONTROLLER');
   });
 
@@ -383,21 +394,39 @@ describe('errors and the list', () => {
     await waitFor(() => expect(location.search).toBe('?browser=fresh'));
   });
 
-  // Invariant: Delete asks for confirmation first and does nothing when declined.
-  it('Delete is confirmed first', async () => {
+  // Invariant: Delete asks for confirmation in place first; Cancel sends nothing and returns focus to the row's menu button.
+  it('Delete is confirmed inline first', async () => {
     goTo('');
     const fetchMock = vi.fn(async () => new Response('{"ok":true}'));
     vi.stubGlobal('fetch', fetchMock);
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal('confirm', confirm);
+    const nativeConfirm = vi.fn(() => { throw new Error('native confirm used'); });
+    vi.stubGlobal('confirm', nativeConfirm);
     render(<App socket={f.socket} />);
     await f.emit({ type: 'browsers', list: [running('a')] });
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    expect(confirm).toHaveBeenCalled();
+    pick('a', 'Delete');
+    expect(group('Confirm delete').textContent).toContain('Delete browser "a" and its logins?');
+    expect(document.activeElement).toBe(within(group('Confirm delete')).getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(within(group('Confirm delete')).getByRole('button', { name: 'Cancel' }));
     expect(fetchMock).not.toHaveBeenCalled();
-    confirm.mockReturnValue(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(screen.queryByRole('group', { name: 'Confirm delete' })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'More actions for a' }));
+    pick('a', 'Delete');
+    fireEvent.click(within(group('Confirm delete')).getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('api/browsers/a', expect.objectContaining({ method: 'DELETE' })));
+    expect(nativeConfirm).not.toHaveBeenCalled();
+  });
+
+  // Invariant: Escape inside an inline confirmation cancels it.
+  it('Escape cancels an inline confirmation', async () => {
+    goTo('');
+    const fetchMock = vi.fn(async () => new Response('{}'));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [running('a')] });
+    pick('a', 'Delete');
+    fireEvent.keyDown(within(group('Confirm delete')).getByRole('button', { name: 'Cancel' }), { key: 'Escape' });
+    expect(screen.queryByRole('group', { name: 'Confirm delete' })).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -614,12 +643,14 @@ describe('sandbox opt-in', () => {
   describe('browser list', () => {
     beforeEach(() => goTo(''));
 
-    // Invariant: an allowed browser is marked in the list and can be disallowed; one not allowed has no Disallow.
-    it('shows the allowed badge and Disallow only with the opt-in', async () => {
+    // Invariant: an allowed browser is marked in the list and can be disallowed; one not allowed has no Disallow item.
+    it('shows the allowed marker and Disallow only with the opt-in', async () => {
       render(<App socket={f.socket} />);
       await f.emit({ type: 'browsers', list: [stopped({ allowUnsandboxed: true }), stopped({ name: 'b' })] });
-      expect(screen.getAllByRole('button', { name: 'Disallow without sandbox' })).toHaveLength(1);
       expect(screen.getByText('allowed without sandbox')).toBeTruthy();
+      expect(within(openMenu('a')).getByRole('menuitem', { name: 'Disallow without sandbox' })).toBeTruthy();
+      fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+      expect(within(openMenu('b')).queryByRole('menuitem', { name: 'Disallow without sandbox' })).toBeNull();
     });
 
     it('marks a refused, not-allowed browser', async () => {
@@ -628,34 +659,31 @@ describe('sandbox opt-in', () => {
       expect(screen.getByText('not started: no sandbox')).toBeTruthy();
     });
 
-    // Invariant: disallowing a browser that runs unsandboxed asks first (it stops now); declining sends nothing.
-    it('Disallow on a running unsandboxed browser confirms first', async () => {
+    // Invariant: disallowing a browser that runs unsandboxed asks first (it stops now); cancelling sends nothing.
+    it('Disallow on a running unsandboxed browser confirms inline first', async () => {
       const fetchMock = reply(200, {});
       vi.stubGlobal('fetch', fetchMock);
-      const confirm = vi.fn(() => false);
-      vi.stubGlobal('confirm', confirm);
       render(<App socket={f.socket} />);
-      await f.emit({ type: 'browsers', list: [running('a', 'agent'), ].map((b) => ({ ...b, sandbox: false, allowUnsandboxed: true })) });
-      fireEvent.click(screen.getByRole('button', { name: 'Disallow without sandbox' }));
-      expect(confirm).toHaveBeenCalled();
+      await f.emit({ type: 'browsers', list: [{ ...running('a', 'agent'), sandbox: false, allowUnsandboxed: true }] });
+      pick('a', 'Disallow without sandbox');
+      expect(group('Confirm stop and disallow').textContent).toContain('withdrawing the permission stops it');
+      fireEvent.click(within(group('Confirm stop and disallow')).getByRole('button', { name: 'Cancel' }));
       expect(fetchMock).not.toHaveBeenCalled();
-      confirm.mockReturnValue(true);
-      fireEvent.click(screen.getByRole('button', { name: 'Disallow without sandbox' }));
+      pick('a', 'Disallow without sandbox');
+      fireEvent.click(within(group('Confirm stop and disallow')).getByRole('button', { name: 'Stop and disallow' }));
       await waitFor(() => expect(post(fetchMock, 'api/browsers/a/allow-unsandboxed')).toHaveLength(1));
       expect(JSON.parse(post(fetchMock, 'api/browsers/a/allow-unsandboxed')[0][1].body as string)).toEqual({ allow: false });
     });
 
-    // Invariant: disallowing where nothing is running unsandboxed changes no process, so it needs no confirmation.
-    it('Disallow on a stopped browser posts {allow:false} without a confirm', async () => {
+    // Invariant: disallowing where nothing runs unsandboxed changes no process, so it needs no confirmation.
+    it('Disallow on a stopped browser posts {allow:false} without a confirmation', async () => {
       const fetchMock = reply(200, {});
       vi.stubGlobal('fetch', fetchMock);
-      const confirm = vi.fn(() => true);
-      vi.stubGlobal('confirm', confirm);
       render(<App socket={f.socket} />);
       await f.emit({ type: 'browsers', list: [stopped({ allowUnsandboxed: true })] });
-      fireEvent.click(screen.getByRole('button', { name: 'Disallow without sandbox' }));
+      pick('a', 'Disallow without sandbox');
       await waitFor(() => expect(post(fetchMock, 'api/browsers/a/allow-unsandboxed')).toHaveLength(1));
-      expect(confirm).not.toHaveBeenCalled();
+      expect(screen.queryByRole('group')).toBeNull();
       expect(JSON.parse(post(fetchMock, 'api/browsers/a/allow-unsandboxed')[0][1].body as string)).toEqual({ allow: false });
     });
   });
@@ -675,6 +703,8 @@ describe('attached browsers', () => {
     const fetchMock = reply(202, { browser: attached({ status: 'connecting' }) });
     vi.stubGlobal('fetch', fetchMock);
     await list([]);
+    expect(screen.queryByRole('form', { name: 'Attach a browser' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Attach a browser…' }));
     const form = screen.getByRole('form', { name: 'Attach a browser' });
     fireEvent.change(within(form).getByRole('textbox', { name: 'Name' }), { target: { value: 'mine' } });
     expect((within(form).getByRole('textbox', { name: 'Debug address' }) as HTMLInputElement).value).toBe('127.0.0.1:9222');
@@ -695,29 +725,37 @@ describe('attached browsers', () => {
     vi.stubGlobal('fetch', fetchMock);
     await list([attached({ lastExit: { code: null, signal: null, at: 1 } }, { asksApproval: true })]);
     for (const text of ['attached', 'via proxy', 'asks approval', 'Disconnected', '127.0.0.1:9222']) expect(screen.getByText(text)).toBeTruthy();
-    for (const name of ['Start', 'Delete', 'Disallow without sandbox']) expect(screen.queryByRole('button', { name })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Start' })).toBeNull();
+    expect(within(openMenu('mine')).getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['Open', 'Change…', 'Forget']);
     expect(screen.queryByText('Crashed')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
     await waitFor(() => expect(calls(fetchMock, 'api/browsers/mine/connect')).toHaveLength(1));
   });
 
-  // Invariant: Forget asks first and says the browser is untouched; Disconnect posts stop; Change… prefills the form.
+  // Invariant: Forget asks inline first and says the browser is untouched; Disconnect posts stop; Change… opens the form
+  // prefilled, scrolls it into view and focuses Name; Cancel collapses it.
   it('Forget confirms, Disconnect stops, Change… prefills the form', async () => {
     const fetchMock = reply(200, { ok: true });
     vi.stubGlobal('fetch', fetchMock);
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal('confirm', confirm);
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {});
     await list([attached({ status: 'running' }, { via: 'direct', address: '127.0.0.1:9333' })]);
-    fireEvent.click(screen.getByRole('button', { name: 'Forget' }));
-    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/untouched/));
+    pick('mine', 'Forget');
+    expect(group('Confirm forget').textContent).toMatch(/untouched/);
+    fireEvent.click(within(group('Confirm forget')).getByRole('button', { name: 'Cancel' }));
     expect(fetchMock).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+    pick('mine', 'Disconnect');
     await waitFor(() => expect(calls(fetchMock, 'api/browsers/mine/stop')).toHaveLength(1));
-    fireEvent.click(screen.getByRole('button', { name: 'Change…' }));
+    pick('mine', 'Change…');
     const form = screen.getByRole('form', { name: 'Attach a browser' });
     expect((within(form).getByRole('textbox', { name: 'Name' }) as HTMLInputElement).value).toBe('mine');
     expect((within(form).getByRole('textbox', { name: 'Debug address' }) as HTMLInputElement).value).toBe('127.0.0.1:9333');
     expect((within(form).getByRole('radio', { name: /On this machine/ }) as HTMLInputElement).checked).toBe(true);
+    expect(within(form).getByText(/Changing "mine"/)).toBeTruthy();
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(document.activeElement).toBe(within(form).getByRole('textbox', { name: 'Name' }));
+    fireEvent.click(within(form).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('form', { name: 'Attach a browser' })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Attach a browser…' }));
   });
 
   // Invariant: a failed connect's message and the Allow hint while connecting are shown as text, never markup.
@@ -946,5 +984,166 @@ describe('tab switcher', () => {
     expect(document.querySelectorAll('.tab-option-label bdi, .tab-label bdi').length).toBe(4);
     const tip = screen.getByRole('tab', { name: /evil/ }).getAttribute('data-tip') ?? '';
     expect(tip).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/);
+  });
+});
+
+describe('connection loss', () => {
+  // Invariant: the banner appears only after a failed attempt, names the attempt, and Retry now calls socket.retry.
+  it('shows the banner with the attempt and Retry now only after a drop', async () => {
+    await openViewer();
+    await f.status('connecting', 0);
+    expect(screen.queryByText(/connection/i)).toBeNull();
+    await f.status('closed', 2);
+    expect(screen.getByRole('status', { name: '' }).textContent).toContain('attempt 2');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry now' }));
+    expect(f.retry).toHaveBeenCalled();
+    await f.status('connecting', 2);
+    expect(screen.getByText(/Reconnecting to code-browser \(attempt 2\)/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retry now' })).toBeNull();
+    await f.status('open', 0);
+    expect(screen.queryByText(/attempt/)).toBeNull();
+  });
+
+  // Invariant: when the socket drops, the browser list is cleared (it is stale) and says it is waiting.
+  it('clears the list on a drop and shows a waiting note', async () => {
+    goTo('');
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [running('a')] });
+    expect(screen.getByText('a')).toBeTruthy();
+    await f.status('closed', 1);
+    expect(screen.queryByText('a')).toBeNull();
+    expect(screen.getByText('Waiting for code-browser…')).toBeTruthy();
+    await f.emit({ type: 'browsers', list: [running('a')] });
+    expect(screen.queryByText('Waiting for code-browser…')).toBeNull();
+  });
+
+  // Invariant: offline, the viewer keeps its last frame and tabs but is inert, dimmed and cannot be driven.
+  it('the viewer stays mounted, dimmed and inert while offline', async () => {
+    await openViewer({ kind: 'human', you: true });
+    expect(screen.getByRole('button', { name: 'Reload' }).hasAttribute('disabled')).toBe(false);
+    await f.status('closed', 1);
+    const body = document.querySelector('.viewer-body')!;
+    expect(body.hasAttribute('inert')).toBe(true);
+    expect(body.hasAttribute('data-offline')).toBe(true);
+    expect(screen.getByRole('tablist')).toBeTruthy();
+    expect(document.querySelector('canvas')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Reload' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Back to browsers' }).hasAttribute('disabled')).toBe(false);
+  });
+
+  // Invariant: no view is joined while offline; the view returns only once a fresh list says the browser runs.
+  it('rejoins only after a fresh list', async () => {
+    await openViewer();
+    expect(f.views.at(-1)).toMatchObject({ name: 'a' });
+    await f.status('closed', 1);
+    expect(f.views.at(-1)).toBeNull();
+    await f.status('open', 0);
+    expect(f.views.at(-1)).toBeNull();
+    await f.emit({ type: 'browsers', list: [running('a')] });
+    expect(f.views.at(-1)).toMatchObject({ name: 'a' });
+  });
+});
+
+describe('connection loss with the real socket', () => {
+  class FakeWs {
+    static all: FakeWs[] = [];
+    readyState = 0; binaryType = ''; sent: { msg: string }[] = [];
+    onopen: (() => void) | null = null; onmessage: ((e: { data: unknown }) => void) | null = null; onclose: (() => void) | null = null;
+    constructor() { FakeWs.all.push(this); }
+    send(d: string) { this.sent.push(JSON.parse(d)); }
+    close() {}
+    open() { this.readyState = 1; this.onopen?.(); }
+    drop() { this.readyState = 3; this.onclose?.(); }
+    deliver(m: unknown) { act(() => { this.onmessage?.({ data: JSON.stringify(m) }); }); }
+  }
+  afterEach(() => { vi.useRealTimers(); });
+
+  // Invariant: after a drop and reopen nothing is joined until `browsers` arrives, no error is shown, and a browser
+  // that stopped meanwhile shows as stopped (not as a NOT_RUNNING alert).
+  it('does not join before the list, shows no alert, and shows a browser stopped while down as stopped', () => {
+    vi.useFakeTimers();
+    FakeWs.all = [];
+    goTo('?browser=a');
+    const socket = createViewerSocket({ url: 'ws://x/api/ws', viewerId: 'viewer-123456', createSocket: () => new FakeWs() as unknown as WebSocket });
+    render(<App socket={socket} />);
+    const first = FakeWs.all[0];
+    act(() => first.open());
+    first.deliver({ type: 'browsers', list: [running('a')] });
+    first.deliver(state());
+    expect(first.sent.map((m) => m.msg)).toEqual(['hello', 'view']);
+    act(() => first.drop());
+    act(() => { vi.advanceTimersByTime(500); });
+    const second = FakeWs.all[1];
+    act(() => second.open());
+    expect(second.sent.map((m) => m.msg)).toEqual(['hello']);
+    second.deliver({ type: 'browsers', list: [{ ...running('a'), status: 'stopped' }] });
+    expect(second.sent.map((m) => m.msg)).toEqual(['hello']);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status', { name: '' }).getAttribute('data-status')).toBe('stopped');
+    socket.close();
+  });
+});
+
+describe('toasts', () => {
+  // Invariant: a toast closes itself after TOAST_MS, and hovering pauses that.
+  it('auto-dismisses after TOAST_MS and pauses while hovered', async () => {
+    vi.useFakeTimers();
+    try {
+      await openViewer();
+      await f.emit({ type: 'error', code: 'NO_TAB', message: 'x' });
+      const toast = screen.getByRole('alert');
+      fireEvent.mouseEnter(toast);
+      act(() => { vi.advanceTimersByTime(TOAST_MS * 2); });
+      expect(screen.getByRole('alert')).toBeTruthy();
+      fireEvent.mouseLeave(toast);
+      act(() => { vi.advanceTimersByTime(TOAST_MS - 1); });
+      expect(screen.getByRole('alert')).toBeTruthy();
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(screen.queryByRole('alert')).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  // Invariant: a backend message is rendered as text, never markup.
+  it('a hostile error message becomes text', async () => {
+    await openViewer();
+    await f.emit({ type: 'error', code: 'ATTACH_FAILED', message: '<img src=x onerror="window.__pwned=1">' });
+    expect(screen.getByRole('alert').textContent).toContain('<img src=x onerror="window.__pwned=1">');
+    expect(document.querySelector('img')).toBeNull();
+  });
+});
+
+describe('browser list layout', () => {
+  beforeEach(() => goTo(''));
+
+  // Invariant: each row has one primary action chosen by its state; the rest sit in a keyboard-operable menu.
+  it('one primary action per row; the menu closes on Escape and returns focus', async () => {
+    const stoppedAttached: BrowserSummary = { ...running('c'), kind: 'attached', status: 'stopped', sandbox: null, attached: { address: '127.0.0.1:9222', via: 'proxy', asksApproval: null } };
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [running('a'), { ...running('b'), status: 'stopped' }, stoppedAttached] });
+    const rowOf = (n: string) => within(screen.getByText(n, { selector: 'strong' }).closest('li')!);
+    expect(rowOf('a').getByRole('button', { name: 'Open' })).toBeTruthy();
+    expect(rowOf('b').getByRole('button', { name: 'Start' })).toBeTruthy();
+    expect(rowOf('c').getByRole('button', { name: 'Connect' })).toBeTruthy();
+    expect(rowOf('a').getAllByRole('button').map((x) => x.textContent || x.getAttribute('aria-label'))).toEqual(['Open', 'More actions for a']);
+    const trigger = screen.getByRole('button', { name: 'More actions for a' });
+    fireEvent.click(trigger);
+    expect(within(screen.getByRole('menu')).getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['Stop', 'Delete']);
+    expect(document.activeElement?.textContent).toBe('Stop');
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'ArrowUp' });
+    expect(document.activeElement?.textContent).toBe('Delete');
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  // Invariant: the new-browser field has a visible label and a hint wired to it.
+  it('the New browser field is labelled and described by its hint', async () => {
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [] });
+    const input = screen.getByLabelText('New browser name');
+    expect(input.getAttribute('aria-describedby')).toBe('new-browser-hint');
+    expect(document.getElementById('new-browser-hint')?.textContent).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Create' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Attach a browser…' }).getAttribute('aria-expanded')).toBe('false');
   });
 });

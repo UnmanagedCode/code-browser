@@ -407,3 +407,15 @@ test('navigation keeps windowId; an unchanged targetInfoChanged pushes nothing',
   await sleep(150);
   assert.equal(v.of('state').length, count, 'a same-url targetInfoChanged pushes nothing');
 });
+
+// Invariant: an oversized panel size is scaled down as a whole, so its aspect reaches the screencast intact.
+test('a HiDPI viewport keeps its aspect when clamped', async () => {
+  const { agent } = await boot();
+  const v = await stack.viewer();
+  await view(v);
+  v.send({ msg: 'viewport', maxWidth: 2560, maxHeight: 1352 });
+  const started = async () => (await agent.send('Fake.getState')).screencastStarts.at(-1);
+  await waitFor(async () => (await started())?.maxWidth === 1920, { what: 'clamped screencast' });
+  const p = await started();
+  assert.deepEqual([p.maxWidth, p.maxHeight], [1920, 1014]);
+});
