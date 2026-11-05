@@ -296,7 +296,7 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
 const root = await browser.newBrowserCDPSession();
 await root.send('Target.createTarget', { url: ${JSON.stringify(tabsUrl('far-window'))}, newWindow: true });
 const v = await context.newPage(); await v.goto('chrome://version');`);
-      const trigger = p1.getByRole('button', { name: /\d+ tabs…/ });
+      const trigger = p1.getByRole('button', { name: /Search \d+ tabs/ });
       const search = p1.getByRole('combobox', { name: 'Search tabs' });
       const optionLabels = () => p1.locator('.tab-option-label').allTextContents();
 

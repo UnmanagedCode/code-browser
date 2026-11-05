@@ -100,10 +100,11 @@ export function TabSwitcher({ tabs, activeTabId, recentTabIds, dialogTabIds, sho
     );
   };
 
+  const status = query === '' ? '' : items.length === 0 ? 'No tabs match' : items.length === 1 ? '1 tab matches' : `${items.length} tabs match`;
   let index = 0;
   return (
-    <div className="tab-switcher" role="dialog" aria-label="Search tabs" ref={rootRef} onKeyDown={onKeyDown}>
-      <p className="hint">Choosing a tab shows it to everyone watching, and the agent&apos;s next script starts on it.</p>
+    <div className="tab-switcher" role="dialog" aria-label="Search tabs" aria-describedby={`${uid}-hint`} ref={rootRef} onKeyDown={onKeyDown}>
+      <p id={`${uid}-hint`} className="hint">Choosing a tab shows it to everyone watching, and the agent&apos;s next script starts on it.</p>
       <input
         ref={inputRef}
         type="text"
@@ -140,7 +141,7 @@ export function TabSwitcher({ tabs, activeTabId, recentTabIds, dialogTabIds, sho
           ))
           : items.map((t, i) => renderOption(t, i))}
       </ul>
-      {items.length === 0 && <p className="hint" role="status">No tabs match</p>}
+      <p className="hint" role="status">{status}</p>
     </div>
   );
 }

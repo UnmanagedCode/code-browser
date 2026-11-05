@@ -13,6 +13,9 @@ interface Props {
   keyboardRef: RefObject<HTMLTextAreaElement | null>;
   onKeyboardActive(active: boolean): void;
   onTake(): void;
+  // The id of this tabpanel, and of the tab that labels it. `labelled` is false when no rendered tab owns the panel.
+  panelId: string;
+  labelled: boolean;
 }
 
 const BUTTONS = ['left', 'middle', 'right'] as const;
@@ -23,7 +26,7 @@ const PAGE_PX = 800;
 
 // The canvas shows the screencast; pointer and keyboard input become input messages only while the
 // viewer holds control. Frames are acked after drawing, which paces the backend.
-export function Screen({ socket, hasControl, keyboardRef, onKeyboardActive, onTake }: Props) {
+export function Screen({ socket, hasControl, keyboardRef, onKeyboardActive, onTake, panelId, labelled }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const activeRef = useRef(onKeyboardActive);
   activeRef.current = onKeyboardActive;
@@ -192,8 +195,8 @@ export function Screen({ socket, hasControl, keyboardRef, onKeyboardActive, onTa
   }, [socket]);
 
   return (
-    <div className="screen" data-control={hasControl}>
-      <canvas ref={canvasRef} className="screen-canvas" aria-label="Browser screen" />
+    <div className="screen" {...(labelled ? { role: 'tabpanel', id: panelId, 'aria-labelledby': `${panelId}-tab` } : {})} data-control={hasControl}>
+      <canvas ref={canvasRef} className="screen-canvas" role="img" aria-label="Live view of the page" />
       <textarea ref={keyboardRef} className="keyboard-sink" aria-label="Keyboard input" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
       {!hasControl && <button type="button" className="screen-hint" data-variant="primary" data-size="sm" onClick={onTake}>Take control to interact</button>}
     </div>

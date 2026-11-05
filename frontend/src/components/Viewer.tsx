@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { focusInPanel } from '../focus';
 import { useMediaQuery } from '../useMediaQuery';
 import type { BrowserState, BrowserSummary, DialogInfo } from '../protocol';
 import type { ViewerSocket } from '../socket';
@@ -20,6 +21,8 @@ interface Props {
   summary?: BrowserSummary;
   // The socket is down: the last frame stays, dimmed, and nothing can be driven.
   offline: boolean;
+  // The person just arrived here: the heading takes focus, if the panel has it.
+  focusHeading: boolean;
   onError(message: string): void;
   onBack(): void;
   onStart(): void;
@@ -27,8 +30,11 @@ interface Props {
   onConnect(): void;
 }
 
-export function Viewer({ name, socket, state, dialogs, summary, offline, onError, onBack, onStart, onStop, onConnect }: Props) {
+export function Viewer({ name, socket, state, dialogs, summary, offline, focusHeading, onError, onBack, onStart, onStop, onConnect }: Props) {
   const keyboardRef = useRef<HTMLTextAreaElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const headingId = useId();
+  const panelId = useId();
   const [keyboardActive, setKeyboardActive] = useState(false);
   const touch = useMediaQuery('(any-pointer: coarse)');
   const [switcherRequest, setSwitcherRequest] = useState(0);
@@ -42,36 +48,42 @@ export function Viewer({ name, socket, state, dialogs, summary, offline, onError
   const stopLabel = summary?.kind === 'attached' ? 'Disconnect' : 'Stop';
   const dialogTabIds = useMemo(() => new Set(dialogs.map((d) => d.tabId)), [dialogs]);
   const dialog = dialogs.find((d) => d.tabId === state?.activeTabId) ?? dialogs[0];
+  const shownDialog = running ? dialog : undefined;
   const dialogTab = dialog ? tabs.find((t) => t.targetId === dialog.tabId) : undefined;
 
+  useEffect(() => { if (focusHeading) focusInPanel(headingRef.current); }, [name, focusHeading]);
+
   return (
-    <div className="viewer">
-      <div className="toolbar">
+    <main className="viewer" aria-labelledby={headingId}>
+      <header className="toolbar" inert={!!shownDialog}>
         <button type="button" data-variant="ghost" data-size="sm" onClick={onBack} aria-label="Back to browsers" data-tip="Back to browsers"><ChevronLeftIcon />Browsers</button>
-        <strong className="viewer-name" data-tip={name}>{name}</strong>
+        <h1 ref={headingRef} id={headingId} className="viewer-name" tabIndex={-1} data-tip={name}><span className="viewer-name-text">{name}</span></h1>
         <button type="button" data-variant="ghost" data-size="icon-sm" aria-label="Go back" data-tip="Go back" disabled={!hasControl || !state?.canGoBack} onClick={() => socket.send({ msg: 'nav', action: 'back' })}><ArrowLeftIcon /></button>
         <button type="button" data-variant="ghost" data-size="icon-sm" aria-label="Go forward" data-tip="Go forward" disabled={!hasControl || !state?.canGoForward} onClick={() => socket.send({ msg: 'nav', action: 'forward' })}><ArrowRightIcon /></button>
         <button type="button" data-variant="ghost" data-size="icon-sm" aria-label="Reload" data-tip="Reload" disabled={!hasControl} onClick={() => socket.send({ msg: 'nav', action: 'reload' })}><RotateCwIcon /></button>
-        <UrlBar url={activeTab?.url ?? ''} hasControl={hasControl} onGo={(url) => socket.send({ msg: 'nav', action: 'goto', url })} />
-        {touch && showScreen && (
-          <button
-            type="button"
-            data-variant="ghost"
-            data-size="sm"
-            aria-label="Keyboard"
-            data-tip="Type into the page"
-            aria-pressed={keyboardActive}
-            disabled={!hasControl}
-            // Keep focus on the sink until click, so a press toggles instead of blurring first.
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => { if (keyboardActive) keyboardRef.current?.blur(); else keyboardRef.current?.focus(); }}
-          ><KeyboardIcon />Keyboard</button>
-        )}
-        {summary && summary.status !== 'stopped' && (
-          <button type="button" data-size="sm" data-tip={stopLabel} onClick={onStop}><SquareIcon />{stopLabel}</button>
-        )}
-      </div>
-      <div className="viewer-body" inert={offline} data-offline={offline || undefined}>
+        <div className="toolbar-end">
+          <UrlBar url={activeTab?.url ?? ''} hasControl={hasControl} onGo={(url) => socket.send({ msg: 'nav', action: 'goto', url })} />
+          {touch && showScreen && (
+            <button
+              type="button"
+              className="keyboard-toggle"
+              data-variant="ghost"
+              data-size="sm"
+              aria-label="Keyboard"
+              data-tip="Type into the page"
+              aria-pressed={keyboardActive}
+              disabled={!hasControl}
+              // Keep focus on the sink until click, so a press toggles instead of blurring first.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { if (keyboardActive) keyboardRef.current?.blur(); else keyboardRef.current?.focus(); }}
+            ><KeyboardIcon /><span className="button-label">Keyboard</span></button>
+          )}
+          {summary && summary.status !== 'stopped' && (
+            <button type="button" data-size="sm" data-tip={stopLabel} onClick={onStop}><SquareIcon />{stopLabel}</button>
+          )}
+        </div>
+      </header>
+      <div className="viewer-body" inert={offline || !!shownDialog} data-offline={offline || undefined}>
         {!running && summary?.kind === 'attached' && summary.status !== 'running' ? (
           <div className="stopped" role="status" data-status={summary.status}>
             {summary.status === 'connecting' ? (
@@ -102,6 +114,7 @@ export function Viewer({ name, socket, state, dialogs, summary, offline, onError
               recentTabIds={state?.recentTabIds ?? []}
               dialogTabIds={dialogTabIds}
               switcherRequest={switcherRequest}
+              panelId={panelId}
               hasControl={hasControl}
               onActivate={(tabId) => socket.send({ msg: 'tab', action: 'activate', tabId })}
               onClose={(tabId) => socket.send({ msg: 'tab', action: 'close', tabId })}
@@ -113,29 +126,30 @@ export function Viewer({ name, socket, state, dialogs, summary, offline, onError
               onRelease={() => socket.send({ msg: 'control', action: 'release' })}
             />
             {showScreen
-              ? <Screen socket={socket} hasControl={hasControl} keyboardRef={keyboardRef} onKeyboardActive={setKeyboardActive} onTake={() => socket.send({ msg: 'control', action: 'take' })} />
+              ? <Screen panelId={panelId} labelled={!!activeTab} socket={socket} hasControl={hasControl} keyboardRef={keyboardRef} onKeyboardActive={setKeyboardActive} onTake={() => socket.send({ msg: 'control', action: 'take' })} />
               : (
                 <div className="stopped" role="status">
                   <p>Select a tab to watch it.</p>
                   <button type="button" data-variant="primary" onClick={() => setSwitcherRequest((n) => n + 1)}>Find a tab…</button>
                 </div>
               )}
-            {dialog && (
-              <DialogPrompt
-                key={dialog.tabId}
-                dialog={dialog}
-                hasControl={hasControl}
-                tabLabel={dialogTab ? tabLabel(dialogTab) : null}
-                tabHost={dialogTab ? tabHost(dialogTab.url) : ''}
-                shown={dialog.tabId === state?.activeTabId}
-                onShowTab={() => socket.send({ msg: 'tab', action: 'activate', tabId: dialog.tabId })}
-                onTake={() => socket.send({ msg: 'control', action: 'take' })}
-                onAnswer={(action, promptText) => socket.send({ msg: 'dialog', tabId: dialog.tabId, action, ...(promptText === undefined ? {} : { promptText }) })}
-              />
-            )}
           </>
         )}
       </div>
-    </div>
+      {shownDialog && (
+        <DialogPrompt
+          key={shownDialog.tabId}
+          dialog={shownDialog}
+          hasControl={hasControl}
+          returnFocus={headingRef}
+          tabLabel={dialogTab ? tabLabel(dialogTab) : null}
+          tabHost={dialogTab ? tabHost(dialogTab.url) : ''}
+          shown={shownDialog.tabId === state?.activeTabId}
+          onShowTab={() => socket.send({ msg: 'tab', action: 'activate', tabId: shownDialog.tabId })}
+          onTake={() => socket.send({ msg: 'control', action: 'take' })}
+          onAnswer={(action, promptText) => socket.send({ msg: 'dialog', tabId: shownDialog.tabId, action, ...(promptText === undefined ? {} : { promptText }) })}
+        />
+      )}
+    </main>
   );
 }

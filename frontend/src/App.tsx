@@ -12,6 +12,10 @@ import type { SocketStatus, ViewerSocket } from './socket';
 
 export function App({ socket }: { socket: ViewerSocket }) {
   const [name, setName] = useState(() => browserFromSearch(location.search));
+  const nameRef = useRef(name);
+  nameRef.current = name;
+  // Set by a route change a person made (not by the first load): the arriving view then takes focus, if the panel has it.
+  const [arrival, setArrival] = useState<{ from: string | null } | null>(null);
   const [browsers, setBrowsers] = useState<BrowserSummary[]>([]);
   const [state, setState] = useState<BrowserState | null>(null);
   const [dialogs, setDialogs] = useState<DialogInfo[]>([]);
@@ -27,7 +31,10 @@ export function App({ socket }: { socket: ViewerSocket }) {
   }, []);
 
   useEffect(() => {
-    const onPop = () => setName(browserFromSearch(location.search));
+    const onPop = () => {
+      setArrival({ from: nameRef.current });
+      setName(browserFromSearch(location.search));
+    };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
@@ -81,7 +88,7 @@ export function App({ socket }: { socket: ViewerSocket }) {
       <ConnectionBanner status={conn.status} failures={conn.failures} onRetry={() => socket.retry()} />
       {toast && <Toast toast={toast} onDismiss={() => setToast(null)} />}
       {name === null ? (
-        <BrowserList browsers={browsers} loading={offline} onOpen={open} onError={showError} />
+        <BrowserList browsers={browsers} loading={offline} returnFrom={arrival?.from ?? null} onOpen={open} onError={showError} />
       ) : (
         <Viewer
           name={name}
@@ -90,6 +97,7 @@ export function App({ socket }: { socket: ViewerSocket }) {
           dialogs={dialogs}
           summary={summary}
           offline={offline}
+          focusHeading={arrival !== null}
           onError={showError}
           onBack={() => open(null)}
           onStart={() => { api.startBrowser(name).catch((e: Error) => { if (!api.isSandboxRefusal(e)) showError(e.message); }); }}
