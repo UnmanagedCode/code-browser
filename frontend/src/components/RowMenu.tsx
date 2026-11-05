@@ -50,6 +50,8 @@ export function RowMenu({ label, items, triggerRef }: Props) {
             const i = itemRefs.current.findIndex((el) => el === document.activeElement);
             if (e.key === 'ArrowDown') { e.preventDefault(); move(i, 1); }
             else if (e.key === 'ArrowUp') { e.preventDefault(); move(i, -1); }
+            else if (e.key === 'Home') { e.preventDefault(); itemRefs.current[0]?.focus(); }
+            else if (e.key === 'End') { e.preventDefault(); itemRefs.current[items.length - 1]?.focus(); }
             else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
             else if (e.key === 'Tab') close(true);
           }}
@@ -60,6 +62,7 @@ export function RowMenu({ label, items, triggerRef }: Props) {
               ref={(el) => { itemRefs.current[i] = el; }}
               type="button"
               role="menuitem"
+              tabIndex={-1}
               data-tone={item.tone}
               onClick={() => { close(true); item.onSelect(); }}
             >{item.label}</button>

@@ -15,7 +15,7 @@
     "test": "npm run test:server && npm run test:web",
     "test:server": "node --test \"tests/**/*.test.mjs\"",
     "test:web": "vitest run --config frontend/vitest.config.ts",
-    "test:e2e": "node --test tests/e2e.real.test.mjs"
+    "test:e2e": "node --test tests/*.real.test.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.3",

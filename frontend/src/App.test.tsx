@@ -42,6 +42,8 @@ const goTo = (search: string) => history.replaceState(null, '', search || locati
 const openMenu = (name: string) => { fireEvent.click(screen.getByRole('button', { name: `More actions for ${name}` })); return screen.getByRole('menu'); };
 const pick = (name: string, item: string) => { fireEvent.click(within(openMenu(name)).getByRole('menuitem', { name: item })); };
 const group = (name: string) => screen.getByRole('group', { name });
+// The `role=status` region of a stopped/connecting view (the page also holds always-mounted live regions).
+const statusOf = () => screen.getAllByRole('status').find((el) => el.hasAttribute('data-status'))!;
 
 let f: ReturnType<typeof fakeSocket>;
 // happy-dom has no pointer media features: viewer tests default to a mouse-only device.
@@ -78,8 +80,8 @@ describe('App routing', () => {
     render(<App socket={f.socket} />);
     await f.emit({ type: 'browsers', list: [running('a'), { ...running('b'), status: 'stopped', controller: 'agent', lastExit: { code: null, signal: 'SIGSEGV', at: 1 } }] });
     expect(screen.getByRole('heading', { name: 'Code Browser' })).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'Open' })).toHaveLength(1);
-    expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Open a' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Start b' })).toBeTruthy();
     expect(screen.getByText('Crashed')).toBeTruthy();
     expect(f.views.at(-1)).toBeNull();
   });
@@ -108,7 +110,7 @@ describe('page-controlled text', () => {
     const title = '<img src=x onerror="window.__pwned=1">';
     await openViewer();
     await f.emit(state({ tabs: [mkTab('T1', title)] }));
-    fireEvent.click(screen.getByRole('button', { name: /tabs…/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Search \d+ tabs/ }));
     expect(document.querySelector('.tab-option-label')?.textContent).toBe(title);
     expect(document.querySelector('img')).toBeNull();
   });
@@ -164,12 +166,12 @@ describe('controller bar', () => {
   it('tab close/new and navigation need control', async () => {
     await openViewer({ kind: 'agent' });
     for (const name of ['New tab', 'Close tab One', 'Reload']) {
-      expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled, name).toBe(true);
+      expect((screen.getByLabelText(name) as HTMLButtonElement).disabled, name).toBe(true);
     }
     expect((screen.getByRole('textbox', { name: 'Address' }) as HTMLInputElement).readOnly).toBe(true);
     await f.emit(state({ controller: { kind: 'human', you: true } }));
     for (const name of ['New tab', 'Close tab One', 'Reload']) {
-      expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled, name).toBe(false);
+      expect((screen.getByLabelText(name) as HTMLButtonElement).disabled, name).toBe(false);
     }
   });
 
@@ -270,7 +272,7 @@ describe('controller bar', () => {
 
 describe('pointer input', () => {
   const header: FrameHeader = { seq: 1, tabId: 'T1', width: 200, height: 100, meta: { deviceWidth: 1000, deviceHeight: 500, offsetTop: 0, pageScaleFactor: 1, scrollOffsetX: 0, scrollOffsetY: 0 } };
-  const canvas = () => screen.getByLabelText('Browser screen');
+  const canvas = () => screen.getByRole('img', { name: 'Live view of the page' });
 
   // Invariant: a drawn frame is acked (this paces the backend), and exposes its sequence for observers.
   it('draws a frame, acks it and records its sequence', async () => {
@@ -438,7 +440,7 @@ describe('view changes clear per-run state', () => {
     expect(screen.getByRole('dialog')).toBeTruthy();
     await f.emit({ type: 'browsers', list: [{ ...running('a'), status: 'stopped' }] });
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.getByRole('status').getAttribute('data-status')).toBe('stopped');
+    expect(statusOf().getAttribute('data-status')).toBe('stopped');
     expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
   });
 });
@@ -529,7 +531,7 @@ describe('messages that beat the first render', () => {
     ws.open();
     ws.deliver({ type: 'browsers', list: [running('a')] });
     render(<App socket={socket} />);
-    expect(screen.getByRole('button', { name: 'Open' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open a' })).toBeTruthy();
     socket.close();
   });
 
@@ -628,7 +630,7 @@ describe('sandbox opt-in', () => {
     vi.stubGlobal('fetch', reply(409, refusal));
     render(<App socket={f.socket} />);
     await f.emit({ type: 'browsers', list: [stopped()] });
-    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start a' }));
     await waitFor(() => expect(location.search).toBe('?browser=a'));
     expect(screen.queryByRole('alert')).toBeNull();
 
@@ -725,10 +727,10 @@ describe('attached browsers', () => {
     vi.stubGlobal('fetch', fetchMock);
     await list([attached({ lastExit: { code: null, signal: null, at: 1 } }, { asksApproval: true })]);
     for (const text of ['attached', 'via proxy', 'asks approval', 'Disconnected', '127.0.0.1:9222']) expect(screen.getByText(text)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Start' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Start/ })).toBeNull();
     expect(within(openMenu('mine')).getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['Open', 'Change…', 'Forget']);
     expect(screen.queryByText('Crashed')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Connect mine' }));
     await waitFor(() => expect(calls(fetchMock, 'api/browsers/mine/connect')).toHaveLength(1));
   });
 
@@ -800,7 +802,7 @@ describe('attached browsers', () => {
 
 describe('tab switcher', () => {
   const three = [mkTab('T1', 'Alpha', 'https://alpha.test/x'), mkTab('T2', 'Beta', 'https://beta.test/y'), mkTab('T3', 'Gamma', 'https://gamma.test/z')];
-  const trigger = () => screen.getByRole('button', { name: /\d+ tabs…/ });
+  const trigger = () => screen.getByRole('button', { name: /Search \d+ tabs/ });
   const search = () => screen.getByRole('combobox', { name: 'Search tabs' });
   const labels = () => within(screen.getByRole('listbox', { name: 'Tabs' })).queryAllByRole('option').map((o) => o.querySelector('.tab-option-label')?.textContent);
   const open = async (tabs: Tab[] = three, over: Partial<BrowserState> = {}) => {
@@ -980,7 +982,7 @@ describe('tab switcher', () => {
     expect(source.textContent).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/);
     expect(source.querySelector('strong > bdi')?.textContent).toBe('evil gnp.exe');
     expect(source.querySelector('.dialog-host')?.compareDocumentPosition(source.querySelector('strong')!)).toBe(Node.DOCUMENT_POSITION_PRECEDING);
-    fireEvent.click(screen.getByRole('button', { name: /tabs…/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Search \d+ tabs/ }));
     expect(document.querySelectorAll('.tab-option-label bdi, .tab-label bdi').length).toBe(4);
     const tip = screen.getByRole('tab', { name: /evil/ }).getAttribute('data-tip') ?? '';
     expect(tip).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/);
@@ -994,7 +996,7 @@ describe('connection loss', () => {
     await f.status('connecting', 0);
     expect(screen.queryByText(/connection/i)).toBeNull();
     await f.status('closed', 2);
-    expect(screen.getByRole('status', { name: '' }).textContent).toContain('attempt 2');
+    expect(screen.getByText(/attempt 2/).textContent).toContain('attempt 2');
     fireEvent.click(screen.getByRole('button', { name: 'Retry now' }));
     expect(f.retry).toHaveBeenCalled();
     await f.status('connecting', 2);
@@ -1079,7 +1081,7 @@ describe('connection loss with the real socket', () => {
     second.deliver({ type: 'browsers', list: [{ ...running('a'), status: 'stopped' }] });
     expect(second.sent.map((m) => m.msg)).toEqual(['hello']);
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(screen.getByRole('status', { name: '' }).getAttribute('data-status')).toBe('stopped');
+    expect(statusOf().getAttribute('data-status')).toBe('stopped');
     socket.close();
   });
 });
@@ -1147,9 +1149,9 @@ describe('browser list layout', () => {
     render(<App socket={f.socket} />);
     await f.emit({ type: 'browsers', list: [running('a'), { ...running('b'), status: 'stopped' }, stoppedAttached] });
     const rowOf = (n: string) => within(screen.getByText(n, { selector: 'strong' }).closest('li')!);
-    expect(rowOf('a').getByRole('button', { name: 'Open' })).toBeTruthy();
-    expect(rowOf('b').getByRole('button', { name: 'Start' })).toBeTruthy();
-    expect(rowOf('c').getByRole('button', { name: 'Connect' })).toBeTruthy();
+    expect(rowOf('a').getByRole('button', { name: 'Open a' })).toBeTruthy();
+    expect(rowOf('b').getByRole('button', { name: 'Start b' })).toBeTruthy();
+    expect(rowOf('c').getByRole('button', { name: 'Connect c' })).toBeTruthy();
     expect(rowOf('a').getAllByRole('button').map((x) => x.textContent || x.getAttribute('aria-label'))).toEqual(['Open', 'More actions for a']);
     const trigger = screen.getByRole('button', { name: 'More actions for a' });
     fireEvent.click(trigger);
@@ -1184,5 +1186,224 @@ describe('browser list layout', () => {
     expect(document.getElementById('new-browser-hint')?.textContent).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Create' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Attach a browser…' }).getAttribute('aria-expanded')).toBe('false');
+  });
+});
+
+describe('accessibility and focus', () => {
+  const focused = (has = true) => vi.spyOn(document, 'hasFocus').mockReturnValue(has);
+  const threeTabs = (extra: Partial<BrowserState> = {}) => state({
+    controller: { kind: 'human', you: true },
+    tabs: [mkTab('T1', 'One'), mkTab('T2', 'Beta'), mkTab('T3', 'Gamma')],
+    activeTabId: 'T1',
+    ...extra,
+  });
+  const tabEl = (title: string) => screen.getByRole('tab', { name: new RegExp(title) });
+  const sentTabs = () => f.sent.filter((m) => m.msg === 'tab');
+
+  // Invariant: the tablist exposes only tabs: × is hidden from assistive tech, never takes focus, and still closes with the mouse.
+  it('tab strip: the tablist exposes only tabs; × is hidden and unfocusable', async () => {
+    await openViewer({ kind: 'human', you: true });
+    await f.emit(threeTabs());
+    expect(within(screen.getByRole('tablist')).queryAllByRole('button')).toEqual([]);
+    const closers = document.querySelectorAll<HTMLButtonElement>('.tab-close');
+    expect(closers).toHaveLength(3);
+    for (const x of closers) {
+      expect(x.getAttribute('aria-hidden')).toBe('true');
+      expect(x.tabIndex).toBe(-1);
+      expect(fireEvent.mouseDown(x)).toBe(false);
+    }
+    fireEvent.click(screen.getByLabelText('Close tab Beta'));
+    expect(sentTabs().at(-1)).toEqual({ msg: 'tab', action: 'close', tabId: 'T2' });
+    expect(screen.getByLabelText('Close tab Beta').getAttribute('data-tip')).toContain('Delete');
+  });
+
+  // Invariant: Delete on a focused tab closes it only with control, and focus then lands on the tab that took its place.
+  it('Delete closes the focused tab and focus moves to its neighbour', async () => {
+    await openViewer({ kind: 'human', you: true });
+    await f.emit(threeTabs());
+    tabEl('Beta').focus();
+    fireEvent.keyDown(tabEl('Beta'), { key: 'Delete' });
+    expect(sentTabs().at(-1)).toEqual({ msg: 'tab', action: 'close', tabId: 'T2' });
+    await f.emit(threeTabs({ tabs: [mkTab('T1', 'One'), mkTab('T3', 'Gamma')] }));
+    expect(document.activeElement).toBe(tabEl('Gamma'));
+    fireEvent.keyDown(tabEl('Gamma'), { key: 'Delete' });
+    await f.emit(threeTabs({ tabs: [mkTab('T1', 'One')] }));
+    expect(document.activeElement).toBe(tabEl('One'));
+  });
+
+  // Invariant: without control Delete sends nothing.
+  it('Delete without control sends nothing', async () => {
+    await openViewer({ kind: 'agent' });
+    tabEl('One').focus();
+    fireEvent.keyDown(tabEl('One'), { key: 'Delete' });
+    expect(sentTabs()).toEqual([]);
+  });
+
+  // Invariant: every tab advertises Delete, and its description tells the person whether they can use it now.
+  it('tabs announce Delete', async () => {
+    await openViewer({ kind: 'human', you: true });
+    await f.emit(threeTabs());
+    const description = () => document.getElementById(tabEl('One').getAttribute('aria-describedby')!)!.textContent!;
+    for (const t of screen.getAllByRole('tab')) expect(t.getAttribute('aria-keyshortcuts')).toBe('Delete');
+    expect(description()).toMatch(/Press Delete/);
+    await f.emit(threeTabs({ controller: { kind: 'agent' } }));
+    expect(description()).toMatch(/Take control.*Delete/);
+  });
+
+  // Invariant: the screen is the active tab's tabpanel, and the canvas is a named image.
+  it('the screen is the active tab’s tabpanel; the canvas is a named image', async () => {
+    await openViewer();
+    const panel = screen.getByRole('tabpanel', { name: /One/ });
+    expect(tabEl('One').getAttribute('aria-controls')).toBe(panel.id);
+    expect(screen.getByRole('img', { name: 'Live view of the page' })).toBeTruthy();
+  });
+
+  // Invariant: the viewer and the list are each a main landmark headed by an h1.
+  it('viewer and list are main landmarks with an h1', async () => {
+    await openViewer();
+    expect(screen.getByRole('main', { name: 'a' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'a' })).toBeTruthy();
+  });
+
+  it('the list is a main landmark with the Code Browser heading', async () => {
+    goTo('');
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [running('a')] });
+    expect(within(screen.getByRole('main')).getByRole('heading', { level: 1, name: 'Code Browser' })).toBeTruthy();
+  });
+
+  // Invariant: opening a browser focuses its heading and going back focuses that browser's row button.
+  it('opening a browser focuses its heading; going back focuses its row', async () => {
+    focused();
+    goTo('');
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [running('a'), running('b')] });
+    fireEvent.click(screen.getByRole('button', { name: 'Open a' }));
+    expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1, name: 'a' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to browsers' }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open a' }));
+  });
+
+  // Invariant: a deep link, an unfocused panel and an arriving dialog never take focus from the host.
+  it('a deep link or an unfocused panel never takes focus', async () => {
+    focused();
+    await openViewer({ kind: 'human', you: true });
+    expect(document.activeElement).toBe(document.body);
+    vi.restoreAllMocks();
+    focused(false);
+    goTo('');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    await f.emit({ type: 'browsers', list: [running('a')] });
+    fireEvent.click(screen.getByRole('button', { name: 'Open a' }));
+    expect(document.activeElement).toBe(document.body);
+    await f.emit(state({ controller: { kind: 'human', you: true } }));
+    await f.emit({ type: 'dialog', tabId: 'T1', dialogType: 'alert', message: 'hi', defaultPrompt: '' });
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  // Invariant: a page dialog takes focus, makes the rest of the viewer inert, describes itself by its message and hands focus back.
+  it('a page dialog takes focus, makes the viewer inert, and gives focus back', async () => {
+    focused();
+    await openViewer({ kind: 'human', you: true });
+    const reload = screen.getByRole('button', { name: 'Reload' });
+    reload.focus();
+    await f.emit({ type: 'dialog', tabId: 'T1', dialogType: 'confirm', message: 'Sure?', defaultPrompt: '' });
+    const dialog = screen.getByRole('dialog');
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'OK' }));
+    expect(document.getElementById(dialog.getAttribute('aria-describedby')!)!.textContent).toBe('Sure?');
+    expect(document.querySelector('header.toolbar')!.hasAttribute('inert')).toBe(true);
+    expect(document.querySelector('.viewer-body')!.hasAttribute('inert')).toBe(true);
+    await f.emit({ type: 'dialogClosed', tabId: 'T1' });
+    expect(document.activeElement).toBe(reload);
+    expect(document.querySelector('header.toolbar')!.hasAttribute('inert')).toBe(false);
+  });
+
+  it('a prompt dialog focuses its input; without control focus starts on Take control and moves to OK once control is taken', async () => {
+    focused();
+    await openViewer({ kind: 'human', you: true });
+    await f.emit({ type: 'dialog', tabId: 'T1', dialogType: 'prompt', message: 'Name?', defaultPrompt: 'x' });
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Prompt answer' }));
+    await f.emit({ type: 'dialogClosed', tabId: 'T1' });
+    await f.emit(state({ controller: { kind: 'agent' } }));
+    await f.emit({ type: 'dialog', tabId: 'T1', dialogType: 'alert', message: 'hi', defaultPrompt: '' });
+    const take = within(screen.getByRole('dialog')).getByRole('button', { name: 'Take control' });
+    expect(document.activeElement).toBe(take);
+    await f.emit(state({ controller: { kind: 'human', you: true } }));
+    expect(document.activeElement).toBe(within(screen.getByRole('dialog')).getByRole('button', { name: 'OK' }));
+  });
+
+  // Invariant: an inline confirmation's group is described by its question.
+  it('inline confirm describes its question', async () => {
+    goTo('');
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [running('a')] });
+    pick('a', 'Delete');
+    const g = group('Confirm delete');
+    expect(document.getElementById(g.getAttribute('aria-describedby')!)!.textContent).toBe('Delete browser "a" and its logins?');
+  });
+
+  // Invariant: the reconnect announcement is a persistent live region with one stable phrase per state, not one per retry.
+  it('the reconnect live region is always mounted and announces once', async () => {
+    await openViewer();
+    const live = () => screen.getAllByRole('status').find((el) => el.classList.contains('sr-only'))!;
+    expect(live().textContent).toBe('');
+    await f.status('closed', 2);
+    const phrase = live().textContent;
+    expect(phrase).toMatch(/Reconnecting/);
+    await f.status('connecting', 2);
+    await f.status('closed', 3);
+    expect(live().textContent).toBe(phrase);
+    expect(screen.getByText(/attempt 3/)).toBeTruthy();
+    await f.status('open', 0);
+    expect(live().textContent).toMatch(/Reconnected/);
+  });
+
+  // Invariant: the switcher's result count is announced through a status region that is mounted from the start.
+  it('switcher results are announced through a persistent status', async () => {
+    await openViewer({ kind: 'human', you: true });
+    await f.emit(threeTabs());
+    fireEvent.click(screen.getByRole('button', { name: /Search \d+ tabs/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Search tabs' });
+    const status = within(dialog).getByRole('status');
+    expect(status.textContent).toBe('');
+    const search = within(dialog).getByRole('combobox');
+    fireEvent.change(search, { target: { value: 'zzz' } });
+    expect(status.textContent).toBe('No tabs match');
+    fireEvent.change(search, { target: { value: 'a' } });
+    expect(status.textContent).toMatch(/^\d+ tabs? match/);
+  });
+
+  // Invariant: a control change is announced in place: the same live node changes its text.
+  it('control changes are announced in place', async () => {
+    await openViewer({ kind: 'agent' });
+    const node = document.querySelector('.controller-bar > [role="status"]')!;
+    const before = node.textContent;
+    await f.emit(state({ controller: { kind: 'human', you: true } }));
+    expect(document.querySelector('.controller-bar > [role="status"]')).toBe(node);
+    expect(node.textContent).not.toBe(before);
+  });
+
+  // Invariant: every row's primary button has a name that tells the rows apart.
+  it('list row actions have distinct names', async () => {
+    goTo('');
+    const stoppedAttached: BrowserSummary = { ...running('c'), kind: 'attached', status: 'stopped', sandbox: null, attached: { address: '127.0.0.1:9222', via: 'proxy', asksApproval: null } };
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [running('a'), { ...running('b'), status: 'stopped' }, stoppedAttached] });
+    for (const name of ['Open a', 'Start b', 'Connect c']) expect(screen.getAllByRole('button', { name })).toHaveLength(1);
+  });
+
+  // Invariant: menu items are reached by script (roving), and Home and End jump to the first and last.
+  it('row menu items rove', async () => {
+    goTo('');
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [running('a')] });
+    const menu = openMenu('a');
+    const items = within(menu).getAllByRole('menuitem');
+    for (const i of items) expect(i.tabIndex).toBe(-1);
+    fireEvent.keyDown(menu, { key: 'End' });
+    expect(document.activeElement).toBe(items.at(-1));
+    fireEvent.keyDown(menu, { key: 'Home' });
+    expect(document.activeElement).toBe(items[0]);
   });
 });

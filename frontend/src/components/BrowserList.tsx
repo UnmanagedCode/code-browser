@@ -1,4 +1,5 @@
-import { Fragment, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { focusInPanel } from '../focus';
 import * as api from '../api';
 import { statusParts } from '../browserStatus';
 import { NAME_HINT } from '../names';
@@ -8,7 +9,8 @@ import { AttachForm, type AttachDraft } from './AttachForm';
 import { InlineConfirm } from './InlineConfirm';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 
-interface Props { browsers: BrowserSummary[]; loading: boolean; onOpen(name: string): void; onError(message: string): void }
+// `returnFrom` is the browser the person just left, if any: its row takes focus on arrival.
+interface Props { browsers: BrowserSummary[]; loading: boolean; returnFrom: string | null; onOpen(name: string): void; onError(message: string): void }
 
 export const ALLOW_HINT = 'If Chrome asks "Allow remote debugging?", click Allow.';
 
@@ -20,13 +22,22 @@ const CONFIRMS: Record<Pending['kind'], { label: string; message: (name: string)
   disallow: { label: 'Confirm stop and disallow', message: (n) => `Stop "${n}" now? It is running without the sandbox, and withdrawing the permission stops it.`, confirmLabel: 'Stop and disallow' },
 };
 
-export function BrowserList({ browsers, loading, onOpen, onError }: Props) {
+export function BrowserList({ browsers, loading, returnFrom, onOpen, onError }: Props) {
   const [name, setName] = useState('');
   const [attachOpen, setAttachOpen] = useState(false);
   const [draft, setDraft] = useState<AttachDraft | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const triggers = useRef(new Map<string, HTMLButtonElement>());
   const attachButton = useRef<HTMLButtonElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const primaries = useRef(new Map<string, HTMLButtonElement>());
+
+  useEffect(() => {
+    if (returnFrom === null) return;
+    focusInPanel(primaries.current.get(returnFrom) ?? headingRef.current);
+    // On arrival only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // A start refused for want of a sandbox is not an error: the viewer explains it and offers the opt-in.
   const run = (fn: () => Promise<unknown>, refusedBrowser?: string) => fn().catch((e: Error) => {
@@ -50,11 +61,12 @@ export function BrowserList({ browsers, loading, onOpen, onError }: Props) {
   const row = (b: BrowserSummary) => {
     const attached = b.kind === 'attached' && b.attached !== null;
     const stopped = b.status === 'stopped';
+    const setPrimary = (el: HTMLButtonElement | null) => { if (el) primaries.current.set(b.name, el); else primaries.current.delete(b.name); };
     const primary = !stopped
-      ? <button type="button" data-size="sm" onClick={() => onOpen(b.name)}>Open</button>
+      ? <button type="button" ref={setPrimary} data-size="sm" aria-label={`Open ${b.name}`} onClick={() => onOpen(b.name)}>Open</button>
       : attached
-        ? <button type="button" data-size="sm" onClick={() => run(() => api.connectBrowser(b.name))}>Connect</button>
-        : <button type="button" data-size="sm" onClick={() => run(() => api.startBrowser(b.name), b.name)}>Start</button>;
+        ? <button type="button" ref={setPrimary} data-size="sm" aria-label={`Connect ${b.name}`} onClick={() => run(() => api.connectBrowser(b.name))}>Connect</button>
+        : <button type="button" ref={setPrimary} data-size="sm" aria-label={`Start ${b.name}`} onClick={() => run(() => api.startBrowser(b.name), b.name)}>Start</button>;
     const items: RowMenuItem[] = [];
     if (stopped) items.push({ label: 'Open', onSelect: () => onOpen(b.name) });
     if (!stopped) items.push({ label: attached ? 'Disconnect' : 'Stop', onSelect: () => { run(() => api.stopBrowser(b.name)); } });
@@ -76,7 +88,6 @@ export function BrowserList({ browsers, loading, onOpen, onError }: Props) {
             ))}
           </p>
         </div>
-        <span className="spacer" />
         {primary}
         <RowMenu label={`More actions for ${b.name}`} items={items} triggerRef={setTrigger(b.name)} />
         {attached && b.status === 'connecting' && <p className="row-note">{ALLOW_HINT}</p>}
@@ -97,8 +108,8 @@ export function BrowserList({ browsers, loading, onOpen, onError }: Props) {
   const closeAttach = () => { setDraft(null); setAttachOpen(false); };
 
   return (
-    <div className="browser-list">
-      <h1>Code Browser</h1>
+    <main className="browser-list">
+      <h1 ref={headingRef} tabIndex={-1}>Code Browser</h1>
       {loading ? (
         <p className="hint" role="status">Waiting for code-browser…</p>
       ) : (
@@ -136,6 +147,6 @@ export function BrowserList({ browsers, loading, onOpen, onError }: Props) {
           onError={onError}
         />
       )}
-    </div>
+    </main>
   );
 }
