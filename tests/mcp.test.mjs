@@ -153,6 +153,39 @@ test('list_browsers text: empty hint, one line per browser with json field names
   assert.match(text, /Call browser_info <name> for tabs and the Playwright snippet\.$/);
 });
 
+// Invariant: an attached browser's listing line names its address, how it is reached and asksApproval (true, false or
+// null), and shows attachError only when there is one; no launched-only part leaks in and no part appears unasked.
+test('list_browsers text: attached browsers show address, via, asksApproval and attachError', async () => {
+  for (const [via, asks, error] of [['direct', null, null], ['proxy', true, 'nothing is listening'], ['direct', false, null]]) {
+    const manager = fakeManager({ attached: via });
+    manager.ensure('mine');
+    Object.assign(manager.state.get('mine'), { status: 'running', attachError: error });
+    manager.state.get('mine').attached.asksApproval = asks;
+    const { text } = await call(make({}, manager), 'list_browsers', {}, 'text');
+    const line = text.split('\n').find((l) => l.startsWith('- mine: '));
+    assert.ok(line.includes(`kind attached, status running`), line);
+    assert.ok(line.endsWith(error ? `attached 127.0.0.1:9222 via ${via}, asksApproval ${asks}, attachError "${error}"` : `attached 127.0.0.1:9222 via ${via}, asksApproval ${asks}`), line);
+    assert.ok(!/sandboxUnavailable|lastExit/.test(line), line);
+  }
+});
+
+// Invariant: each conditional part of a listing line is present exactly when its field says so: sandboxUnavailable,
+// lastExit and attachError each appear for a browser that has them and for no other.
+test('list_browsers text: conditional parts appear only for the browsers that have them', async () => {
+  const manager = fakeManager();
+  const mcp = make({}, manager);
+  for (const n of ['plain', 'refused', 'crashed', 'broken']) manager.ensure(n);
+  manager.state.get('refused').sandboxUnavailable = true;
+  manager.state.get('crashed').lastExit = { code: 1, signal: null, at: 86_400_000 };
+  manager.state.get('broken').attachError = 'refused';
+  const lines = Object.fromEntries((await call(mcp, 'list_browsers', {}, 'text')).text.split('\n').filter((l) => l.startsWith('- ')).map((l) => [l.slice(2, l.indexOf(':')), l]));
+  assert.ok(!/sandboxUnavailable|lastExit|attachError|attached /.test(lines.plain), lines.plain);
+  assert.match(lines.refused, /sandboxUnavailable true \(a human must enable "Allow without sandbox" in the panel\)$/);
+  assert.match(lines.crashed, /lastExit code 1 signal null at 1970-01-02T00:00:00\.000Z$/);
+  assert.match(lines.broken, /attachError "refused"$/);
+  for (const [n, re] of [['refused', /lastExit|attachError/], ['crashed', /sandboxUnavailable|attachError/], ['broken', /sandboxUnavailable|lastExit/]]) assert.ok(!re.test(lines[n]), n);
+});
+
 // Invariant: stop_browser reports the kind in json and says in text whether it stopped or only disconnected, so an agent
 // never believes it closed the user's own browser.
 test('stop_browser: launched is stopped, attached is only disconnected', async () => {

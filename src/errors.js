@@ -6,7 +6,8 @@ export class CodedError extends Error {
     this.name = 'CodedError';
     this.code = code;
     if (details !== undefined) {
-      if (details === null || typeof details !== 'object' || Array.isArray(details)) throw new TypeError('CodedError details must be a plain object');
+      const proto = details === null || typeof details !== 'object' ? undefined : Object.getPrototypeOf(details);
+      if (proto !== Object.prototype && proto !== null) throw new TypeError('CodedError details must be a plain object');
       this.details = details;
     }
   }

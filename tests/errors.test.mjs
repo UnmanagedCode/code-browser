@@ -18,7 +18,13 @@ test('describeError renders arrays, multi-line strings and scalars', () => {
   assert.ok(describeError(new CodedError('X', 'm', { path: '/nope' })).includes('/nope'));
 });
 
-// Invariant: details must be a plain object, so a surface can always spread it.
+// Invariant: details must be a plain object (prototype Object.prototype or null), so a surface can always spread it.
 test('CodedError rejects non-object details', () => {
-  for (const bad of ['s', 1, null, ['a']]) assert.throws(() => new CodedError('X', 'm', bad), TypeError);
+  for (const bad of ['s', 1, null, ['a'], new Date(), new Map(), new (class Extras {})()]) assert.throws(() => new CodedError('X', 'm', bad), TypeError);
+});
+
+// Invariant: a null-prototype object is a plain object and is accepted.
+test('CodedError accepts a null-prototype details object', () => {
+  const details = Object.assign(Object.create(null), { a: 1 });
+  assert.equal(new CodedError('X', 'm', details).details, details);
 });

@@ -31,8 +31,20 @@ const sandboxUnavailable = (err, details) => new CodedError(err.code, `${err.mes
 
 const isPlainObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-// A caller-supplied value, shortened so a huge one is not echoed whole.
-const echo = (v) => (v === undefined ? 'undefined' : (JSON.stringify(v) ?? String(v)).slice(0, 80));
+// A caller-supplied value, shortened so a huge one is not echoed whole. Never throws: a deeply nested value overflows
+// JSON.stringify, a BigInt or a hostile toString throws, and a refusal must still be built.
+function echo(v) {
+  let text;
+  try { text = v === undefined ? 'undefined' : JSON.stringify(v) ?? String(v); } catch {
+    try { text = String(v); } catch { text = Object.prototype.toString.call(v); }
+  }
+  return text.slice(0, 80);
+}
+
+// An error's message without trusting it: a thrown object's getters and toString are foreign code.
+function messageOf(err) {
+  try { return err?.message || String(err); } catch { return 'unreadable error'; }
+}
 
 // cc POSTs {tool, arguments, caller, format} and expects HTTP 200 with exactly one of:
 //   format "json" → {structured}   (the tool's complete data; cc validates it against the manifest outputSchema)
@@ -106,11 +118,13 @@ export function createMcp({ manager, pluginDir, pluginId }) {
     if (!isPlainObject(args)) return { error: 'arguments must be an object', code: 'BAD_REQUEST' };
     try {
       const data = await handlers[tool](args);
-      return format === 'json' ? { structured: data } : TEXT_VIEWS[tool](data);
+      if (format === 'json') return { structured: data };
+      if (!Object.hasOwn(TEXT_VIEWS, tool)) throw new Error('no text view');
+      return TEXT_VIEWS[tool](data);
     } catch (err) {
       if (err instanceof CodedError) return { error: err.message, code: err.code, ...(err.details ? { details: err.details } : {}) };
-      console.error(`code-browser: tool ${tool} failed:`, err);
-      return { error: `${tool} failed unexpectedly: ${err?.message || String(err)}`, code: 'INTERNAL' };
+      try { console.error(`code-browser: tool ${tool} failed:`, err); } catch { /* logging must not fail the refusal */ }
+      return { error: `${tool} failed unexpectedly: ${messageOf(err)}`, code: 'INTERNAL' };
     }
   }
 

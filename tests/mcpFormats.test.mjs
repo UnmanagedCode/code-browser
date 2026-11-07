@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CodedError } from '../src/errors.js';
+import { createApp } from '../src/app.js';
+import { TEXT_VIEWS } from '../src/mcpViews.js';
+import { JSON_HEADERS, listen, request, tmpDir } from './helpers.mjs';
 import { createMcp } from '../src/mcp.js';
 import { buildSnippet } from '../src/snippet.js';
 import { call } from './_mcpCall.mjs';
@@ -13,9 +16,11 @@ const FORMATS = ['text', 'json'];
 
 // Invariant: a format other than text/json (null and non-strings included) is FORMAT_UNKNOWN, never silently text.
 test('FORMAT_UNKNOWN for any other format', async () => {
-  for (const format of ['xml', null, 42, '']) {
+  const deep = JSON.parse('['.repeat(9000) + ']'.repeat(9000));
+  for (const format of ['xml', null, 42, '', deep, { a: { b: 1 } }, [1, [2]], 10n, Symbol('s')]) {
     const r = await make().handle({ tool: 'list_browsers', format });
-    assert.equal(r.code, 'FORMAT_UNKNOWN', String(format));
+    assert.equal(r.code, 'FORMAT_UNKNOWN', typeof format);
+    assert.ok(r.error.length < 200);
     assert.deepEqual(Object.keys(r).sort(), ['code', 'error']);
   }
   assert.ok((await make().handle({ tool: 'list_browsers', format: 'x'.repeat(5000) })).error.length < 200, 'a huge value is not echoed whole');
@@ -24,10 +29,12 @@ test('FORMAT_UNKNOWN for any other format', async () => {
 // Invariant: tool lookup is an own-property check: prototype names, a missing tool and a non-string tool are TOOL_UNKNOWN.
 test('TOOL_UNKNOWN for unknown, prototype, missing and non-string tools', async () => {
   const mcp = make();
-  for (const tool of ['nope', 'toString', 'constructor', '__proto__', 'hasOwnProperty', undefined, 7, null, {}]) {
+  const deep = JSON.parse('['.repeat(9000) + ']'.repeat(9000));
+  for (const tool of ['nope', 'toString', 'constructor', '__proto__', 'hasOwnProperty', undefined, 7, null, {}, deep, { a: { b: 1 } }, [1, [2]], 10n]) {
     for (const format of FORMATS) {
       const r = await call(mcp, tool, {}, format);
-      assert.equal(r.code, 'TOOL_UNKNOWN', String(tool));
+      assert.equal(r.code, 'TOOL_UNKNOWN', typeof tool);
+      assert.ok(r.error.length < 200);
     }
   }
   assert.equal((await mcp.handle({})).code, 'TOOL_UNKNOWN');
@@ -173,4 +180,45 @@ test('notes list every applicable warning', async () => {
   assert.equal(b.structured.notes.length, 3);
   const text = (await call(make({}, manager), 'browser_info', { name: 'mine' }, 'text')).text;
   for (const note of b.structured.notes) assert.ok(text.includes(note));
+});
+
+// Invariant: a deeply nested `format` or `tool` that fits the body limit reaches cc as HTTP 200 with the refusal, never a 500.
+test('through a real server, a deeply nested format or tool is HTTP 200 with a refusal', async () => {
+  const server = createApp({ manager: fakeManager(), mcp: make(), distDir: tmpDir() });
+  const port = await listen(server);
+  try {
+    const nested = '['.repeat(9000) + ']'.repeat(9000);
+    for (const [body, code] of [[`{"tool":"list_browsers","format":${nested}}`, 'FORMAT_UNKNOWN'], [`{"tool":${nested},"format":"json"}`, 'TOOL_UNKNOWN']]) {
+      assert.ok(body.length < 64 * 1024);
+      const r = await request(port, { method: 'POST', path: '/api/mcp', headers: JSON_HEADERS, body });
+      assert.equal(r.status, 200);
+      assert.equal(r.json.code, code);
+      assert.equal(typeof r.json.error, 'string');
+    }
+  } finally {
+    server.close();
+  }
+});
+
+// Invariant: a thrown value whose `message` getter throws still yields an INTERNAL refusal (building the message is exception-safe).
+test('INTERNAL survives a thrown object with a hostile message', async () => {
+  const origError = console.error;
+  console.error = () => {};
+  try {
+    const hostile = Object.defineProperty({}, 'message', { get() { throw new Error('x'); } });
+    for (const thrown of [hostile, Object.create(null), { toString() { throw new Error('y'); } }]) {
+      const manager = fakeManager();
+      manager.list = () => { throw thrown; };
+      const r = await call(make({}, manager), 'list_browsers', {}, 'json');
+      assert.equal(r.code, 'INTERNAL');
+      assert.match(r.error, /list_browsers failed unexpectedly/);
+    }
+  } finally {
+    console.error = origError;
+  }
+});
+
+// Invariant: every served tool has a text view and no view is orphaned, so the text and json formats cover the same tools.
+test('handler tools and text views have the same key set', () => {
+  assert.deepEqual(make().toolNames.slice().sort(), Object.keys(TEXT_VIEWS).sort());
 });
