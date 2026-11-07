@@ -36,14 +36,21 @@ const isPlainObject = (v) => typeof v === 'object' && v !== null && !Array.isArr
 function echo(v) {
   let text;
   try { text = v === undefined ? 'undefined' : JSON.stringify(v) ?? String(v); } catch {
-    try { text = String(v); } catch { text = Object.prototype.toString.call(v); }
+    try { text = String(v); } catch {
+      try { text = Object.prototype.toString.call(v); } catch { text = '[unprintable]'; }
+    }
   }
   return text.slice(0, 80);
 }
 
+// instanceof runs a Proxy's getPrototypeOf trap, which a revoked Proxy makes throw.
+function isCoded(err) {
+  try { return err instanceof CodedError; } catch { return false; }
+}
+
 // An error's message without trusting it: a thrown object's getters and toString are foreign code.
 function messageOf(err) {
-  try { return err?.message || String(err); } catch { return 'unreadable error'; }
+  try { return String(err?.message || err); } catch { return 'unreadable error'; }
 }
 
 // cc POSTs {tool, arguments, caller, format} and expects HTTP 200 with exactly one of:
@@ -122,7 +129,7 @@ export function createMcp({ manager, pluginDir, pluginId }) {
       if (!Object.hasOwn(TEXT_VIEWS, tool)) throw new Error('no text view');
       return TEXT_VIEWS[tool](data);
     } catch (err) {
-      if (err instanceof CodedError) return { error: err.message, code: err.code, ...(err.details ? { details: err.details } : {}) };
+      if (isCoded(err)) return { error: err.message, code: err.code, ...(err.details ? { details: err.details } : {}) };
       try { console.error(`code-browser: tool ${tool} failed:`, err); } catch { /* logging must not fail the refusal */ }
       return { error: `${tool} failed unexpectedly: ${messageOf(err)}`, code: 'INTERNAL' };
     }

@@ -222,3 +222,32 @@ test('INTERNAL survives a thrown object with a hostile message', async () => {
 test('handler tools and text views have the same key set', () => {
   assert.deepEqual(make().toolNames.slice().sort(), Object.keys(TEXT_VIEWS).sort());
 });
+
+// Invariant: a thrown value whose message is not a string (a Symbol, or an object whose toString throws), or that is a
+// revoked Proxy, still yields an INTERNAL refusal: coercing the message and classifying the error never throw out of handle.
+test('INTERNAL survives a non-string message and a revoked Proxy', async () => {
+  const origError = console.error;
+  console.error = () => {};
+  try {
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+    for (const thrown of [{ message: Symbol('m') }, { message: { toString() { throw new Error('x'); } } }, revoked.proxy]) {
+      const manager = fakeManager();
+      manager.list = () => { throw thrown; };
+      const r = await make({}, manager).handle({ tool: 'list_browsers', format: 'json' });
+      assert.equal(r.code, 'INTERNAL');
+      assert.match(r.error, /list_browsers failed unexpectedly/);
+    }
+  } finally {
+    console.error = origError;
+  }
+});
+
+// Invariant: a revoked Proxy as `format` or `tool` is a FORMAT_UNKNOWN / TOOL_UNKNOWN refusal, never a throw.
+test('a revoked Proxy as format or tool is refused', async () => {
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+  const mcp = make();
+  assert.equal((await mcp.handle({ tool: 'list_browsers', format: revoked.proxy })).code, 'FORMAT_UNKNOWN');
+  assert.equal((await mcp.handle({ tool: revoked.proxy, format: 'json' })).code, 'TOOL_UNKNOWN');
+});
