@@ -17,12 +17,13 @@ server.js                thin wiring: config → migration → manager → mcp �
 src/config.js            PORT, data dir ($CONDUCTOR_PLUGIN_DATA_DIR), plugin dir, plugin id
 src/migrateLegacyStore.js  one-shot boot migration of the legacy store into the data dir
 src/limits.js            every tunable constant and NAME_RE
-src/errors.js            CodedError and the code → HTTP status map
+src/errors.js            CodedError (optional `details`), describeError (message + details as one string), detailsOf, and the code → HTTP status map
 src/requestGuard.js      Origin↔Host check
 src/http.js              CSP/security headers, JSON body reader, static allowlist
 src/routes.js            REST table (GET handlers read-only)
 src/app.js               HTTP server: guard order, dispatch, clientError, upgrade hook
-src/mcp.js               the tools; always answers {result}|{error}|{text,meta}
+src/mcp.js               dispatch (format, tool, arguments) and each tool's complete data; answers {structured}|{text,meta?}|{error,code,details?}
+src/mcpViews.js          the text view of each tool, rendered from that data
 src/snippet.js           the Playwright snippet; src/panelLink.js the shell link
 src/browserManager.js    profiles and attached records (one namespace), launch/stop/delete, attach/connect, one entry per running browser
 src/browserSettings.js   settings/<name>.json: the per-browser unsandboxed opt-in
@@ -89,7 +90,7 @@ Profiles and attached records share one namespace: `names()` is their union, and
 5. Sandboxed first. If Chromium exits during launch and its log carries the sandbox failure (`SANDBOX_FAILURE_PATTERNS` in `src/chromium/args.js`), the start is **refused** with `SANDBOX_UNAVAILABLE` unless `settings/<name>.json` holds the opt-in. The refusal launches nothing, records the name for the summary's `sandboxUnavailable` and emits `change`. With the opt-in it relaunches with `--no-sandbox`, logs a warning and reports `sandbox: false`. Detection reads the **head** of the log: the message opens a long crash dump.
 6. Write the run file, connect CDP, create the `browserSession`.
 
-Launch failures are `LAUNCH_FAILED` with the log tail; a timeout kills the browser first.
+Launch failures are `LAUNCH_FAILED` with the log tail in `details.logTail`; a timeout kills the browser first.
 
 **Stop:** `Browser.close` over CDP (flushes the profile), wait `STOP_GRACE_MS`, then `stop` to the keeper, then SIGKILL of both process groups. The run file goes; the profile stays.
 
@@ -150,7 +151,7 @@ The panel socket holds a frame that arrives while no screen is subscribed (a lat
 2. The full Chrome build matching the bundled `playwright-core` (`chromium.executablePath()`), not headless-shell, so sites see real Chrome.
 3. On `PATH`: `chromium`, `chromium-browser`, `google-chrome-stable`, `google-chrome` (also covers Termux).
 
-Nothing found: `CHROMIUM_NOT_FOUND` lists every path tried and `npm --prefix <pluginDir> run install-browser`. That script is deliberately not an npm lifecycle script: it downloads a large browser, and a failure inside `npm install` would stop the panel and health route from ever coming up.
+Nothing found: `CHROMIUM_NOT_FOUND` carries every path tried and `npm --prefix <pluginDir> run install-browser` in `details` (`tried`, `install`); an override that points nowhere carries `details.path`. REST and the panel's WebSocket add `details` and still render the extras into `error`/`message` with `describeError`. That script is deliberately not an npm lifecycle script: it downloads a large browser, and a failure inside `npm install` would stop the panel and health route from ever coming up.
 
 ## Threat model: the shared browser's network position
 
@@ -193,6 +194,7 @@ Run: `npm test` (backend `node --test`, including the Python-gated proxy tests, 
 - **Fake proxy** (`tests/fakes/fakeProxy.mjs`): an in-process stand-in that speaks the real wire protocol, so the default run covers the proxied path (cancellation, cleanup, no secret in tool results) without Python; `mode: 'blackhole'` accepts and never says hello.
 - **CDP proxy:** `tests/python/test_cdp_proxy.py` (stdlib `unittest`) covers the proxy alone; `tests/proxy.test.mjs` runs that suite (and checks it ran tests) and the real proxy against the backend's client and manager (`startProxy` helper; the backend dials `127.0.0.1` through `CODE_BROWSER_PROXY_DIAL_HOST`). Python-gated and **fail closed**: without Python 3.9+ these tests fail unless `CODE_BROWSER_SKIP_PYTHON=1` skips them; `CODE_BROWSER_PYTHON` picks the interpreter. Both suites check the MAC vector in `tests/fixtures/proxy-mac-vector.json`.
 - **Live stack** (`liveStack` in `tests/helpers.mjs`): real manager, session and gateway over the fake, with a second CDP client standing in for an agent.
+- **Typed MCP:** `tests/_jsonSchemaSubset.mjs` is a test-only port of cc's `checkSchema`/`validate`; `call` in `tests/_mcpCall.mjs` asserts the reply shape of every tool call in the suite and validates json against the manifest `outputSchema`. `tests/mcp.live.test.mjs` validates replies with real session data (tabs, crash, attach failure, attached browser) and the oldest stored layout `migrateLegacyStore` can move in, all on temp data dirs. `tests/jsonSchemaSubset.test.mjs` compares the port's keyword and type sets with cc's when `CODE_CONDUCTOR_DIR` is set.
 - **Config, migration, boot:** `tests/config.test.mjs` (data dir comes only from the variable; only `src/migrateLegacyStore.js` names the legacy path), `tests/migrateLegacyStore.test.mjs` (no-ops, move, modes, refusals), `tests/boot.test.mjs` (spawns `server.js`: migration precedes boot, a refusal does not listen, a missing variable refuses). A test that spawns `server.js` sets `PROJECTS_ROOT` to a fixture and `CONDUCTOR_PLUGIN_DATA_DIR` explicitly: agent shells export the real `PROJECTS_ROOT`, and `migrateLegacyStore` takes `env` with no default for the same reason.
 - **Fake clock** (`fakeClock`): screencast pacing, the control lease and the title sweep are tested without real waits; `liveStack({clock})` injects it into both the controller and the sweep.
 - **Titles in the fake:** `Fake.setTitle` changes a title without a `targetInfoChanged`, like Chromium; targets carry a `windowId` (`Target.createTarget` with `newWindow: true` takes a new one), answered by `Browser.getWindowForTarget`.

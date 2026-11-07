@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveChromium } from '../src/chromium/locate.js';
+import { describeError } from '../src/errors.js';
 
 const base = { env: {}, exists: () => false, pwPath: '/pw/chrome', pathDirs: ['/usr/bin', '/opt/bin'], installCmd: 'npm run install-browser' };
 
@@ -21,16 +22,20 @@ test('a missing env override fails loudly even when others exist', () => {
   const exists = (p) => p === '/pw/chrome';
   assert.throws(
     () => resolveChromium({ ...base, exists, env: { CODE_BROWSER_CHROMIUM: '/nope' } }),
-    (e) => e.code === 'CHROMIUM_NOT_FOUND' && e.message.includes('/nope'),
+    (e) => e.code === 'CHROMIUM_NOT_FOUND' && e.details.path === '/nope' && describeError(e).includes('/nope'),
   );
 });
 
 // Invariant: when nothing is found the error lists every path tried and the exact install command.
-test('not-found error lists paths tried and the install command', () => {
+test('not-found error carries paths tried and the install command in details, and renders them', () => {
   assert.throws(() => resolveChromium(base), (e) => {
     assert.equal(e.code, 'CHROMIUM_NOT_FOUND');
-    for (const p of ['/pw/chrome', '/usr/bin/chromium', '/usr/bin/google-chrome-stable', '/opt/bin/chromium-browser']) assert.ok(e.message.includes(p), p);
-    assert.ok(e.message.includes('npm run install-browser'));
+    for (const p of ['/pw/chrome', '/usr/bin/chromium', '/usr/bin/google-chrome-stable', '/opt/bin/chromium-browser']) {
+      assert.ok(e.details.tried.includes(p), p);
+      assert.ok(describeError(e).includes(p), p);
+    }
+    assert.equal(e.details.install, 'npm run install-browser');
+    assert.ok(describeError(e).includes('npm run install-browser'));
     return true;
   });
 });

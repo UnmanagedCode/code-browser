@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { checkSchema } from './_jsonSchemaSubset.mjs';
 
 const manifest = JSON.parse(fs.readFileSync(new URL('../conductor.plugin.json', import.meta.url), 'utf8'));
 
@@ -85,4 +86,35 @@ test('the nav label and the page title equal the manifest name', () => {
   assert.equal(manifest.frontend.navLabel, manifest.name);
   const html = fs.readFileSync(new URL('../frontend/index.html', import.meta.url), 'utf8');
   assert.equal(html.match(/<title>([^<]*)<\/title>/)?.[1], manifest.name);
+});
+
+// ---- typed output (cc's typed plugin tools) ----
+const TOOL_KEYS = ['name', 'description', 'inputSchema', 'outputSchema'];
+
+// Invariant: every tool declares an outputSchema inside cc's validated vocabulary with an object root, and the tool
+// entries use only the keys cc accepts, so cc serves each tool in json.
+test('every tool has an outputSchema within cc\'s subset and an object root', () => {
+  for (const tool of manifest.mcp.tools) {
+    for (const k of Object.keys(tool)) assert.ok(TOOL_KEYS.includes(k), `unknown key '${tool.name}.${k}'`);
+    assert.ok(tool.outputSchema, `${tool.name} has an outputSchema`);
+    assert.doesNotThrow(() => checkSchema(tool.outputSchema), tool.name);
+    assert.equal(tool.outputSchema.type, 'object', tool.name);
+  }
+});
+
+// Invariant: the summary schema is written out twice (no $ref in cc's subset); the copies in list_browsers and
+// browser_info/start_browser cannot drift apart.
+test('the summary property schemas are identical wherever they are written out', () => {
+  const tool = (name) => manifest.mcp.tools.find((t) => t.name === name).outputSchema;
+  const item = tool('list_browsers').properties.browsers.items;
+  assert.deepEqual(item.required, Object.keys(item.properties));
+  for (const name of ['browser_info', 'start_browser']) {
+    for (const [key, spec] of Object.entries(item.properties)) assert.deepEqual(tool(name).properties[key], spec, `${name}.${key}`);
+  }
+  assert.deepEqual(tool('browser_info'), tool('start_browser'));
+});
+
+// Invariant: descriptions describe data, not a rendering: none promises "returns json/text", mentions raw text or `meta`.
+test('descriptions are format-neutral', () => {
+  for (const tool of manifest.mcp.tools) assert.doesNotMatch(tool.description, /returns? (json|text)|raw text|\bmeta\b/i, tool.name);
 });

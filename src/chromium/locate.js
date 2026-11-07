@@ -14,7 +14,7 @@ export function resolveChromium({ env, exists, pwPath, pathDirs, installCmd = in
   const override = env.CODE_BROWSER_CHROMIUM;
   if (override) {
     if (exists(override)) return override;
-    throw new CodedError('CHROMIUM_NOT_FOUND', `CODE_BROWSER_CHROMIUM points at a missing file: ${override}`);
+    throw new CodedError('CHROMIUM_NOT_FOUND', 'CODE_BROWSER_CHROMIUM points at a missing file', { path: override });
   }
   const tried = [];
   if (pwPath) {
@@ -28,7 +28,7 @@ export function resolveChromium({ env, exists, pwPath, pathDirs, installCmd = in
       tried.push(candidate);
     }
   }
-  throw new CodedError('CHROMIUM_NOT_FOUND', `No Chromium found. Tried:\n${tried.map((t) => `  ${t}`).join('\n')}\nInstall one with: ${installCmd}`);
+  throw new CodedError('CHROMIUM_NOT_FOUND', 'No Chromium found', { tried, install: installCmd });
 }
 
 const fileExists = (p) => {

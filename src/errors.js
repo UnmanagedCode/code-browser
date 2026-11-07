@@ -1,11 +1,31 @@
 // Failures that carry a stable code to REST, MCP and WebSocket callers alike.
+// `details` is an optional plain object of machine-readable extras (never a stack); it is an own property only when given.
 export class CodedError extends Error {
-  constructor(code, message) {
+  constructor(code, message, details) {
     super(message);
     this.name = 'CodedError';
     this.code = code;
+    if (details !== undefined) {
+      if (details === null || typeof details !== 'object' || Array.isArray(details)) throw new TypeError('CodedError details must be a plain object');
+      this.details = details;
+    }
   }
 }
+
+// The message plus its details as readable text, for surfaces that show one string (REST `error`, WebSocket `message`).
+export function describeError(err) {
+  let out = err.message;
+  if (!err.details) return out;
+  for (const [key, value] of Object.entries(err.details)) {
+    if (Array.isArray(value)) out += `\n${key}:${value.map((item) => `\n  ${item}`).join('')}`;
+    else if (typeof value === 'string' && value.includes('\n')) out += `\n${key}:\n${value}`;
+    else out += `\n${key}: ${value}`;
+  }
+  return out;
+}
+
+// The `details` field a REST/WebSocket error body adds, or nothing.
+export const detailsOf = (err) => (err instanceof CodedError && err.details ? { details: err.details } : {});
 
 const STATUS = {
   INVALID_NAME: 400,

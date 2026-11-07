@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { CodedError, statusFor } from './errors.js';
+import { CodedError, describeError, detailsOf, statusFor } from './errors.js';
 import { parsePathname, readJsonBody, requireJson, sendJson, serveStatic } from './http.js';
 import { requestRefusal } from './requestGuard.js';
 import { buildRoutes } from './routes.js';
@@ -44,7 +44,7 @@ export function createApp({ manager, mcp, distDir, onUpgrade }) {
     res.on('error', () => {});
     dispatch(req, res).catch((err) => {
       if (!(err instanceof CodedError)) console.error('code-browser: request failed:', err);
-      sendJson(res, statusFor(err), { error: `${err.code ?? 'INTERNAL'}: ${err.message}` });
+      sendJson(res, statusFor(err), { error: `${err.code ?? 'INTERNAL'}: ${describeError(err)}`, ...detailsOf(err) });
     });
   });
   server.on('clientError', (err, socket) => {

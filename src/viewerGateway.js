@@ -1,6 +1,6 @@
 import { WebSocketServer } from 'ws';
 import { assertName } from './browserManager.js';
-import { CodedError } from './errors.js';
+import { CodedError, describeError, detailsOf } from './errors.js';
 import { MAX_FRAME_DIM, WS_MAX_PAYLOAD } from './limits.js';
 import { parsePathname } from './http.js';
 
@@ -140,7 +140,7 @@ export function createViewerGateway({ manager, log = console, pingMs = PING_MS }
       await handlers[msg.msg](conn, msg);
     } catch (err) {
       if (!(err instanceof CodedError)) log.error('code-browser: viewer message failed:', err);
-      send(conn, { type: 'error', code: err.code ?? 'INTERNAL', message: err.message });
+      send(conn, { type: 'error', code: err.code ?? 'INTERNAL', message: describeError(err), ...detailsOf(err) });
     }
   }
 
