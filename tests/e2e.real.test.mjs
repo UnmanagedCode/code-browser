@@ -67,7 +67,13 @@ async function post(port, body, headers = { 'content-type': 'application/json' }
   const res = await fetch(`http://127.0.0.1:${port}/api/mcp`, { method: 'POST', headers, body: typeof body === 'string' ? body : JSON.stringify(body) });
   return { status: res.status, json: await res.json().catch(() => null) };
 }
-const tool = async (port, name, args = {}) => (await post(port, { tool: name, arguments: args })).json;
+// A tool call in json format: the structured data, or the refusal {error, code, details?}.
+const tool = async (port, name, args = {}) => {
+  const reply = (await post(port, { tool: name, arguments: args, format: 'json' })).json;
+  return reply.structured ?? reply;
+};
+// The same call in text format: {text, meta?} or the refusal.
+const toolText = async (port, name, args = {}) => (await post(port, { tool: name, arguments: args, format: 'text' })).json;
 
 // A Chromium the user runs themselves, outside code-browser. Resolves {proc, port} once it publishes DevToolsActivePort,
 // or {proc, port: null} when it publishes none within `waitMs`.
@@ -92,7 +98,7 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
   // Runs `steps` through the snippet that browser_info hands out, exactly as an agent would.
   async function agent(steps, name = 'e2e') {
     const info = await tool(backend.port, 'browser_info', { name });
-    const code = /```js\n([\s\S]*?)```/.exec(info.text)[1].replace('// … your steps …', steps);
+    const code = info.snippet.replace('// … your steps …', steps);
     const file = path.join(projectsRoot, `agent-${Date.now()}.mjs`);
     fs.writeFileSync(file, code);
     // Async, not spawnSync: the fixture servers live in this process and must keep answering.
@@ -114,7 +120,7 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
     panel = await chromium.launch({ chromiumSandbox: false });
     cleanup.push(() => panel.close().catch(() => {}));
     const newPage = async () => (await panel.newContext({ viewport: { width: 1000, height: 800 } })).newPage();
-    const listed = async (name = 'e2e') => (await tool(backend.port, 'list_browsers')).result.find((b) => b.name === name);
+    const listed = async (name = 'e2e') => (await tool(backend.port, 'list_browsers')).browsers.find((b) => b.name === name);
     const modeOf = (f) => fs.statSync(f).mode & 0o777;
     const settingsFile = path.join(dataDir, 'settings', 'e2e.json');
     const profileDir = path.join(dataDir, 'profiles', 'e2e');
@@ -129,13 +135,13 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
     let refused = false;
     await t.test('2. start_browser over MCP is refused without the opt-in', async () => {
       const result = await tool(port, 'start_browser', { name: 'e2e' });
-      if (!result.error?.startsWith('SANDBOX_UNAVAILABLE')) {
+      if (result.code !== 'SANDBOX_UNAVAILABLE') {
         assert.ok(!result.error, result.error);
         t.diagnostic('sandbox usable on this host: opt-in path not exercised');
         return;
       }
       refused = true;
-      assert.ok(result.error.includes('/#plugin/code-browser/?browser=e2e'), result.error);
+      assert.equal(result.details.panelPath, '/#plugin/code-browser/?browser=e2e');
       assert.match(result.error, /Allow without sandbox/);
       assert.ok(!fs.existsSync(path.join(dataDir, 'run', 'e2e.json')));
       assert.deepEqual(procsFor(profileDir), [], 'a refused start must leave no Chromium behind');
@@ -167,15 +173,15 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
     await t.test('2c. start_browser result: endpoint, panel path, snippet, loopback only, guards', async () => {
       started = await tool(port, 'start_browser', { name: 'e2e' });
       assert.ok(!started.error, started.error);
-      const cdpPort = Number(new URL(started.meta.cdpEndpoint).port);
-      assert.match(started.meta.cdpEndpoint, /^http:\/\/127\.0\.0\.1:\d+$/);
-      assert.equal(started.meta.panelPath, '/#plugin/code-browser/?browser=e2e');
-      assert.match(started.text, /connectOverCDP/);
-      assert.equal(typeof started.meta.sandbox, 'boolean');
+      const cdpPort = Number(new URL(started.cdpEndpoint).port);
+      assert.match(started.cdpEndpoint, /^http:\/\/127\.0\.0\.1:\d+$/);
+      assert.equal(started.panelPath, '/#plugin/code-browser/?browser=e2e');
+      assert.match(started.snippet, /connectOverCDP/);
+      assert.equal(typeof started.sandbox, 'boolean');
       if (refused) {
-        assert.equal(started.meta.sandbox, false);
-        assert.equal(started.meta.allowUnsandboxed, true);
-        assert.equal(started.text.split('\n').filter((l) => l.startsWith('WARNING')).length, 1);
+        assert.equal(started.sandbox, false);
+        assert.equal(started.allowUnsandboxed, true);
+        assert.equal(started.notes.filter((n) => n.startsWith('WARNING')).length, 1);
       }
 
       const listening = spawnSync('ss', ['-ltnH', `sport = :${cdpPort}`], { encoding: 'utf8' }).stdout;
@@ -200,8 +206,8 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
     await t.test('3. an agent script drives the page and disconnects without stopping the browser', async () => {
       await agent(`await page.goto(${JSON.stringify(fixtureUrl)});`);
       const info = await tool(port, 'browser_info', { name: 'e2e' });
-      assert.equal(info.meta.status, 'running');
-      assert.equal(info.meta.tabs.find((x) => x.active).url, fixtureUrl);
+      assert.equal(info.status, 'running');
+      assert.equal(info.tabs.find((x) => x.active).url, fixtureUrl);
     });
 
     const panelUrl = `http://127.0.0.1:${port}/?browser=e2e`;
@@ -267,11 +273,11 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
 
     await t.test('5. controller state is visible to the agent and returns on hand-back', async () => {
       const held = await tool(port, 'browser_info', { name: 'e2e' });
-      assert.equal(held.meta.controller, 'human');
-      assert.match(held.text, /human currently has control/);
-      assert.equal((await tool(port, 'list_browsers')).result[0].controller, 'human');
+      assert.equal(held.controller, 'human');
+      assert.match(held.notes[0], /human currently has control/);
+      assert.equal((await tool(port, 'list_browsers')).browsers[0].controller, 'human');
       await p1.getByRole('button', { name: 'Hand back' }).click();
-      await waitFor(async () => (await tool(port, 'browser_info', { name: 'e2e' })).meta.controller === 'agent', { what: 'controller to return to the agent' });
+      await waitFor(async () => (await tool(port, 'browser_info', { name: 'e2e' })).controller === 'agent', { what: 'controller to return to the agent' });
       await p2.getByText('Agent has control').waitFor();
     });
 
@@ -279,7 +285,7 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
       await agent(`const p2 = await context.newPage(); await p2.goto(${JSON.stringify(`${fixtureUrl}?second`)});`);
       await p1.getByRole('tab', { name: 'second', selected: true }).waitFor({ timeout: 10_000 });
       const info = await tool(port, 'browser_info', { name: 'e2e' });
-      assert.ok(info.meta.tabs.find((x) => x.active).url.endsWith('?second'));
+      assert.ok(info.tabs.find((x) => x.active).url.endsWith('?second'));
 
       await agent(`await page.evaluate(() => { setTimeout(() => alert('hi'), 300); });`);
       const dialog = p1.getByRole('dialog');
@@ -307,7 +313,7 @@ const v = await context.newPage(); await v.goto('chrome://version');`);
       await waitFor(async () => (await optionLabels()).join() === 'tab-27', { what: 'one option titled tab-27', timeout: 15_000 });
       await p1.keyboard.press('Enter');
       await p1.getByRole('tab', { name: /tab-27/, selected: true }).waitFor({ timeout: 10_000 });
-      assert.ok((await tool(port, 'browser_info', { name: 'e2e' })).meta.tabs.find((x) => x.active).url.endsWith('t=tab-27'));
+      assert.ok((await tool(port, 'browser_info', { name: 'e2e' })).tabs.find((x) => x.active).url.endsWith('t=tab-27'));
       await waitFor(async () => {
         const strip = await p1.locator('.tab-strip').boundingBox();
         const tab = await p1.getByRole('tab', { name: /tab-27/ }).boundingBox();
@@ -342,7 +348,7 @@ await target.evaluate(() => { setTimeout(() => alert('from three'), 300); });`);
 
       // Cleanup: later steps (restart, session restore) see the old tab set.
       await agent(`for (const p of context.pages()) if (/[?&]t=/.test(p.url()) || p.url().startsWith('chrome://')) await p.close();`);
-      await waitFor(async () => (await tool(port, 'browser_info', { name: 'e2e' })).meta.tabs.every((x) => !/[?&]t=/.test(x.url) && !x.url.startsWith('chrome://')), { what: 'the extra tabs to close', timeout: 15_000 });
+      await waitFor(async () => (await tool(port, 'browser_info', { name: 'e2e' })).tabs.every((x) => !/[?&]t=/.test(x.url) && !x.url.startsWith('chrome://')), { what: 'the extra tabs to close', timeout: 15_000 });
     });
 
     await t.test('7. a page inside the shared browser cannot drive the backend or CDP', async () => {
@@ -358,8 +364,8 @@ console.log(await page.textContent('#result'));`);
       const result = JSON.parse(out);
       assert.notEqual(result.backendWs, 'OPEN', 'the panel socket accepted a foreign origin');
       assert.notEqual(result.cdpWs, 'OPEN', 'CDP accepted a foreign origin');
-      assert.equal((await tool(port, 'browser_info', { name: 'e2e' })).meta.status, 'running');
-      assert.equal((await tool(port, 'list_browsers')).result[0].status, 'running', 'the no-cors POST must not have stopped the browser');
+      assert.equal((await tool(port, 'browser_info', { name: 'e2e' })).status, 'running');
+      assert.equal((await tool(port, 'list_browsers')).browsers[0].status, 'running', 'the no-cors POST must not have stopped the browser');
     });
 
     await t.test('8. no orphans after the backend is killed; profile survives; REST lifecycle; session cookie survives a stop', async () => {
@@ -373,7 +379,7 @@ console.log(await page.textContent('#result'));`);
 
       backend = await startBackend(projectsRoot);
       cleanup.push(() => backend.proc.kill('SIGKILL'));
-      const list = (await tool(backend.port, 'list_browsers')).result;
+      const list = (await tool(backend.port, 'list_browsers')).browsers;
       assert.deepEqual(list.map((b) => [b.name, b.status]), [['e2e', 'stopped']]);
       assert.equal(list[0].allowUnsandboxed, refused, 'the opt-in survives a backend restart');
       assert.ok(fs.existsSync(path.join(dataDir, 'profiles', 'e2e')));
@@ -428,7 +434,7 @@ console.log(await page.textContent('#result'));`);
         await waitFor(async () => { const b = await listed(); return b.status === 'stopped' && b.allowUnsandboxed === false; }, { what: 'revoke to stop the browser', timeout: 20_000 });
         assert.equal((await listed()).lastExit, null, 'a revoke is a deliberate stop, not a crash');
         assert.ok(!fs.existsSync(settingsFile));
-        assert.match((await tool(backend.port, 'start_browser', { name: 'e2e' })).error, /^SANDBOX_UNAVAILABLE/);
+        assert.equal((await tool(backend.port, 'start_browser', { name: 'e2e' })).code, 'SANDBOX_UNAVAILABLE');
         await page.close();
       }
       const rest = (method, p) => fetch(`http://127.0.0.1:${backend.port}/api/browsers/${p}`, { method, headers: { 'content-type': 'application/json' }, body: method === 'DELETE' ? undefined : '{}' });
@@ -439,7 +445,7 @@ console.log(await page.textContent('#result'));`);
     });
 
     // ---- 10–11: the user's own browser, attached by a human in the panel ----
-    const listedIn = async (name) => (await tool(backend.port, 'list_browsers')).result.find((b) => b.name === name);
+    const listedIn = async (name) => (await tool(backend.port, 'list_browsers')).browsers.find((b) => b.name === name);
     const secretOf = () => JSON.parse(fs.readFileSync(path.join(dataDir, 'proxy', PROTOCOL.rendezvous.backendFile), 'utf8')).secret;
     const noSandbox = refused ? ['--no-sandbox'] : [];
     // Forget through the row's menu and its inline confirmation.
@@ -468,16 +474,17 @@ console.log(await page.textContent('#result'));`);
       await row.getByText('attached', { exact: true }).waitFor();
 
       // The agent: cannot start or reconnect it; gets a tunnel endpoint without the secret; works in its own tab.
-      assert.match((await tool(backend.port, 'start_browser', { name: 'mine' })).error, /^ATTACHED: /);
+      assert.equal((await tool(backend.port, 'start_browser', { name: 'mine' })).code, 'ATTACHED');
       const info = await tool(backend.port, 'browser_info', { name: 'mine' });
-      assert.equal(info.meta.kind, 'attached');
-      assert.deepEqual(info.meta.attached, { address: `127.0.0.1:${own.port}`, via: 'proxy', asksApproval: false });
-      const endpoint = new URL(info.meta.cdpEndpoint);
+      assert.equal(info.kind, 'attached');
+      assert.deepEqual(info.attached, { address: `127.0.0.1:${own.port}`, via: 'proxy', asksApproval: false });
+      const endpoint = new URL(info.cdpEndpoint);
       assert.equal(endpoint.hostname, '127.0.0.1');
       assert.notEqual(Number(endpoint.port), own.port, 'agents reach the browser through the backend tunnel');
-      assert.equal(info.meta.sandbox, null);
+      assert.equal(info.sandbox, null);
       for (const text of [JSON.stringify(info), JSON.stringify(await tool(backend.port, 'list_browsers'))]) assert.ok(!text.includes(secretOf()));
-      assert.match(info.text, /your own tab/);
+      assert.match(info.snippet, /your own tab/);
+      assert.match((await toolText(backend.port, 'browser_info', { name: 'mine' })).text, /```js\n[\s\S]*connectOverCDP/);
       await agent(`await page.goto(${JSON.stringify(fixtureUrl)});`, 'mine');
       const shapeOf = async () => agent(`console.log(JSON.stringify(await page.evaluate(() => ({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio }))));`, 'mine');
       const attachedShape = await shapeOf();
@@ -498,13 +505,13 @@ console.log(await page.textContent('#result'));`);
       await viewer.getByText('You have control').waitFor();
       const btn = await clientPoint(viewer, 200, 140);
       await viewer.mouse.click(btn.x, btn.y);
-      assert.equal((await tool(backend.port, 'browser_info', { name: 'mine' })).meta.controller, 'human');
+      assert.equal((await tool(backend.port, 'browser_info', { name: 'mine' })).controller, 'human');
       assert.equal(await agent(`console.log(await page.textContent('#count'));`, 'mine'), '1');
       await viewer.getByRole('button', { name: 'Hand back' }).click();
       await viewer.close();
 
       // stop_browser only disconnects: Chromium and every tab (the agent's included) are still there.
-      assert.deepEqual((await tool(backend.port, 'stop_browser', { name: 'mine' })).result, { name: 'mine', status: 'stopped' });
+      assert.deepEqual(await tool(backend.port, 'stop_browser', { name: 'mine' }), { name: 'mine', kind: 'attached', status: 'stopped' });
       assert.ok(pidAlive(own.proc.pid));
       const tabs = await (await fetch(`http://127.0.0.1:${own.port}/json/list`)).json();
       assert.ok(tabs.some((x) => x.url === fixtureUrl), 'the tabs are untouched');

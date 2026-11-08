@@ -21,11 +21,156 @@
         "inputSchema": {
           "type": "object",
           "properties": {}
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "browsers"
+          ],
+          "properties": {
+            "browsers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "kind",
+                  "controller",
+                  "status",
+                  "cdpEndpoint",
+                  "sandbox",
+                  "allowUnsandboxed",
+                  "sandboxUnavailable",
+                  "lastExit",
+                  "attached",
+                  "attachError"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "launched",
+                      "attached"
+                    ]
+                  },
+                  "controller": {
+                    "type": "string",
+                    "enum": [
+                      "agent",
+                      "human"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "running",
+                      "stopped",
+                      "connecting"
+                    ]
+                  },
+                  "cdpEndpoint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "CDP endpoint while running (http://127.0.0.1:<port>, or the ws URL Chrome reports in approval mode); null otherwise"
+                  },
+                  "sandbox": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ],
+                    "description": "false: running without Chromium's sandbox, do not browse untrusted pages; null when stopped or attached"
+                  },
+                  "allowUnsandboxed": {
+                    "type": "boolean",
+                    "description": "read-only: a human allowed it to run without the sandbox"
+                  },
+                  "sandboxUnavailable": {
+                    "type": "boolean",
+                    "description": "its last start was refused with SANDBOX_UNAVAILABLE"
+                  },
+                  "lastExit": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "additionalProperties": false,
+                    "required": [
+                      "code",
+                      "signal",
+                      "at"
+                    ],
+                    "properties": {
+                      "code": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "signal": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "at": {
+                        "type": "integer"
+                      }
+                    }
+                  },
+                  "attached": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "additionalProperties": false,
+                    "required": [
+                      "address",
+                      "via",
+                      "asksApproval"
+                    ],
+                    "properties": {
+                      "address": {
+                        "type": "string"
+                      },
+                      "via": {
+                        "type": "string",
+                        "enum": [
+                          "proxy",
+                          "direct"
+                        ]
+                      },
+                      "asksApproval": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ],
+                        "description": "true: Chrome asks the user to allow every connection; null until known"
+                      }
+                    }
+                  },
+                  "attachError": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "the last connect failure of an attached browser"
+                  }
+                }
+              }
+            }
+          }
         }
       },
       {
         "name": "start_browser",
-        "description": "Start (creating on first use) a persistent headless Chromium that you and the human share. Workflow: start_browser -> read the returned snippet -> run it via Bash as an .mjs script (it connects to the browser over CDP with Playwright; the browser and its tabs keep state between scripts). The project needs no Playwright install. A browser name keeps its logins and cookies across stops. The page's viewport height follows the human's panel shape (launched browsers), so read innerHeight instead of assuming it. The human watches and can take control in a panel: obey `controller` in the result, and while it is \"human\" do not drive the page, call browser_info again later. When the host has no usable Chromium sandbox the start is refused with SANDBOX_UNAVAILABLE unless a human has turned on \"Allow without sandbox\" for that browser in the panel; you cannot turn it on, so ask the user. Check `sandbox` in the result and do not browse untrusted pages when it is false. An attached browser (the user's own, which a human attached in the panel) cannot be started or reconnected by you: start_browser refuses it with ATTACHED and the panel path, so ask the user to press Connect there.",
+        "description": "Start (creating on first use) a persistent headless Chromium that you and the human share. Workflow: start_browser -> read the snippet in the result -> run it via Bash as an .mjs script (it connects to the browser over CDP with Playwright; the browser and its tabs keep state between scripts). The project needs no Playwright install. A browser name keeps its logins and cookies across stops. The page's viewport height follows the human's panel shape (launched browsers), so read innerHeight instead of assuming it. The human watches and can take control in a panel: obey `controller` in the result, and while it is \"human\" do not drive the page, call browser_info again later. When the host has no usable Chromium sandbox the start is refused with SANDBOX_UNAVAILABLE unless a human has turned on \"Allow without sandbox\" for that browser in the panel; you cannot turn it on, so ask the user. Check `sandbox` in the result and do not browse untrusted pages when it is false. An attached browser (the user's own, which a human attached in the panel) cannot be started or reconnected by you: start_browser refuses it with ATTACHED and the panel path, so ask the user to press Connect there.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -34,6 +179,204 @@
               "pattern": "^[a-z0-9][a-z0-9\\-]{0,39}$",
               "maxLength": 40,
               "description": "Browser name (lowercase letters, digits, dashes). Defaults to \"default\"."
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "kind",
+            "controller",
+            "status",
+            "cdpEndpoint",
+            "sandbox",
+            "allowUnsandboxed",
+            "sandboxUnavailable",
+            "lastExit",
+            "attached",
+            "attachError",
+            "tabs",
+            "activeTargetId",
+            "panelPath",
+            "notes",
+            "rules",
+            "snippet"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "launched",
+                "attached"
+              ]
+            },
+            "controller": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "human"
+              ]
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "running",
+                "stopped",
+                "connecting"
+              ]
+            },
+            "cdpEndpoint": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "CDP endpoint while running (http://127.0.0.1:<port>, or the ws URL Chrome reports in approval mode); null otherwise"
+            },
+            "sandbox": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "false: running without Chromium's sandbox, do not browse untrusted pages; null when stopped or attached"
+            },
+            "allowUnsandboxed": {
+              "type": "boolean",
+              "description": "read-only: a human allowed it to run without the sandbox"
+            },
+            "sandboxUnavailable": {
+              "type": "boolean",
+              "description": "its last start was refused with SANDBOX_UNAVAILABLE"
+            },
+            "lastExit": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "code",
+                "signal",
+                "at"
+              ],
+              "properties": {
+                "code": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "signal": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "at": {
+                  "type": "integer"
+                }
+              }
+            },
+            "attached": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "address",
+                "via",
+                "asksApproval"
+              ],
+              "properties": {
+                "address": {
+                  "type": "string"
+                },
+                "via": {
+                  "type": "string",
+                  "enum": [
+                    "proxy",
+                    "direct"
+                  ]
+                },
+                "asksApproval": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ],
+                  "description": "true: Chrome asks the user to allow every connection; null until known"
+                }
+              }
+            },
+            "attachError": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "the last connect failure of an attached browser"
+            },
+            "tabs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "targetId",
+                  "active"
+                ],
+                "properties": {
+                  "targetId": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "active": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "activeTargetId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "panelPath": {
+              "type": "string",
+              "description": "relative to the address the user opens cc at: give it to the user as-is, do not add a host"
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "the warnings that apply now (a human has control, no sandbox, the user's own browser, Chrome asks approval per connection)"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "the Playwright rules to follow in scripts"
+            },
+            "snippet": {
+              "type": "string",
+              "description": "a ready-to-run Playwright .mjs script that connects to the browser"
             }
           }
         }
@@ -51,11 +394,38 @@
               "description": "Browser name. Defaults to \"default\"."
             }
           }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "kind",
+            "status"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "launched",
+                "attached"
+              ]
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "stopped"
+              ]
+            }
+          }
         }
       },
       {
         "name": "browser_info",
-        "description": "Current state of a running shared browser: CDP endpoint, open tabs, the active tab, and who controls it. Returns a ready-to-run Playwright snippet and the panel path to give the user. The page's viewport height follows the human's panel shape (launched browsers). Call it before each script: if controller is \"human\" the human has taken over, so do not drive the page until it is \"agent\" again. The browser may run unsandboxed where a human allowed it (read-only `allowUnsandboxed`): check `sandbox`. `kind` is attached for the user's own browser: work in your own tab there, and when `attached.asksApproval` is true, Chrome asks the user to allow every script's connection, so tell them before each script.",
+        "description": "Current state of a running shared browser: CDP endpoint, open tabs, the active tab, and who controls it. Includes a ready-to-run Playwright snippet (`snippet`) and the panel path (`panelPath`) to give the user. The page's viewport height follows the human's panel shape (launched browsers). Call it before each script: if controller is \"human\" the human has taken over, so do not drive the page until it is \"agent\" again. The browser may run unsandboxed where a human allowed it (read-only `allowUnsandboxed`): check `sandbox`. `kind` is attached for the user's own browser: work in your own tab there, and when `attached.asksApproval` is true, Chrome asks the user to allow every script's connection, so tell them before each script.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -64,6 +434,204 @@
               "pattern": "^[a-z0-9][a-z0-9\\-]{0,39}$",
               "maxLength": 40,
               "description": "Browser name. Defaults to \"default\"."
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "kind",
+            "controller",
+            "status",
+            "cdpEndpoint",
+            "sandbox",
+            "allowUnsandboxed",
+            "sandboxUnavailable",
+            "lastExit",
+            "attached",
+            "attachError",
+            "tabs",
+            "activeTargetId",
+            "panelPath",
+            "notes",
+            "rules",
+            "snippet"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "launched",
+                "attached"
+              ]
+            },
+            "controller": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "human"
+              ]
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "running",
+                "stopped",
+                "connecting"
+              ]
+            },
+            "cdpEndpoint": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "CDP endpoint while running (http://127.0.0.1:<port>, or the ws URL Chrome reports in approval mode); null otherwise"
+            },
+            "sandbox": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "false: running without Chromium's sandbox, do not browse untrusted pages; null when stopped or attached"
+            },
+            "allowUnsandboxed": {
+              "type": "boolean",
+              "description": "read-only: a human allowed it to run without the sandbox"
+            },
+            "sandboxUnavailable": {
+              "type": "boolean",
+              "description": "its last start was refused with SANDBOX_UNAVAILABLE"
+            },
+            "lastExit": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "code",
+                "signal",
+                "at"
+              ],
+              "properties": {
+                "code": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "signal": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "at": {
+                  "type": "integer"
+                }
+              }
+            },
+            "attached": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "address",
+                "via",
+                "asksApproval"
+              ],
+              "properties": {
+                "address": {
+                  "type": "string"
+                },
+                "via": {
+                  "type": "string",
+                  "enum": [
+                    "proxy",
+                    "direct"
+                  ]
+                },
+                "asksApproval": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ],
+                  "description": "true: Chrome asks the user to allow every connection; null until known"
+                }
+              }
+            },
+            "attachError": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "the last connect failure of an attached browser"
+            },
+            "tabs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "targetId",
+                  "active"
+                ],
+                "properties": {
+                  "targetId": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "active": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "activeTargetId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "panelPath": {
+              "type": "string",
+              "description": "relative to the address the user opens cc at: give it to the user as-is, do not add a host"
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "the warnings that apply now (a human has control, no sandbox, the user's own browser, Chrome asks approval per connection)"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "the Playwright rules to follow in scripts"
+            },
+            "snippet": {
+              "type": "string",
+              "description": "a ready-to-run Playwright .mjs script that connects to the browser"
             }
           }
         }

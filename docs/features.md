@@ -7,7 +7,7 @@ code-browser gives an agent and a person one shared headless Chromium. The agent
 ## Agent workflow
 
 1. Call `start_browser` (optionally with a `name`). The first call starts the plugin backend and the browser.
-2. Read the returned text: it carries the controller state, the panel path for the user, two rules, and a ready-to-run Playwright snippet.
+2. Read the result: it carries the controller state, the panel path for the user, the rules, any warnings (`notes`) and a ready-to-run Playwright snippet (`snippet`; in text, a `js` fence).
 3. Save the snippet as an `.mjs` file, replace `// … your steps …`, run it with `node` through Bash.
 4. Before each later script call `browser_info` and respect `controller`.
 
@@ -18,11 +18,11 @@ code-browser gives an agent and a person one shared headless Chromium. The agent
 - Give the user the `panelPath` as is. It is relative to the address they open cc at; do not add a host.
 - **Viewport:** a launched browser's pages are `DEFAULT_WINDOW.width` px wide (`src/limits.js`) and their height follows the shape of the person's panel, so the screen has no letterbox bars. It can change between scripts: read `innerHeight`, and do not call `page.setViewportSize`. `browser_info` says so for launched browsers. An attached browser is never resized ([Screen](#panel)).
 - A browser **name** is a persistent profile: the same name keeps logins and cookies across stops, including session cookies.
-- **No usable sandbox:** `start_browser` fails with `SANDBOX_UNAVAILABLE`. The error carries the `panelPath`. Tell the user to open it and enable *Allow without sandbox* for that browser, then call `start_browser` again. The agent cannot enable it: no tool or argument does. A running browser with `sandbox: false` must not browse untrusted pages.
+- **No usable sandbox:** `start_browser` fails with `SANDBOX_UNAVAILABLE`. The refusal's `details.panelPath` is the panel path. Tell the user to open it and enable *Allow without sandbox* for that browser, then call `start_browser` again. The agent cannot enable it: no tool or argument does. A running browser with `sandbox: false` must not browse untrusted pages.
 
 ### Tools
 
-Arguments and return shapes: [protocol.md → MCP wire format](protocol.md#mcp-wire-format).
+Every tool answers in both of cc's formats, json (the complete data) and text (prose for the agent). Arguments and reply shapes: [protocol.md → MCP wire format](protocol.md#mcp-wire-format).
 
 | Tool | Does |
 |---|---|
@@ -146,10 +146,10 @@ The viewer of a disconnected attached browser shows *This browser is disconnecte
 
 ### What agents can and cannot do
 
-- **Use it:** `browser_info` gives a loopback CDP endpoint, the tabs, the controller and a snippet. The snippet opens the agent's **own tab** when no tab is active, and the text tells it not to close tabs it did not open.
+- **Use it:** `browser_info` gives a loopback CDP endpoint, the tabs, the controller and a snippet. The snippet opens the agent's **own tab** when no tab is active, and the attached note tells it not to close tabs it did not open.
 - **Disconnect it:** `stop_browser` closes code-browser's connection only.
 - **Never attach or reconnect it:** `start_browser` on an attached browser is refused with `ATTACHED` and the panel path; the agent asks the person to press **Connect**. A disconnect may be deliberate (the person closed Chrome or pressed Disconnect), and in approval mode a reconnect would raise a dialog nobody asked for.
-- **Approval mode:** each script opens a new connection, so Chrome asks again for each one. The text tells the agent to warn the person before each script and to use as few scripts as possible; a script waits until **Allow** and fails with `403` on cancel.
+- **Approval mode:** each script opens a new connection, so Chrome asks again for each one. The approval note tells the agent to warn the person before each script and to use as few scripts as possible; a script waits until **Allow** and fails with `403` on cancel.
 
 Nothing code-browser does closes the browser or its tabs: Disconnect, Forget, `stop_browser` and a backend shutdown close only code-browser's own connection and proxy tunnel. After a backend restart the browser is listed *stopped* and is never connected again on its own.
 

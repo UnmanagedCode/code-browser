@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createBrowserManager } from '../src/browserManager.js';
+import { describeError } from '../src/errors.js';
 import { pidAlive } from '../src/runState.js';
 import { tmpDir, waitFor } from './helpers.mjs';
 
@@ -117,7 +118,7 @@ test('starting a profile that a stale backend still runs reaps the old browser f
   assert.notEqual(fakePid(b.profile('a')), oldPid);
 });
 
-// Invariant: a launch that never exposes DevToolsActivePort fails loudly with the log tail and leaves no process.
+// Invariant: a launch that never exposes DevToolsActivePort fails loudly with the log tail in details (and its rendering) and leaves no process.
 test('launch timeout gives LAUNCH_FAILED with the log tail and kills the browser', async () => {
   // The launch clock stands still until the fake has started, then jumps past the deadline: the timeout fires, and
   // always on a browser that did start. A fake that never starts releases the clock after a real bound instead, and
@@ -127,7 +128,8 @@ test('launch timeout gives LAUNCH_FAILED with the log tail and kills the browser
   const started = () => fs.existsSync(path.join(dataDir, 'profiles', 'a', 'fake-pid'));
   const { manager, profile } = make({ dataDir, env: { FAKE_CHROMIUM_NO_PORT: '1' }, timeouts: { launch: 300 }, now: () => (started() || Date.now() - t0 > 10_000 ? Number.MAX_SAFE_INTEGER : 0) });
   manager.create('a');
-  await assert.rejects(manager.start('a'), (e) => e.code === 'LAUNCH_FAILED' && /no DevToolsActivePort/.test(e.message));
+  await assert.rejects(manager.start('a'), (e) => e.code === 'LAUNCH_FAILED' && /no DevToolsActivePort/.test(e.message)
+    && typeof e.details.logTail === 'string' && describeError(e).includes('logTail:') && describeError(e).endsWith(e.details.logTail));
   assert.ok(started(), 'the fake started before the deadline fired');
   const pid = fakePid(profile('a'));
   await waitFor(() => !pidAlive(pid), { what: 'timed-out chromium to be killed' });

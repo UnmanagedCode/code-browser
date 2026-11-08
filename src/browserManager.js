@@ -263,7 +263,7 @@ export function createBrowserManager({
     }
     if (result.failed) {
       const why = result.failed.timedOut ? `no DevToolsActivePort within ${t.launch} ms` : 'Chromium exited during launch';
-      throw new CodedError('LAUNCH_FAILED', `${why}. Log tail:\n${result.failed.tail}`);
+      throw new CodedError('LAUNCH_FAILED', why, { logTail: result.failed.tail });
     }
     const { handle, port, wsPath, sandbox } = result;
     const browserId = wsPath.split('/').pop();

@@ -1,6 +1,7 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import WebSocket from 'ws';
+import { CodedError } from '../src/errors.js';
 import { fakeClock, liveStack, rawExchange, sleep, waitFor } from './helpers.mjs';
 
 let stack;
@@ -190,6 +191,27 @@ test('bad messages are answered with errors', async () => {
   early.send({ msg: 'view', name: 'ghost' });
   await early.waitFor((x) => x.of('error').length === 7, 'not running');
   assert.equal(early.last('error').code, 'NOT_RUNNING');
+});
+
+// Invariant: a CodedError's details ride beside the message (additive), and the message still shows them as text; an
+// error without details has no `details` key.
+test('error replies add details and keep them readable in the message', async () => {
+  await boot();
+  const v = await stack.viewer();
+  await v.waitFor((x) => x.last('browsers'), 'browsers');
+  const real = stack.manager.session;
+  stack.manager.session = () => { throw new CodedError('CHROMIUM_NOT_FOUND', 'No Chromium found', { tried: ['/x/chromium'], install: 'npm run install-browser' }); };
+  v.send({ msg: 'view', name: 'a' });
+  await v.waitFor((x) => x.last('error'), 'error with details');
+  const e = v.last('error');
+  assert.equal(e.code, 'CHROMIUM_NOT_FOUND');
+  assert.deepEqual(e.details, { tried: ['/x/chromium'], install: 'npm run install-browser' });
+  assert.ok(e.message.includes('No Chromium found') && e.message.includes('/x/chromium') && e.message.includes('npm run install-browser'));
+  stack.manager.session = real;
+  v.send({ msg: 'view', name: 'ghost' });
+  await v.waitFor((x) => x.of('error').length === 2, 'plain error');
+  assert.equal(v.last('error').code, 'NOT_RUNNING');
+  assert.equal(Object.hasOwn(v.last('error'), 'details'), false);
 });
 
 // Invariant: frames larger than the limit close the socket (WS_MAX_PAYLOAD), so a client cannot make the backend buffer megabytes.

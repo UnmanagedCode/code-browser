@@ -222,6 +222,30 @@ test('start refused with SANDBOX_UNAVAILABLE answers 409 with that code', async 
   assert.match(r.json.error, /^SANDBOX_UNAVAILABLE: /);
 });
 
+// Invariant: REST error bodies are additive: a CodedError's details come as `details`, and `error` still renders the
+// extras (tried paths, install command, log tail) as text; an error without details has no `details` key.
+test('REST errors add details and keep the rendered text', async () => {
+  const manager = fakeManager();
+  const post = async (path, host, port) => request(port, { method: 'POST', path, headers: { ...JSON_HEADERS, host, origin: `http://${host}` }, body: '{}' });
+  const details = { tried: ['/p/chromium', '/q/chrome'], install: 'npm run install-browser' };
+  manager.create = () => { throw new CodedError('CHROMIUM_NOT_FOUND', 'No Chromium found', details); };
+  manager.start = async () => { throw new CodedError('LAUNCH_FAILED', 'Chromium exited during launch', { logTail: 'line1\nline2' }); };
+  const { port, host } = await boot({ manager });
+  const create = await request(port, { method: 'POST', path: '/api/browsers', headers: { ...JSON_HEADERS, host, origin: `http://${host}` }, body: '{"name":"x"}' });
+  assert.equal(create.status, 500);
+  assert.match(create.json.error, /^CHROMIUM_NOT_FOUND: /);
+  for (const s of ['/p/chromium', '/q/chrome', 'npm run install-browser']) assert.ok(create.json.error.includes(s), s);
+  assert.deepEqual(create.json.details, details);
+  const start = await post('/api/browsers/x/start', host, port);
+  assert.match(start.json.error, /^LAUNCH_FAILED: /);
+  assert.ok(start.json.error.includes('line1\nline2'));
+  assert.deepEqual(start.json.details, { logTail: 'line1\nline2' });
+  manager.start = async () => { throw new CodedError('SANDBOX_UNAVAILABLE', 'no sandbox'); };
+  const plain = await post('/api/browsers/x/start', host, port);
+  assert.equal(plain.status, 409);
+  assert.equal(Object.hasOwn(plain.json, 'details'), false);
+});
+
 // Invariant: cc's server-side MCP call (no Origin, JSON) is accepted on api/mcp.
 test('api/mcp accepts no Origin with JSON', async () => {
   const { port, mcp } = await boot();
