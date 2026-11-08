@@ -29,9 +29,11 @@ const idle = () => ({ status: 'idle', error: null, exitCode: null, logTail: '' }
 // Runs `playwright-core install chromium` as a child of this process and holds the state of the latest run.
 // The child is `node <cli>` with no shell: npm and npx are `.cmd` shims on Windows, which Node refuses to spawn
 // without a shell, and a shell mis-quotes paths with spaces or `&`.
+// The child keeps the backend's cwd: Playwright resolves a relative PLAYWRIGHT_BROWSERS_PATH against it, as the
+// backend's own lookup does.
 export function createChromiumInstaller({
   env = process.env,
-  cwd = pluginDir,
+  cwd = process.cwd(),
   nodePath = process.execPath,
   resolveCli = resolveInstallerCli,
   spawn = nodeSpawn,
@@ -71,6 +73,8 @@ export function createChromiumInstaller({
     for (const stream of [proc.stdout, proc.stderr]) {
       stream?.setEncoding('utf8');
       stream?.on('data', append);
+      // A pipe error (a kill in flight on Windows, say) must not become an uncaught exception.
+      stream?.on('error', () => {});
     }
     proc.on('error', (err) => settle(id, { status: 'failed', error: `could not run the installer: ${err.message}` }));
     proc.on('close', (code, signal) => {

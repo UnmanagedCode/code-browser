@@ -11,6 +11,13 @@ import { createSessionForEntry } from '../src/browserSession.js';
 import { CdpConnection } from '../src/cdp.js';
 import { createViewerGateway } from '../src/viewerGateway.js';
 
+// An installer double for fixtures that build the app but never install: idle, and a start is a loud failure.
+export const idleInstaller = {
+  state: () => ({ status: 'idle', error: null, exitCode: null, logTail: '' }),
+  start() { throw new Error('this fixture does not install Chromium'); },
+  close() {},
+};
+
 export function tmpDir(prefix = 'code-browser-test-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
@@ -111,7 +118,7 @@ export function liveStack({ env = {}, leaseMs = 30_000, clock = null, dataDir = 
     }),
   });
   const gateway = createViewerGateway({ manager, log: { error() {} }, pingMs: 60_000 });
-  const server = createApp({ manager, mcp: { handle: async () => ({}) }, distDir: path.join(dataDir, 'dist'), onUpgrade: gateway.handleUpgrade });
+  const server = createApp({ manager, mcp: { handle: async () => ({}) }, installer: idleInstaller, distDir: path.join(dataDir, 'dist'), onUpgrade: gateway.handleUpgrade });
   const sockets = [];
   const cdps = [];
   const stack = {

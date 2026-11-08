@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import type { BrowserState, BrowserSummary, ClientMessage, FrameHeader, ServerMessage, Tab } from './protocol';
@@ -1601,6 +1601,74 @@ describe('Chromium install', () => {
     await tick(INSTALL_POLL_MS * 5);
     expect(r.count(`GET ${INSTALL}`)).toBe(1);
     expect(screen.queryByRole('region', { name: /Chromium/ })).toBeNull();
+  });
+
+  // Invariant: a 2xx POST whose body is unreadable is not reported as a failed install: the panel follows the run by polling.
+  it('an unreadable POST reply polls instead of claiming failure', async () => {
+    const r = await startMissing({
+      [`POST ${INSTALL}`]: [{ status: 202, body: {} }],
+      [`GET ${INSTALL}`]: [ok({ install: stateOf('running', { logTail: 'still going' }) }), ok({ install: stateOf('succeeded', { exitCode: 0 }) })],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+    await flush();
+    expect(screen.getByRole('region', { name: /Installing Chromium/ })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: /install failed/ })).toBeNull();
+    await tick(INSTALL_POLL_MS);
+    expect(screen.getByText(/still going/)).toBeTruthy();
+    await tick(INSTALL_POLL_MS);
+    expect(r.count(`GET ${INSTALL}`)).toBe(2);
+    expect(screen.getByRole('region', { name: /Chromium is installed/ })).toBeTruthy();
+  });
+
+  // Invariant: an unreadable poll reply keeps the running view and is retried on the next tick.
+  it('an unreadable poll reply is retried', async () => {
+    const r = await startMissing({
+      [`POST ${INSTALL}`]: [{ status: 202, body: { install: stateOf('running') } }],
+      [`GET ${INSTALL}`]: [ok({}), ok({ install: stateOf('succeeded', { exitCode: 0 }) })],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+    await flush();
+    await tick(INSTALL_POLL_MS);
+    expect(screen.getByRole('region', { name: /Installing Chromium/ })).toBeTruthy();
+    await tick(INSTALL_POLL_MS);
+    expect(r.count(`GET ${INSTALL}`)).toBe(2);
+    expect(screen.getByRole('region', { name: /Chromium is installed/ })).toBeTruthy();
+  });
+
+  // Invariant: a fresh CHROMIUM_NOT_FOUND shows the Install offer, never the finished state of an earlier run.
+  it('a fresh not-found error after a finished install shows the offer again', async () => {
+    for (const outcome of [stateOf('succeeded', { exitCode: 0 }), stateOf('failed', { error: 'boom', exitCode: 1 })]) {
+      const r = await startMissing({
+        [`POST ${INSTALL}`]: [{ status: 202, body: { install: outcome } }],
+        'POST api/browsers/a/start': [{ status: 500, body: MISSING }],
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+      await flush();
+      expect(screen.queryByRole('button', { name: 'Install Chromium' })).toBeNull();
+      if (outcome.status === 'succeeded') fireEvent.click(within(notice(/Chromium is installed/)).getByRole('button', { name: 'Start a' }));
+      else fireEvent.click(within(notice(/install failed/)).getByRole('button', { name: 'Dismiss' }));
+      await flush();
+      if (outcome.status === 'failed') {
+        fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+        await flush();
+      }
+      expect(within(notice(/Chromium is not installed/)).getByRole('button', { name: 'Install Chromium' })).toBeTruthy();
+      expect(r.count('POST api/browsers/a/start')).toBeGreaterThan(0);
+      cleanup();
+    }
+  });
+
+  // Invariant: a POST refused for any reason but INSTALL_RUNNING shows the failed notice with its message and Try again, not a toast.
+  it('a rejected install POST shows the failure in the notice', async () => {
+    await startMissing({
+      [`POST ${INSTALL}`]: [{ status: 500, body: { error: 'INSTALL_UNAVAILABLE: playwright-core is not installed; run npm install', details: { install: NPM } } }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+    await flush();
+    const region = notice(/install failed/);
+    expect(within(region).getByText(/playwright-core is not installed/)).toBeTruthy();
+    expect(within(region).getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   // Invariant: a run that vanishes while followed (backend restarted) is shown as interrupted, not as idle or installed.

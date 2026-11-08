@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { spawn as realSpawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { INSTALL_ARGS, createChromiumInstaller, resolveInstallerCli } from '../src/chromium/install.js';
 import { LOG_TAIL_CHARS } from '../src/limits.js';
 import { tmpDir, waitFor } from './helpers.mjs';
 
-const FAKE_SRC = new URL('./fakes/fakeInstallerCli.cjs', import.meta.url).pathname;
+const FAKE_SRC = fileURLToPath(new URL('./fakes/fakeInstallerCli.cjs', import.meta.url));
 const installers = [];
 
 function make({ env = {}, ...over } = {}) {
@@ -146,4 +147,29 @@ test('resolveInstallerCli finds playwright-core, and fails with INSTALL_UNAVAILA
 test('INSTALL_ARGS match the install-browser script', () => {
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(pkg.scripts['install-browser'], `playwright-core ${INSTALL_ARGS.join(' ')}`);
+});
+
+// Invariant: a pipe error on the installer's output streams is absorbed, never an uncaught exception.
+test('an error event on stdout or stderr does not escape', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { PassThrough } = await import('node:stream');
+  const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill() {} });
+  const { installer } = make({ spawn: () => child });
+  installer.start();
+  child.stdout.emit('error', new Error('EPIPE'));
+  child.stderr.emit('error', new Error('EPIPE'));
+  child.emit('close', 0, null);
+  assert.equal(installer.state().status, 'succeeded');
+});
+
+// Invariant: by default the child inherits the backend's working directory, so a relative PLAYWRIGHT_BROWSERS_PATH resolves as in the backend's lookup.
+test('the child runs in the backend cwd by default', () => {
+  const seen = [];
+  const dir = tmpDir();
+  const cli = path.join(dir, 'cli.cjs');
+  fs.copyFileSync(FAKE_SRC, cli);
+  const installer = createChromiumInstaller({ resolveCli: () => cli, spawn: (f, a, o) => { seen.push(o); return realSpawn(f, a, { ...o, stdio: 'ignore' }); } });
+  installers.push(installer);
+  installer.start();
+  assert.equal(seen[0].cwd, process.cwd());
 });

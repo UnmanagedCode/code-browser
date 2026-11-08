@@ -3,6 +3,9 @@ import * as api from './api';
 import type { InstallState } from './protocol';
 import { INSTALL_POLL_MS } from '../../src/limits.js';
 
+// A reply without a usable `install` (a truncated or non-JSON 2xx body reads as `{}`) says nothing about the run.
+const installOf = (reply: { install?: InstallState } | undefined) => (typeof reply?.install?.status === 'string' ? reply.install : null);
+
 const INTERRUPTED = 'The install was interrupted (code-browser restarted).';
 
 // Follows the backend's Chromium install by polling while it runs. Polling starts only from `begin` (which
@@ -25,8 +28,10 @@ export function useChromiumInstall() {
     };
     async function poll() {
       try {
-        const { install: next } = await api.getInstall();
-        if (alive) show(next);
+        const next = installOf(await api.getInstall());
+        if (!alive) return;
+        if (next) show(next);
+        else if (last === 'running') timer = setTimeout(poll, INSTALL_POLL_MS);
       } catch {
         // The backend is unreachable: keep what is shown and try again.
         if (alive && last === 'running') timer = setTimeout(poll, INSTALL_POLL_MS);
@@ -37,8 +42,10 @@ export function useChromiumInstall() {
     // Asks the backend and follows the run, whatever its state.
     async function follow() {
       try {
-        const { install: next } = await api.getInstall();
-        if (alive) show(next);
+        const next = installOf(await api.getInstall());
+        if (!alive) return;
+        if (next) show(next);
+        else failLocally('The backend sent no install state.');
       } catch (e) {
         if (alive) failLocally((e as Error).message);
       }
@@ -48,14 +55,17 @@ export function useChromiumInstall() {
       // Asks the backend and shows the answer only when an install is running (the panel was reloaded mid-install).
       async checkOnOpen() {
         try {
-          const { install: next } = await api.getInstall();
-          if (alive && next.status === 'running') show(next);
+          const next = installOf(await api.getInstall());
+          if (alive && next?.status === 'running') show(next);
         } catch { /* nothing to show */ }
       },
       async begin() {
         try {
-          const { install: next } = await api.startInstall();
-          if (alive) show(next);
+          const next = installOf(await api.startInstall());
+          if (!alive) return;
+          // The POST was accepted but its body is unreadable: the run is under way, so follow it by polling.
+          if (next) show(next);
+          else show({ status: 'running', error: null, exitCode: null, logTail: '' });
         } catch (e) {
           if (!alive) return;
           if (api.isInstallRunning(e)) await follow();
