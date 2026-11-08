@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { INSTALL_ARGS, createChromiumInstaller, resolveInstallerCli } from '../src/chromium/install.js';
+import { pluginDir } from '../src/config.js';
 import { LOG_TAIL_CHARS } from '../src/limits.js';
 import { tmpDir, waitFor } from './helpers.mjs';
 
@@ -162,14 +163,24 @@ test('an error event on stdout or stderr does not escape', async () => {
   assert.equal(installer.state().status, 'succeeded');
 });
 
-// Invariant: by default the child inherits the backend's working directory, so a relative PLAYWRIGHT_BROWSERS_PATH resolves as in the backend's lookup.
-test('the child runs in the backend cwd by default', () => {
-  const seen = [];
+// Invariant: by default the child inherits the backend's working directory (not the plugin dir), so a relative PLAYWRIGHT_BROWSERS_PATH resolves as in the backend's lookup.
+test('the child runs in the backend cwd by default', async () => {
   const dir = tmpDir();
   const cli = path.join(dir, 'cli.cjs');
   fs.copyFileSync(FAKE_SRC, cli);
-  const installer = createChromiumInstaller({ resolveCli: () => cli, spawn: (f, a, o) => { seen.push(o); return realSpawn(f, a, { ...o, stdio: 'ignore' }); } });
-  installers.push(installer);
-  installer.start();
-  assert.equal(seen[0].cwd, process.cwd());
+  const argvFile = path.join(dir, 'argv.json');
+  const backendCwd = fs.realpathSync(tmpDir());
+  const before = process.cwd();
+  process.chdir(backendCwd);
+  try {
+    const installer = createChromiumInstaller({ env: { ...process.env, FAKE_INSTALL_ARGV: argvFile }, resolveCli: () => cli });
+    installers.push(installer);
+    installer.start();
+    assert.equal((await settled(installer)).status, 'succeeded');
+  } finally {
+    process.chdir(before);
+  }
+  const seen = JSON.parse(fs.readFileSync(argvFile, 'utf8')).cwd;
+  assert.equal(fs.realpathSync(seen), backendCwd);
+  assert.notEqual(fs.realpathSync(seen), fs.realpathSync(pluginDir));
 });
