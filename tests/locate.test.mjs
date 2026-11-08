@@ -39,3 +39,12 @@ test('not-found error carries paths tried and the install command in details, an
     return true;
   });
 });
+
+// Invariant: resolving caches nothing, so a Chromium installed after a miss is found by the next resolve.
+test('a Chromium that appears after a miss is found by the next resolve', () => {
+  let present = false;
+  const args = { ...base, exists: (p) => present && p === '/pw/chrome' };
+  assert.throws(() => resolveChromium(args), (e) => e.code === 'CHROMIUM_NOT_FOUND' && typeof e.details.install === 'string');
+  present = true;
+  assert.equal(resolveChromium(args), '/pw/chrome');
+});

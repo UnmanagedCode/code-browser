@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { CodedError } from '../src/errors.js';
 import { createApp } from '../src/app.js';
 import { TEXT_VIEWS } from '../src/mcpViews.js';
-import { JSON_HEADERS, listen, request, tmpDir } from './helpers.mjs';
+import { JSON_HEADERS, idleInstaller, listen, request, tmpDir } from './helpers.mjs';
 import { createMcp } from '../src/mcp.js';
 import { buildSnippet } from '../src/snippet.js';
 import { call } from './_mcpCall.mjs';
@@ -184,7 +184,7 @@ test('notes list every applicable warning', async () => {
 
 // Invariant: a deeply nested `format` or `tool` that fits the body limit reaches cc as HTTP 200 with the refusal, never a 500.
 test('through a real server, a deeply nested format or tool is HTTP 200 with a refusal', async () => {
-  const server = createApp({ manager: fakeManager(), mcp: make(), distDir: tmpDir() });
+  const server = createApp({ manager: fakeManager(), mcp: make(), installer: idleInstaller, distDir: tmpDir() });
   const port = await listen(server);
   try {
     const nested = '['.repeat(9000) + ']'.repeat(9000);

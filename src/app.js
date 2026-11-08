@@ -7,8 +7,8 @@ import { buildRoutes } from './routes.js';
 // The HTTP server. Check order for every request: Origin/Host (403) → route (404/405)
 // → panel-only route without an Origin (403) → content type (415) → body → handler. No handler runs before the guards pass.
 // Health is a constant answer and skips the loopback-Host rule (docs/protocol.md → Request guard).
-export function createApp({ manager, mcp, distDir, onUpgrade }) {
-  const routes = buildRoutes({ manager, mcp });
+export function createApp({ manager, mcp, installer, distDir, onUpgrade }) {
+  const routes = buildRoutes({ manager, mcp, installer });
   const listenPort = () => server.address()?.port;
 
   async function dispatch(req, res) {

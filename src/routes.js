@@ -2,8 +2,9 @@ import { CodedError } from './errors.js';
 
 // REST table. Every GET handler is read-only: <img> tags and simple requests from any page can reach them.
 // `mutating` routes require a JSON body (the guard enforces it before the handler runs).
-// `requireOrigin` routes are for the panel only: a request with no Origin (cc's MCP bridge, curl) is refused.
-export function buildRoutes({ manager, mcp }) {
+// `requireOrigin` routes are for the panel only: a request with no Origin (cc's MCP bridge, curl) is refused;
+// starting a Chromium install is one of them.
+export function buildRoutes({ manager, mcp, installer }) {
   const name = '([^/]+)';
   // A connect's failure is kept in the browser's summary (`attachError`), not thrown here.
   const accepted = (connecting, n) => {
@@ -51,6 +52,11 @@ export function buildRoutes({ manager, mcp }) {
     {
       method: 'DELETE', path: new RegExp(`^/api/browsers/${name}$`), mutating: true,
       handler: async ({ params }) => { await manager.delete(params[0]); return { ok: true }; },
+    },
+    { method: 'GET', path: /^\/api\/chromium\/install$/, handler: () => ({ install: installer.state() }) },
+    {
+      method: 'POST', path: /^\/api\/chromium\/install$/, mutating: true, requireOrigin: true,
+      handler: () => ({ status: 202, body: { install: installer.start() } }),
     },
     {
       method: 'POST', path: /^\/api\/mcp$/, mutating: true,

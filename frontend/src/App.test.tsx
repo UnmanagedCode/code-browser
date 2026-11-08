@@ -1,8 +1,9 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import type { BrowserState, BrowserSummary, ClientMessage, FrameHeader, ServerMessage, Tab } from './protocol';
 import { TOAST_MS } from './components/Toast';
+import { INSTALL_POLL_MS } from '../../src/limits.js';
 import { createViewerSocket, type SocketStatus, type ViewerSocket, type View } from './socket';
 
 function fakeSocket() {
@@ -38,6 +39,8 @@ const state = (over: Partial<BrowserState> = {}): BrowserState => ({
 });
 const mkTab = (targetId: string, title: string, url = `https://${targetId.toLowerCase()}.test/`, windowId: number | null = 1): Tab => ({ targetId, url, title, windowId });
 const goTo = (search: string) => history.replaceState(null, '', search || location.pathname);
+// The panel asks the backend about a Chromium install whenever the socket opens; tests that open it answer idle.
+const stubIdleInstall = () => vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ install: { status: 'idle', error: null, exitCode: null, logTail: '' } }) })));
 
 const openMenu = (name: string) => { fireEvent.click(screen.getByRole('button', { name: `More actions for ${name}` })); return screen.getByRole('menu'); };
 const pick = (name: string, item: string) => { fireEvent.click(within(openMenu(name)).getByRole('menuitem', { name: item })); };
@@ -446,6 +449,7 @@ describe('view changes clear per-run state', () => {
 });
 
 describe('reconnect', () => {
+  beforeEach(stubIdleInstall);
   class FakeWs {
     static all: FakeWs[] = [];
     readyState = 0; binaryType = '';
@@ -510,6 +514,7 @@ describe('reconnect', () => {
 });
 
 describe('messages that beat the first render', () => {
+  beforeEach(stubIdleInstall);
   class FakeWs {
     readyState = 0; binaryType = ''; sent: string[] = [];
     onopen: (() => void) | null = null; onmessage: ((e: { data: unknown }) => void) | null = null; onclose: (() => void) | null = null;
@@ -990,6 +995,7 @@ describe('tab switcher', () => {
 });
 
 describe('connection loss', () => {
+  beforeEach(stubIdleInstall);
   // Invariant: the banner appears only after a failed attempt, names the attempt, and Retry now calls socket.retry.
   it('shows the banner with the attempt and Retry now only after a drop', async () => {
     await openViewer();
@@ -1047,6 +1053,7 @@ describe('connection loss', () => {
 });
 
 describe('connection loss with the real socket', () => {
+  beforeEach(stubIdleInstall);
   class FakeWs {
     static all: FakeWs[] = [];
     readyState = 0; binaryType = ''; sent: { msg: string }[] = [];
@@ -1371,6 +1378,7 @@ describe('accessibility and focus', () => {
 
   // Invariant: the reconnect announcement is a persistent live region with one stable phrase per state, not one per retry.
   it('the reconnect live region is always mounted and announces once', async () => {
+    stubIdleInstall();
     await openViewer();
     const live = () => screen.getAllByRole('status').find((el) => el.classList.contains('sr-only'))!;
     expect(live().textContent).toBe('');
@@ -1431,5 +1439,264 @@ describe('accessibility and focus', () => {
     expect(document.activeElement).toBe(items.at(-1));
     fireEvent.keyDown(menu, { key: 'Home' });
     expect(document.activeElement).toBe(items[0]);
+  });
+});
+
+describe('Chromium install', () => {
+  const NPM = 'npm --prefix /plugin run install-browser';
+  const MISSING = { error: `CHROMIUM_NOT_FOUND: No Chromium found\ninstall: ${NPM}`, details: { tried: ['/x/chrome'], install: NPM } };
+  const stateOf = (status: string, over: Record<string, unknown> = {}) => ({ status, error: null, exitCode: null, logTail: '', ...over });
+  const stopped = (name = 'a'): BrowserSummary => ({ ...running(name), status: 'stopped', sandbox: null });
+
+  // A router over `${method} ${url}`: each key holds a queue of replies; the last one repeats.
+  type Reply = { status: number; body: unknown };
+  const ok = (body: unknown): Reply => ({ status: 200, body });
+  function route(table: Record<string, Reply[]>) {
+    const calls: { key: string; init?: RequestInit }[] = [];
+    const fn = vi.fn(async (url: string, init?: RequestInit) => {
+      const key = `${init?.method ?? 'GET'} ${url}`;
+      calls.push({ key, init });
+      const queue = table[key];
+      if (!queue) throw new Error(`unexpected request ${key}`);
+      const r = queue.length > 1 ? queue.shift()! : queue[0];
+      return { ok: r.status < 400, status: r.status, json: async () => r.body };
+    });
+    vi.stubGlobal('fetch', fn);
+    return { calls, count: (key: string) => calls.filter((c) => c.key === key).length };
+  }
+  const INSTALL = 'api/chromium/install';
+  const flush = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  const notice = (title: RegExp) => screen.getByRole('region', { name: title });
+
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  async function startMissing(table: Record<string, Reply[]>) {
+    const r = route({ 'POST api/browsers/a/start': [{ status: 500, body: MISSING }], ...table });
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [stopped()] });
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    await flush();
+    return r;
+  }
+
+  // Invariant: a start that fails for want of Chromium offers the install in a notice (no toast), and nothing is
+  // installed or requested until the person clicks.
+  it('a start failing with CHROMIUM_NOT_FOUND offers Install Chromium and sends nothing yet', async () => {
+    const r = await startMissing({});
+    expect(within(notice(/Chromium is not installed/)).getByRole('button', { name: 'Install Chromium' })).toBeTruthy();
+    expect(within(notice(/Chromium is not installed/)).getByText(NPM)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(r.calls.filter((c) => c.key.includes(INSTALL))).toEqual([]);
+  });
+
+  // Invariant: only the not-found-with-install error offers the install; a bad CODE_BROWSER_CHROMIUM path stays a toast.
+  it('an override path that points nowhere stays a toast with no install button', async () => {
+    await startMissing({ 'POST api/browsers/a/start': [{ status: 500, body: { error: 'CHROMIUM_NOT_FOUND: CODE_BROWSER_CHROMIUM points at a missing file', details: { path: '/nope' } } }] });
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Install Chromium' })).toBeNull();
+  });
+
+  // Invariant: Install POSTs JSON, then polls the state once per INSTALL_POLL_MS while running and stops when it finishes.
+  it('Install posts, polls while running and stops once it succeeds', async () => {
+    const r = await startMissing({
+      [`POST ${INSTALL}`]: [{ status: 202, body: { install: stateOf('running') } }],
+      [`GET ${INSTALL}`]: [ok({ install: stateOf('running', { logTail: 'fetching 10%' }) }), ok({ install: stateOf('succeeded', { exitCode: 0 }) })],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+    await flush();
+    const post = r.calls.find((c) => c.key === `POST ${INSTALL}`)!;
+    expect((post.init!.headers as Record<string, string>)['content-type']).toBe('application/json');
+    expect(screen.getByRole('region', { name: /Installing Chromium/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Install Chromium' })).toBeNull();
+    expect(r.count(`GET ${INSTALL}`)).toBe(0);
+    await tick(INSTALL_POLL_MS);
+    expect(r.count(`GET ${INSTALL}`)).toBe(1);
+    expect(screen.getByText(/fetching 10%/)).toBeTruthy();
+    await tick(INSTALL_POLL_MS);
+    expect(r.count(`GET ${INSTALL}`)).toBe(2);
+    expect(screen.getByRole('region', { name: /Chromium is installed/ })).toBeTruthy();
+    await tick(INSTALL_POLL_MS * 5);
+    expect(r.count(`GET ${INSTALL}`)).toBe(2);
+  });
+
+  // Invariant: installer output is host-controlled text: it renders as text, never as markup.
+  it('a hostile log tail and error render as text', async () => {
+    const evil = '<img src=x onerror=alert(1)>';
+    await startMissing({
+      [`POST ${INSTALL}`]: [{ status: 202, body: { install: stateOf('failed', { error: `boom ${evil}`, exitCode: 1, logTail: evil }) } }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+    await flush();
+    const region = notice(/install failed/);
+    expect(region.querySelector('img')).toBeNull();
+    expect(within(region).getAllByText(new RegExp(evil.replace(/[()]/g, '\\$&'))).length).toBeGreaterThan(0);
+  });
+
+  // Invariant: once installed, Start <name> retries the start and, when it works, closes the notice.
+  it('after success, Start a starts the browser and closes the notice', async () => {
+    const r = await startMissing({
+      [`POST ${INSTALL}`]: [{ status: 202, body: { install: stateOf('succeeded', { exitCode: 0 }) } }],
+      'POST api/browsers/a/start': [{ status: 500, body: MISSING }, ok({ browser: running('a') })],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+    await flush();
+    fireEvent.click(within(notice(/Chromium is installed/)).getByRole('button', { name: 'Start a' }));
+    await flush();
+    expect(r.count('POST api/browsers/a/start')).toBe(2);
+    expect(screen.queryByRole('region', { name: /Chromium/ })).toBeNull();
+  });
+
+  // Invariant: a failed install shows why and the log, and Try again posts a new install.
+  it('a failed install shows the error and log, and Try again posts again', async () => {
+    const r = await startMissing({
+      [`POST ${INSTALL}`]: [{ status: 202, body: { install: stateOf('failed', { error: 'the installer exited with code 3', exitCode: 3, logTail: 'network down' }) } }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+    await flush();
+    const region = notice(/install failed/);
+    expect(within(region).getByText(/exited with code 3/)).toBeTruthy();
+    expect(within(region).getByText(/network down/)).toBeTruthy();
+    fireEvent.click(within(region).getByRole('button', { name: 'Try again' }));
+    await flush();
+    expect(r.count(`POST ${INSTALL}`)).toBe(2);
+  });
+
+  // Invariant: a click while an install already runs joins that run (polls it) instead of raising an error.
+  it('a 409 INSTALL_RUNNING joins the running install', async () => {
+    const r = await startMissing({
+      [`POST ${INSTALL}`]: [{ status: 409, body: { error: 'INSTALL_RUNNING: a Chromium install is already running' } }],
+      [`GET ${INSTALL}`]: [ok({ install: stateOf('running', { logTail: 'halfway' }) }), ok({ install: stateOf('succeeded', { exitCode: 0 }) })],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+    await flush();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('region', { name: /Installing Chromium/ })).toBeTruthy();
+    expect(screen.getByText(/halfway/)).toBeTruthy();
+    await tick(INSTALL_POLL_MS);
+    expect(r.count(`GET ${INSTALL}`)).toBe(2);
+    expect(screen.getByRole('region', { name: /Chromium is installed/ })).toBeTruthy();
+  });
+
+  // Invariant: when the socket opens, the panel asks once; a running install is shown and followed (the reload case).
+  it('socket open with an install running shows the notice and polls', async () => {
+    const r = route({ [`GET ${INSTALL}`]: [ok({ install: stateOf('running', { logTail: 'resumed' }) }), ok({ install: stateOf('succeeded', { exitCode: 0 }) })] });
+    render(<App socket={f.socket} />);
+    await f.status('open', 0);
+    await flush();
+    expect(r.count(`GET ${INSTALL}`)).toBe(1);
+    expect(screen.getByRole('region', { name: /Installing Chromium/ })).toBeTruthy();
+    await tick(INSTALL_POLL_MS);
+    expect(r.count(`GET ${INSTALL}`)).toBe(2);
+    expect(screen.getByRole('region', { name: /Chromium is installed/ })).toBeTruthy();
+  });
+
+  // Invariant: an idle (or finished) install on socket open shows nothing and is not polled.
+  it('socket open with nothing running shows no notice and stops after one GET', async () => {
+    const r = route({ [`GET ${INSTALL}`]: [ok({ install: stateOf('idle') })] });
+    render(<App socket={f.socket} />);
+    await f.status('open', 0);
+    await flush();
+    await tick(INSTALL_POLL_MS * 5);
+    expect(r.count(`GET ${INSTALL}`)).toBe(1);
+    expect(screen.queryByRole('region', { name: /Chromium/ })).toBeNull();
+  });
+
+  // Invariant: a 2xx POST whose body is unreadable is not reported as a failed install: the panel follows the run by polling.
+  it('an unreadable POST reply polls instead of claiming failure', async () => {
+    const r = await startMissing({
+      [`POST ${INSTALL}`]: [{ status: 202, body: {} }],
+      [`GET ${INSTALL}`]: [ok({ install: stateOf('running', { logTail: 'still going' }) }), ok({ install: stateOf('succeeded', { exitCode: 0 }) })],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+    await flush();
+    expect(screen.getByRole('region', { name: /Installing Chromium/ })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: /install failed/ })).toBeNull();
+    await tick(INSTALL_POLL_MS);
+    expect(screen.getByText(/still going/)).toBeTruthy();
+    await tick(INSTALL_POLL_MS);
+    expect(r.count(`GET ${INSTALL}`)).toBe(2);
+    expect(screen.getByRole('region', { name: /Chromium is installed/ })).toBeTruthy();
+  });
+
+  // Invariant: an unreadable poll reply keeps the running view and is retried on the next tick.
+  it('an unreadable poll reply is retried', async () => {
+    const r = await startMissing({
+      [`POST ${INSTALL}`]: [{ status: 202, body: { install: stateOf('running') } }],
+      [`GET ${INSTALL}`]: [ok({}), ok({ install: stateOf('succeeded', { exitCode: 0 }) })],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+    await flush();
+    await tick(INSTALL_POLL_MS);
+    expect(screen.getByRole('region', { name: /Installing Chromium/ })).toBeTruthy();
+    await tick(INSTALL_POLL_MS);
+    expect(r.count(`GET ${INSTALL}`)).toBe(2);
+    expect(screen.getByRole('region', { name: /Chromium is installed/ })).toBeTruthy();
+  });
+
+  // Invariant: a fresh CHROMIUM_NOT_FOUND shows the Install offer, never the finished state of an earlier run.
+  it('a fresh not-found error after a finished install shows the offer again', async () => {
+    for (const outcome of [stateOf('succeeded', { exitCode: 0 }), stateOf('failed', { error: 'boom', exitCode: 1 })]) {
+      const r = await startMissing({
+        [`POST ${INSTALL}`]: [{ status: 202, body: { install: outcome } }],
+        'POST api/browsers/a/start': [{ status: 500, body: MISSING }],
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+      await flush();
+      expect(screen.queryByRole('button', { name: 'Install Chromium' })).toBeNull();
+      if (outcome.status === 'succeeded') fireEvent.click(within(notice(/Chromium is installed/)).getByRole('button', { name: 'Start a' }));
+      else fireEvent.click(within(notice(/install failed/)).getByRole('button', { name: 'Dismiss' }));
+      await flush();
+      if (outcome.status === 'failed') {
+        fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+        await flush();
+      }
+      expect(within(notice(/Chromium is not installed/)).getByRole('button', { name: 'Install Chromium' })).toBeTruthy();
+      expect(r.count('POST api/browsers/a/start')).toBeGreaterThan(0);
+      cleanup();
+    }
+  });
+
+  // Invariant: a POST refused for any reason but INSTALL_RUNNING shows the failed notice with its message and Try again, not a toast.
+  it('a rejected install POST shows the failure in the notice', async () => {
+    await startMissing({
+      [`POST ${INSTALL}`]: [{ status: 500, body: { error: 'INSTALL_UNAVAILABLE: playwright-core is not installed; run npm install', details: { install: NPM } } }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+    await flush();
+    const region = notice(/install failed/);
+    expect(within(region).getByText(/playwright-core is not installed/)).toBeTruthy();
+    expect(within(region).getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  // Invariant: a run that vanishes while followed (backend restarted) is shown as interrupted, not as idle or installed.
+  it('running then idle is shown as interrupted', async () => {
+    await startMissing({
+      [`POST ${INSTALL}`]: [{ status: 202, body: { install: stateOf('running') } }],
+      [`GET ${INSTALL}`]: [ok({ install: stateOf('idle') })],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+    await flush();
+    await tick(INSTALL_POLL_MS);
+    expect(within(notice(/install failed/)).getByText(/interrupted/)).toBeTruthy();
+  });
+
+  // Invariant: Create that fails for want of Chromium offers the install and names the new browser for the retry.
+  it('Create failing with CHROMIUM_NOT_FOUND shows the notice for the new name', async () => {
+    goTo('');
+    const r = route({
+      'POST api/browsers': [{ status: 500, body: MISSING }],
+      'POST api/browsers/fresh/start': [ok({ browser: running('fresh') })],
+    });
+    render(<App socket={f.socket} />);
+    await f.emit({ type: 'browsers', list: [] });
+    fireEvent.change(screen.getByLabelText('New browser name'), { target: { value: 'fresh' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await flush();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(within(notice(/Chromium is not installed/)).getByText(/fresh/)).toBeTruthy();
+    expect(r.count('POST api/browsers')).toBe(1);
   });
 });

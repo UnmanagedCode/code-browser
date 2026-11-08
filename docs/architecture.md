@@ -13,7 +13,7 @@
 ## Modules
 
 ```
-server.js                thin wiring: config → migration → manager → mcp → app (+ gateway) → listen, graceful shutdown
+server.js                thin wiring: config → migration → manager → mcp → installer → app (+ gateway) → listen, graceful shutdown
 src/config.js            PORT, data dir ($CONDUCTOR_PLUGIN_DATA_DIR), plugin dir, plugin id
 src/migrateLegacyStore.js  one-shot boot migration of the legacy store into the data dir
 src/limits.js            every tunable constant and NAME_RE
@@ -35,6 +35,7 @@ src/proxyStore.js        proxy/ rendezvous files: the secret (written) and host.
 src/proxyProtocol.js     loads proxy/protocol.json (single source of the wire protocol)
 proxy/cdp_proxy.py       the proxy itself, run on the Docker host (proxy/protocol.json beside it)
 src/chromium/{locate,args,keeper}.js
+src/chromium/install.js  runs `playwright-core install chromium` as a child (one at a time) and holds the latest run's state for the panel
 src/runState.js          run/<name>.json, pid checks, reap
 src/cdp.js               CDP client over ws
 src/browserSession.js    per running browser: tabs, dialogs, nav state, input, controller, screencast
@@ -153,6 +154,19 @@ The panel socket holds a frame that arrives while no screen is subscribed (a lat
 
 Nothing found: `CHROMIUM_NOT_FOUND` carries every path tried and `npm --prefix <pluginDir> run install-browser` in `details` (`tried`, `install`); an override that points nowhere carries `details.path`. REST and the panel's WebSocket add `details` and still render the extras into `error`/`message` with `describeError`. That script is deliberately not an npm lifecycle script: it downloads a large browser, and a failure inside `npm install` would stop the panel and health route from ever coming up.
 
+### Installing from the panel
+
+When a start fails with `CHROMIUM_NOT_FOUND` and `details.install`, the panel's notice offers **Install Chromium**. Only that click installs: nothing installs at `npm install`, at boot or on the error itself. A `details.path` failure has no offer; the override must be fixed by hand.
+
+- `src/chromium/install.js` (`createChromiumInstaller`) spawns `process.execPath` on playwright-core's own CLI script (`resolveInstallerCli`, from the same `createRequire` copy `locateChromium` uses) with `INSTALL_ARGS`, `shell: false`, `windowsHide`, and the backend's `env`. `INSTALL_ARGS` equals the `install-browser` script in `package.json` (a test pins it).
+- **No shell, no `npm`/`npx`:** on Windows those are `.cmd` shims, which current Node refuses to spawn without `shell: true`, and a shell mis-quotes paths with spaces, `&`, `%` or `^`. `execPath` is a real executable and the script path is one argv element.
+- **Same copy, same directory:** the child inherits `env` and the backend's working directory (not the plugin dir): Playwright resolves a relative `PLAYWRIGHT_BROWSERS_PATH` against `INIT_CWD || process.cwd()`, so the install and the lookup resolve it identically. `PLAYWRIGHT_BROWSERS_PATH` matches and the build lands where `chromium.executablePath()` points. Playwright's installer is not in its `exports`, so it is run as a child rather than imported, which also keeps a crash or hang out of the event loop.
+- **Retry finds it:** `doStart` calls `locate` on every start and nothing caches a miss, so the next start after a successful install launches.
+- **State:** one run at a time per backend (`INSTALL_RUNNING`), `INSTALL_TIMEOUT_MS` deadline (the child is killed), the child is killed on shutdown (`installer.close()` in `server.js`). The state is in memory: a backend restart forgets it, and the panel shows a followed run that turns `idle` as interrupted.
+- **Panel:** `useChromiumInstall` polls `GET api/chromium/install` every `INSTALL_POLL_MS` while `running` (a `setTimeout` chain, never an interval). The panel also makes one GET whenever its socket opens and shows the notice only if a run is `running`, so a reload mid-install resumes. A POST refused with `INSTALL_RUNNING` joins that run.
+- **Concurrent installs:** Playwright's registry takes a `__dirlock` in its browsers directory and retries for about 10 minutes, so two backends installing at once (cc's restart overlap) are serialized by Playwright, not by code-browser.
+- **Limits:** on Windows `kill()` ends the Node child only, so a download process Playwright forked may run on. A browser started during an install (an agent's `start_browser`, say) can hit a half-extracted build and fail with `LAUNCH_FAILED`.
+
 ## Threat model: the shared browser's network position
 
 Chromium runs on the cc host and browses untrusted pages. Those pages can send requests to loopback and the LAN: other local dev servers and code-hub apps, this plugin's backend (directly or through cc), and cc itself.
@@ -189,6 +203,7 @@ Related: an agent reading untrusted pages in a logged-in shared profile can be p
 
 Run: `npm test` (backend `node --test`, including the Python-gated proxy tests, + panel Vitest), `npm run typecheck`, `python3 -m unittest discover -s tests/python -v` (the proxy alone), and gated `RUN_REAL_CHROMIUM=1 npm run test:e2e` (needs a Chromium, and Python 3.9+ for step 10's proxy).
 
+- **Fake installer CLI** (`tests/fakes/fakeInstallerCli.cjs`, CommonJS like playwright-core's CLI, because the ESM loader rejects a backslash in a module path): injected through `resolveCli` in `tests/chromiumInstall.test.mjs`, which runs the real spawn path from a directory with a space (and a backslash off Windows). Env knobs: `FAKE_INSTALL_ARGV`, `FAKE_INSTALL_LINES`, `FAKE_INSTALL_EXIT`, `FAKE_INSTALL_HANG`. No test downloads Chromium.
 - **Fake Chromium** (`tests/fakes/fakeChromium.mjs`): a Node script injected through `CODE_BROWSER_CHROMIUM`, run through the real keeper and launch path. It serves a CDP subset (targets, attach, screencast with ack-paced frames, navigation and history, dialogs, recorded `Input.*`, every `Target.activateTarget` in `Fake.getState`) plus test-only `Fake.*` methods, and Chromium's devtools guards (`Host` must be an IP or `localhost`, a WebSocket with an `Origin` is `403`, `webSocketDebuggerUrl` built from `Host`). Env knobs: `FAKE_CHROMIUM_REQUIRE_NO_SANDBOX` (the fake writes `fake-argv.json` and `fake-pid` only after its sandbox check, so their absence proves no unsandboxed launch), `FAKE_CHROMIUM_NO_PORT`, `FAKE_CHROMIUM_IGNORE_CLOSE`, `FAKE_CHROMIUM_APPROVAL` (Chrome's approval mode: empty `404` on `/json*`, the browser upgrade held until `PUT /fake/approval?answer=allow|deny`). It exits on `Browser.close`, so a fake still alive proves none was sent.
 - **External fake** (`externalFake` in `tests/helpers.mjs`): the same fake started outside code-browser, as a person's own browser.
 - **Fake proxy** (`tests/fakes/fakeProxy.mjs`): an in-process stand-in that speaks the real wire protocol, so the default run covers the proxied path (cancellation, cleanup, no secret in tool results) without Python; `mode: 'blackhole'` accepts and never says hello.
