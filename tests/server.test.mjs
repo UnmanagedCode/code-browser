@@ -54,13 +54,32 @@ function fakeManager({ hang = false } = {}) {
   };
 }
 
+// An installer double that records every call; `hang` makes start and state throw (health must never reach them).
+function fakeInstaller({ hang = false } = {}) {
+  const calls = [];
+  let status = 'idle';
+  const view = () => ({ status, error: null, exitCode: null, logTail: '' });
+  return {
+    calls,
+    state() { calls.push('state'); if (hang) throw new Error('hung'); return view(); },
+    start() {
+      calls.push('start');
+      if (hang) throw new Error('hung');
+      if (status === 'running') throw new CodedError('INSTALL_RUNNING', 'a Chromium install is already running');
+      status = 'running';
+      return view();
+    },
+    close() {},
+  };
+}
+
 const servers = [];
-async function boot({ manager = fakeManager(), dist, mcp } = {}) {
+async function boot({ manager = fakeManager(), dist, mcp, installer = fakeInstaller() } = {}) {
   const mcpStub = mcp ?? { calls: [], async handle(body) { this.calls.push(body); return { result: 'ok' }; } };
-  const server = createApp({ manager, mcp: mcpStub, distDir: dist ?? path.join(tmpDir(), 'missing') });
+  const server = createApp({ manager, mcp: mcpStub, installer, distDir: dist ?? path.join(tmpDir(), 'missing') });
   const port = await listen(server);
   servers.push(server);
-  return { port, manager, mcp: mcpStub, host: `127.0.0.1:${port}` };
+  return { port, manager, mcp: mcpStub, installer, host: `127.0.0.1:${port}` };
 }
 afterEach(() => { for (const s of servers.splice(0)) s.close(); });
 
@@ -76,11 +95,12 @@ function builtDist() {
 
 // Invariant: health answers without touching the manager, so a hung browser never fails cc's health probe.
 test('health answers while every manager method hangs', async () => {
-  const { port, manager } = await boot({ manager: fakeManager({ hang: true }) });
+  const { port, manager, installer } = await boot({ manager: fakeManager({ hang: true }), installer: fakeInstaller({ hang: true }) });
   const r = await request(port, { path: '/api/health' });
   assert.equal(r.status, 200);
   assert.deepEqual(r.json, { ok: true });
   assert.deepEqual(manager.calls, []);
+  assert.deepEqual(installer.calls, []);
 });
 
 // Invariant: every response the backend produces carries the CSP and nosniff, including errors.
@@ -149,13 +169,14 @@ const MUTATING = [
   { method: 'POST', path: '/api/browsers/x/allow-unsandboxed', body: '{"allow":true}', panelOnly: true },
   { method: 'POST', path: '/api/browsers/x/attach', body: '{"address":"127.0.0.1:9222","via":"proxy"}', panelOnly: true },
   { method: 'POST', path: '/api/browsers/x/connect', body: '{}', panelOnly: true },
+  { method: 'POST', path: '/api/chromium/install', body: '{}', panelOnly: true },
   { method: 'DELETE', path: '/api/browsers/x', body: undefined },
 ];
 
 // Invariant: a state-changing request without a JSON content type (the only kind a no-cors page can send)
 // is refused with 415 before any handler runs, with or without a foreign Origin.
 test('non-JSON content types are refused with 415 and run nothing', async () => {
-  const { port, manager, mcp } = await boot();
+  const { port, manager, mcp, installer } = await boot();
   for (const route of MUTATING) {
     for (const type of ['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data; boundary=x', undefined]) {
       for (const origin of [undefined, 'http://evil.test']) {
@@ -170,11 +191,12 @@ test('non-JSON content types are refused with 415 and run nothing', async () => 
   }
   assert.deepEqual(manager.calls, []);
   assert.deepEqual(mcp.calls, []);
+  assert.deepEqual(installer.calls, []);
 });
 
 // Invariant: a foreign Origin is refused with 403 even when the body is valid JSON, api/mcp included.
 test('a foreign or mismatched Origin is refused with 403 even with JSON', async () => {
-  const { port, manager, mcp } = await boot();
+  const { port, manager, mcp, installer } = await boot();
   for (const route of MUTATING) {
     for (const origin of ['http://evil.test', 'http://127.0.0.1:1']) {
       const r = await request(port, { method: route.method, path: route.path, body: route.body, headers: { ...JSON_HEADERS, origin } });
@@ -183,6 +205,31 @@ test('a foreign or mismatched Origin is refused with 403 even with JSON', async 
   }
   assert.deepEqual(manager.calls, []);
   assert.deepEqual(mcp.calls, []);
+  assert.deepEqual(installer.calls, []);
+});
+
+// Invariant: starting a Chromium install is the panel's alone (no Origin → 403, nothing runs); a same-origin request
+// starts one (202), a second is a 409 INSTALL_RUNNING, and the GET only reads.
+test('chromium install: panel-only start, one at a time, read-only GET', async () => {
+  const { port, host, installer } = await boot();
+  const path = '/api/chromium/install';
+  const same = { ...JSON_HEADERS, host, origin: `http://${host}` };
+  const noOrigin = await request(port, { method: 'POST', path, headers: JSON_HEADERS, body: '{}' });
+  assert.equal(noOrigin.status, 403);
+  assert.match(noOrigin.json.error, /^FORBIDDEN: .*Origin/);
+  assert.deepEqual(installer.calls, []);
+
+  const idle = await request(port, { path });
+  assert.equal(idle.status, 200);
+  assert.equal(idle.json.install.status, 'idle');
+  assert.deepEqual(installer.calls, ['state'], 'GET reads state and starts nothing');
+
+  const first = await request(port, { method: 'POST', path, headers: same, body: '{}' });
+  assert.equal(first.status, 202);
+  assert.equal(first.json.install.status, 'running');
+  const second = await request(port, { method: 'POST', path, headers: same, body: '{}' });
+  assert.equal(second.status, 409);
+  assert.match(second.json.error, /^INSTALL_RUNNING: /);
 });
 
 // Invariant: the opt-in route is the panel's alone: it needs the page's own Origin (a bridge or script that sends
@@ -265,17 +312,18 @@ test('body limits and malformed JSON', async () => {
 
 // Invariant: GET routes never mutate; <img> tags and simple requests from any page can reach them.
 test('every GET route leaves the mutating manager methods uncalled', async () => {
-  const { port, manager } = await boot();
-  const gets = buildRoutes({ manager, mcp: {} }).filter((r) => r.method === 'GET');
+  const { port, manager, installer } = await boot();
+  const gets = buildRoutes({ manager, mcp: {}, installer: fakeInstaller() }).filter((r) => r.method === 'GET');
   assert.ok(gets.length >= 2);
   for (const route of gets) {
     assert.equal(route.mutating, undefined, `${route.path} must not be marked mutating`);
   }
-  for (const p of ['/api/health', '/api/browsers', '/api/browsers/x/start', '/api/browsers/x/stop', '/api/browsers/x', '/api/mcp']) {
+  for (const p of ['/api/health', '/api/browsers', '/api/browsers/x/start', '/api/browsers/x/stop', '/api/browsers/x', '/api/mcp', '/api/chromium/install']) {
     await request(port, { path: p, headers: { origin: 'http://evil.test' } });
     await request(port, { path: p });
   }
   for (const m of MUTATORS) assert.ok(!manager.calls.includes(m), `${m} was called by a GET`);
+  assert.ok(!installer.calls.includes('start'), 'start was called by a GET');
 });
 
 // Invariant: a request target that is not a valid URL is a 400, not an unhandled throw (the guard still comes first).
@@ -304,7 +352,7 @@ test('an upgrade handler that throws cannot take the process down', async () => 
 // Invariant: DNS rebinding onto the backend's own port is refused: a hostname that is not loopback, naming this
 // port, with a matching Origin gets 403 on api/mcp, every REST mutation and reads, and no handler runs.
 test('a rebound Host on the backend port is refused with 403 on every route but health', async () => {
-  const { port, manager, mcp } = await boot();
+  const { port, manager, mcp, installer } = await boot();
   const host = `rebound.evil.test:${port}`;
   const headers = { ...JSON_HEADERS, host, origin: `http://${host}` };
   for (const route of MUTATING) {
@@ -313,9 +361,11 @@ test('a rebound Host on the backend port is refused with 403 on every route but 
     assert.match(r.json.error, /loopback/);
   }
   assert.equal((await request(port, { path: '/api/browsers', headers: { host, origin: `http://${host}` } })).status, 403);
+  assert.equal((await request(port, { path: '/api/chromium/install', headers: { host } })).status, 403, 'a rebound host cannot read the install log');
   assert.equal((await request(port, { path: '/', headers: { host } })).status, 403);
   assert.deepEqual(manager.calls, []);
   assert.deepEqual(mcp.calls, []);
+  assert.deepEqual(installer.calls, []);
   assert.equal((await request(port, { path: '/api/health', headers: { host } })).status, 200, 'health is a constant answer');
 });
 

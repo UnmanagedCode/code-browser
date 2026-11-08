@@ -10,7 +10,12 @@ import { InlineConfirm } from './InlineConfirm';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 
 // `returnFrom` is the browser the person just left, if any: its row takes focus on arrival.
-interface Props { browsers: BrowserSummary[]; loading: boolean; returnFrom: string | null; onOpen(name: string): void; onError(message: string): void }
+interface Props {
+  browsers: BrowserSummary[]; loading: boolean; returnFrom: string | null;
+  onOpen(name: string): void; onError(message: string): void;
+  // A start or create failed for want of Chromium: `command` installs it by hand.
+  onChromiumMissing(name: string, command: string): void;
+}
 
 export const ALLOW_HINT = 'If Chrome asks "Allow remote debugging?", click Allow.';
 
@@ -22,7 +27,7 @@ const CONFIRMS: Record<Pending['kind'], { label: string; message: (name: string)
   disallow: { label: 'Confirm stop and disallow', message: (n) => `Stop "${n}" now? It is running without the sandbox, and withdrawing the permission stops it.`, confirmLabel: 'Stop and disallow' },
 };
 
-export function BrowserList({ browsers, loading, returnFrom, onOpen, onError }: Props) {
+export function BrowserList({ browsers, loading, returnFrom, onOpen, onError, onChromiumMissing }: Props) {
   const [name, setName] = useState('');
   const [attachOpen, setAttachOpen] = useState(false);
   const [draft, setDraft] = useState<AttachDraft | null>(null);
@@ -40,8 +45,10 @@ export function BrowserList({ browsers, loading, returnFrom, onOpen, onError }: 
   }, []);
 
   // A start refused for want of a sandbox is not an error: the viewer explains it and offers the opt-in.
+  // Nor is one that found no Chromium: the notice offers to install it.
   const run = (fn: () => Promise<unknown>, refusedBrowser?: string) => fn().catch((e: Error) => {
     if (refusedBrowser !== undefined && api.isSandboxRefusal(e)) onOpen(refusedBrowser);
+    else if (refusedBrowser !== undefined && api.isChromiumMissing(e)) onChromiumMissing(refusedBrowser, e.details.install);
     else onError(e.message);
   });
   const setTrigger = (n: string) => (el: HTMLButtonElement | null) => { if (el) triggers.current.set(n, el); else triggers.current.delete(n); };

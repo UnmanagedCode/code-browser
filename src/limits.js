@@ -38,6 +38,10 @@ export const MAX_DISCOVERY_BYTES = 64 * 1024;
 // Longest promptText a viewer may answer a JavaScript prompt() dialog with
 export const MAX_PROMPT_TEXT = 8192;
 
+// Chromium install: the longest a run may take before it is killed, and how often the panel polls its state
+export const INSTALL_TIMEOUT_MS = 15 * 60_000;
+export const INSTALL_POLL_MS = 1000;
+
 // HTTP / WebSocket
 export const MAX_BODY_BYTES = 64 * 1024;
 export const WS_MAX_PAYLOAD = 64 * 1024;

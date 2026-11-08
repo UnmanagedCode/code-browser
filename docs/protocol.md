@@ -19,7 +19,7 @@ Applied by `src/app.js` to every HTTP request, in this order; no handler runs be
 
 - A request with **no** `Origin` skips only check 1. cc calls `api/mcp` server-side without one.
 - A foreign `Origin` is refused on `api/mcp` too, and a `text/plain` or form body is refused with `415` whatever the `Origin`.
-- A **panel-only route** (`requireOrigin` in `src/routes.js`: `POST api/browsers/:name/allow-unsandboxed`, `…/attach`, `…/connect`) additionally refuses a request with **no** `Origin` (`403`, before the content-type check). A browser always sends `Origin` on a `fetch` POST and cc's proxy passes it through, so the panel is unaffected; cc's MCP bridge and plain scripts send none. This is not a defence against a client that adds the header.
+- A **panel-only route** (`requireOrigin` in `src/routes.js`: `POST api/browsers/:name/allow-unsandboxed`, `…/attach`, `…/connect`, `POST api/chromium/install`) additionally refuses a request with **no** `Origin` (`403`, before the content-type check). A browser always sends `Origin` on a `fetch` POST and cc's proxy passes it through, so the panel is unaffected; cc's MCP bridge and plain scripts send none. This is not a defence against a client that adds the header.
 - A WebSocket upgrade must carry an `Origin` (see below).
 - Every response carries the CSP and `nosniff`, `no-referrer`, `no-store` (`src/http.js`, `SECURITY_HEADERS`), including `404`, `503` and the reply to a malformed request (`clientError`).
 
@@ -29,6 +29,8 @@ Applied by `src/app.js` to every HTTP request, in this order; no handler runs be
 |---|---|---|
 | `GET api/health` | — | `{ok:true}`. Never touches the browser manager. |
 | `GET api/browsers` | — | `{browsers:[summary]}` |
+| `GET api/chromium/install` | — | `{install: InstallState}`: the latest Chromium install run of this backend (in memory; `idle` until one starts). Read-only, and subject to the loopback-`Host` rule |
+| `POST api/chromium/install` | `{}` | `202 {install: InstallState}` (status `running`); panel-only (needs `Origin`); `409 INSTALL_RUNNING` while one runs (one per backend); `500 INSTALL_UNAVAILABLE` (`details.install`) when `playwright-core` is not installed. No MCP tool starts it |
 | `POST api/browsers` | `{name}` | `201 {browser: summary}`: creates the profile and starts it; `409 EXISTS` when the name is taken |
 | `POST api/browsers/:name/start` | `{}` | `{browser: summary}`; no-op when running; `409 ATTACHED` for an attached browser |
 | `POST api/browsers/:name/stop` | `{}` | `{browser: summary}`; the profile is kept. An attached browser is disconnected (code-browser's own connection and tunnel close; nothing is sent to the browser) and a connect in progress is cancelled |
@@ -48,9 +50,11 @@ Attached browsers (`kind: "attached"`, a person's own browser):
 - `sandbox` is `null`, `allowUnsandboxed` and `sandboxUnavailable` are `false`.
 - `cdpEndpoint` is a URL on the backend's own loopback: `http://127.0.0.1:<port>` (direct), `http://127.0.0.1:<tunnel port>` (through the proxy), or `ws://…/devtools/browser` in approval mode. It never carries the proxy secret.
 
-Errors are `{error: "<CODE>: <message>"}` (plus `details` when the error carries extras) with the status from `src/errors.js` (`statusFor`): `INVALID_NAME`/`BAD_REQUEST`/`BAD_ENDPOINT` 400, `FORBIDDEN` 403, `NOT_FOUND` 404, `EXISTS`/`NOT_RUNNING`/`SANDBOX_UNAVAILABLE`/`ATTACHED` 409, `PAYLOAD_TOO_LARGE` 413, `UNSUPPORTED_MEDIA_TYPE` 415, anything else 500 (`CHROMIUM_NOT_FOUND`, `LAUNCH_FAILED`). A failed connect of an attached browser has no HTTP status: attach and connect answer `202` before connecting, and the failure arrives as the summary's `attachError` (an `ATTACH_FAILED` or `EXISTS` message).
+Errors are `{error: "<CODE>: <message>"}` (plus `details` when the error carries extras) with the status from `src/errors.js` (`statusFor`): `INVALID_NAME`/`BAD_REQUEST`/`BAD_ENDPOINT` 400, `FORBIDDEN` 403, `NOT_FOUND` 404, `EXISTS`/`NOT_RUNNING`/`SANDBOX_UNAVAILABLE`/`ATTACHED`/`INSTALL_RUNNING` 409, `PAYLOAD_TOO_LARGE` 413, `UNSUPPORTED_MEDIA_TYPE` 415, anything else 500 (`CHROMIUM_NOT_FOUND`, `LAUNCH_FAILED`, `INSTALL_UNAVAILABLE`). A failed connect of an attached browser has no HTTP status: attach and connect answer `202` before connecting, and the failure arrives as the summary's `attachError` (an `ATTACH_FAILED` or `EXISTS` message).
 
 A `CodedError` that carries machine-readable extras also returns them as `details`: `CHROMIUM_NOT_FOUND` has `tried` + `install`, or `path`; `LAUNCH_FAILED` has `logTail`. `error` still renders them as text through `describeError` in `src/errors.js` (the tried paths, the install command, the log tail), so a caller that reads only `error` loses nothing. An error without extras has no `details` key.
+
+`InstallState` = `{status: "idle"|"running"|"succeeded"|"failed", error: string|null, exitCode: number|null, logTail: string}`. `logTail` is the last `LOG_TAIL_CHARS` of the installer's stdout and stderr with `\r\n`/`\r` as `\n`; it is installer output, so a client renders it as text. A run still `running` after `INSTALL_TIMEOUT_MS` is killed and becomes `failed`. The panel polls `GET` every `INSTALL_POLL_MS` while `running`, and once whenever its socket opens.
 
 `GET` routes have no side effects: `<img>` tags and simple requests from any page can reach them.
 

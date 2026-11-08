@@ -12,7 +12,7 @@ Details: [docs/features.md](docs/features.md) · [docs/protocol.md](docs/protoco
 
 ```bash
 npm install                 # installs and builds the panel (frontend/dist)
-npm run install-browser     # one-time Chromium download (or set CODE_BROWSER_CHROMIUM)
+npm run install-browser     # one-time Chromium download (or click Install Chromium in the panel, or set CODE_BROWSER_CHROMIUM)
 ```
 
 Enable the plugin in code-conductor; the backend starts on the first tool call or panel visit. Standalone: `CONDUCTOR_PLUGIN_DATA_DIR=<dir> PORT=7470 node server.js`, then open `http://127.0.0.1:7470/?browser=<name>`. The boot migration also reads `PROJECTS_ROOT`: from a shell that exports it, a legacy store found under it is moved into `<dir>`; unset `PROJECTS_ROOT` to start empty ([details](docs/architecture.md#store-migration)).

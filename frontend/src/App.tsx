@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserList } from './components/BrowserList';
+import { ChromiumInstallNotice } from './components/ChromiumInstallNotice';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { Toast } from './components/Toast';
 import { TooltipLayer } from './components/TooltipLayer';
@@ -9,6 +10,7 @@ import { toToast, type ToastContent } from './errorText';
 import type { BrowserState, BrowserSummary, DialogInfo } from './protocol';
 import { browserFromSearch, pushBrowser } from './route';
 import type { SocketStatus, ViewerSocket } from './socket';
+import { useChromiumInstall } from './useChromiumInstall';
 
 export function App({ socket }: { socket: ViewerSocket }) {
   const [name, setName] = useState(() => browserFromSearch(location.search));
@@ -25,10 +27,29 @@ export function App({ socket }: { socket: ViewerSocket }) {
   // and no browser is joined.
   const [synced, setSynced] = useState(false);
 
+  // The Chromium install notice: set when a start or create found no Chromium (with the manual command),
+  // or when the panel opens mid-install (no name, no command). Cleared by Dismiss or a successful start.
+  const [notice, setNotice] = useState<{ name: string | null; command: string | null } | null>(null);
+  const { install: installState, begin: beginInstall, reset: resetInstall, checkOnOpen: checkInstallOnOpen } = useChromiumInstall();
+
   const showError = useCallback((text: string) => {
     const { code, message } = api.splitCode(text);
     setToast(toToast(code, message));
   }, []);
+
+  const onChromiumMissing = useCallback((n: string, command: string) => {
+    resetInstall();
+    setNotice({ name: n, command });
+  }, [resetInstall]);
+  const onStartError = useCallback((n: string, e: Error) => {
+    if (api.isChromiumMissing(e)) onChromiumMissing(n, e.details.install);
+    else if (!api.isSandboxRefusal(e)) showError(e.message);
+  }, [onChromiumMissing, showError]);
+
+  // An install running when the panel (re)connects is shown and followed, whoever started it.
+  useEffect(() => {
+    if (installState?.status === 'running') setNotice((cur) => cur ?? { name: null, command: null });
+  }, [installState?.status]);
 
   useEffect(() => {
     const onPop = () => {
@@ -54,12 +75,13 @@ export function App({ socket }: { socket: ViewerSocket }) {
   // (dimmed and inert) so the person still sees what was there; the rejoin after a fresh list replaces it.
   useEffect(() => socket.onStatus((status, failures) => {
     setConn({ status, failures });
+    if (status === 'open') void checkInstallOnOpen();
     if (status === 'closed') {
       setSynced(false);
       setBrowsers([]);
       setDialogs([]);
     }
-  }), [socket]);
+  }), [socket, checkInstallOnOpen]);
 
   // The view follows the route, and only while a fresh list says that browser runs: a rejoin never races a backend
   // restart, and a browser that stops is un-viewed so that its next start is joined again.
@@ -81,14 +103,28 @@ export function App({ socket }: { socket: ViewerSocket }) {
   const open = useCallback((n: string | null) => pushBrowser(n), []);
   const shownState = state && state.name === name ? state : summary?.status === 'stopped' ? { type: 'state' as const, name: name ?? '', status: 'stopped' as const } : null;
   const offline = !synced;
+  const retryStart = (n: string) => {
+    if (nameRef.current !== n) open(n);
+    api.startBrowser(n).then(() => setNotice(null)).catch((e: Error) => onStartError(n, e));
+  };
 
   return (
     <div className="app">
       <TooltipLayer />
       <ConnectionBanner status={conn.status} failures={conn.failures} onRetry={() => socket.retry()} />
+      {notice && (
+        <ChromiumInstallNotice
+          name={notice.name}
+          command={notice.command}
+          install={installState}
+          onInstall={() => { void beginInstall(); }}
+          onStart={retryStart}
+          onDismiss={() => setNotice(null)}
+        />
+      )}
       {toast && <Toast toast={toast} onDismiss={() => setToast(null)} />}
       {name === null ? (
-        <BrowserList browsers={browsers} loading={offline} returnFrom={arrival?.from ?? null} onOpen={open} onError={showError} />
+        <BrowserList browsers={browsers} loading={offline} returnFrom={arrival?.from ?? null} onOpen={open} onError={showError} onChromiumMissing={onChromiumMissing} />
       ) : (
         <Viewer
           name={name}
@@ -100,7 +136,7 @@ export function App({ socket }: { socket: ViewerSocket }) {
           focusHeading={arrival !== null}
           onError={showError}
           onBack={() => open(null)}
-          onStart={() => { api.startBrowser(name).catch((e: Error) => { if (!api.isSandboxRefusal(e)) showError(e.message); }); }}
+          onStart={() => { api.startBrowser(name).catch((e: Error) => onStartError(name, e)); }}
           onStop={() => { api.stopBrowser(name).catch((e: Error) => showError(e.message)); }}
           onConnect={() => { api.connectBrowser(name).catch((e: Error) => showError(e.message)); }}
         />

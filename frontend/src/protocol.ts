@@ -1,6 +1,14 @@
 // Panel <-> backend messages (docs/protocol.md → Panel WebSocket). Client messages carry `msg`, server messages `type`.
 export type AttachVia = 'proxy' | 'direct';
 
+// The latest Chromium install run (docs/protocol.md → Chromium install).
+export interface InstallState {
+  status: 'idle' | 'running' | 'succeeded' | 'failed';
+  error: string | null;
+  exitCode: number | null;
+  logTail: string;
+}
+
 export interface BrowserSummary {
   name: string;
   // launched: a headless Chromium code-browser runs; attached: a person's own browser, attached in this panel.

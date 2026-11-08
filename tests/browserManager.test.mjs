@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createBrowserManager } from '../src/browserManager.js';
-import { describeError } from '../src/errors.js';
+import { CodedError, describeError } from '../src/errors.js';
 import { pidAlive } from '../src/runState.js';
 import { tmpDir, waitFor } from './helpers.mjs';
 
@@ -376,4 +376,26 @@ test('boot tolerates a trash entry that vanishes mid-listing but not other error
 
   const { manager: strict } = make({ dataDir, trashFs: { readdirSync: fs.readdirSync, chmodSync: vanish('EACCES') } });
   await assert.rejects(strict.boot(), (err) => err.code === 'EACCES');
+});
+
+// Invariant: every start locates Chromium afresh, so a start that failed for want of Chromium succeeds once it is installed.
+test('a start retried after CHROMIUM_NOT_FOUND locates again', async () => {
+  let calls = 0;
+  const manager = createBrowserManager({
+    dataDir: tmpDir(),
+    env: { ...process.env },
+    log: { warn() {} },
+    timeouts: { launch: 4000, stopGrace: 1500, killGrace: 200, shutdownGrace: 500 },
+    locate: () => {
+      calls += 1;
+      if (calls === 1) throw new CodedError('CHROMIUM_NOT_FOUND', 'No Chromium found', { tried: [], install: 'npm run install-browser' });
+      return FAKE;
+    },
+  });
+  managers.push(manager);
+  manager.create('a');
+  await assert.rejects(manager.start('a'), (e) => e.code === 'CHROMIUM_NOT_FOUND');
+  await manager.start('a');
+  assert.equal(manager.summary('a').status, 'running');
+  assert.equal(calls, 2);
 });
