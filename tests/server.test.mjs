@@ -349,6 +349,44 @@ test('an upgrade handler that throws cannot take the process down', async () => 
   assert.equal((await request(port, { path: '/api/health' })).status, 200);
 });
 
+// Invariant: an upgrade under /api/relay/ goes to the relay only after the relay guard (no Origin, loopback Host on this
+// port), and never to the panel's handler; every other upgrade still needs a matching Origin and never reaches the relay.
+test('upgrade dispatch: relay guard for /api/relay/, Origin required elsewhere', async () => {
+  const seen = [];
+  const handler = (which) => (req, socket) => { seen.push(which); socket.end('HTTP/1.1 418 Teapot\r\nContent-Length: 0\r\n\r\n'); };
+  const server = createApp({ manager: fakeManager(), mcp: { handle: async () => ({}) }, distDir: tmpDir(), onUpgrade: handler('panel'), onRelayUpgrade: handler('relay') });
+  const port = await listen(server);
+  servers.push(server);
+  const upgrade = (p, headers) => rawExchange(port, `GET ${p} HTTP/1.1\r\n${Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('')}Upgrade: websocket\r\nConnection: Upgrade\r\n\r\n`);
+  const own = `127.0.0.1:${port}`;
+  for (const headers of [
+    { Host: own, Origin: `http://${own}` },
+    { Host: `rebound.evil.test:${port}` },
+    { Host: 'cc.example:9' },
+    { Host: '127.0.0.1:9' },
+  ]) {
+    assert.match(await upgrade('/api/relay/a', headers), /^HTTP\/1\.1 403 /, JSON.stringify(headers));
+  }
+  assert.deepEqual(seen, []);
+  assert.match(await upgrade('/api/relay/a', { Host: own }), /^HTTP\/1\.1 418 /);
+  assert.match(await upgrade('/api/relay/a', { Host: `localhost:${port}` }), /^HTTP\/1\.1 418 /);
+  assert.deepEqual(seen, ['relay', 'relay']);
+  assert.match(await upgrade('/api/ws', { Host: own }), /^HTTP\/1\.1 403 /, 'the panel socket still needs an Origin');
+  assert.match(await upgrade('/api/ws', { Host: own, Origin: `http://${own}` }), /^HTTP\/1\.1 418 /);
+  assert.deepEqual(seen, ['relay', 'relay', 'panel']);
+});
+
+// Invariant: with no relay handler wired, a relay upgrade is a 404 and never reaches the panel's handler.
+test('a relay upgrade without a relay is 404', async () => {
+  let called = false;
+  const server = createApp({ manager: fakeManager(), mcp: { handle: async () => ({}) }, distDir: tmpDir(), onUpgrade: () => { called = true; } });
+  const port = await listen(server);
+  servers.push(server);
+  const answer = await rawExchange(port, `GET /api/relay/a HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`);
+  assert.match(answer, /^HTTP\/1\.1 404 /);
+  assert.equal(called, false);
+});
+
 // Invariant: DNS rebinding onto the backend's own port is refused: a hostname that is not loopback, naming this
 // port, with a matching Origin gets 403 on api/mcp, every REST mutation and reads, and no handler runs.
 test('a rebound Host on the backend port is refused with 403 on every route but health', async () => {
