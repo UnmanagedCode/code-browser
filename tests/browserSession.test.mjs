@@ -222,6 +222,28 @@ test('a new tab logs no warning and its navigation state is read through its ses
   assert.ok(cdp.calls.some((c) => c.method === 'Page.getNavigationHistory' && c.sessionId === 'S-T1'));
 });
 
+// Invariant: events on sessions the backend did not open (CDP relay clients share the connection) change nothing the
+// panel sees: no tab appears or disappears and no dialog opens; the backend's own page sessions still count.
+test('events of foreign sessions leave tabs and dialogs alone', async () => {
+  const cdp = slowAttachCdp();
+  const session = createBrowserSession({ name: 'a', cdp, sandbox: true, log: { warn() {} } });
+  await session.start();
+  cdp.created('T1');
+  cdp.release();
+  await waitFor(() => session.ownsSession('S-T1'), { what: 'the attach' });
+  const dialogs = [];
+  session.events.on('dialog', (d) => dialogs.push(d));
+  const before = session.snapshot();
+  cdp.emit('event', { method: 'Target.targetCreated', params: { targetInfo: { targetId: 'T2', type: 'page', url: 'about:blank', title: '' } }, sessionId: 'agent-root' });
+  cdp.emit('event', { method: 'Target.targetDestroyed', params: { targetId: 'T1' }, sessionId: 'agent-root' });
+  cdp.emit('event', { method: 'Page.javascriptDialogOpening', params: { type: 'alert', message: 'x' }, sessionId: 'agent-page' });
+  assert.deepEqual(session.snapshot(), before);
+  assert.deepEqual(dialogs, []);
+  assert.equal(session.ownsSession('agent-root'), false);
+  cdp.emit('event', { method: 'Page.javascriptDialogOpening', params: { type: 'alert', message: 'mine' }, sessionId: 'S-T1' });
+  assert.deepEqual(dialogs.map((d) => d.message), ['mine'], "the backend's own session still reaches the panel");
+});
+
 // ---- title sweep, window ids and recency (the sweep runs on an injected clock) ----
 const SWEEP = TAB_SWEEP_MS;
 async function bootClocked() {

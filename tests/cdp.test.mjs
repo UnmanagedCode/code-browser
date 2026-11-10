@@ -52,3 +52,66 @@ test('events are emitted; close rejects pending and later calls', async () => {
   await closed;
   await assert.rejects(conn.send('Foo.bar'), (e) => e.code === 'CDP_CLOSED');
 });
+
+// ---- forward: commands relayed for a CDP relay client ----
+
+// Invariant: forward hands back the browser's raw answer, result or error with its code and data, never a thrown error.
+test('forward delivers the raw result or error', async () => {
+  const { conn } = await connect((ws, m) => ws.send(JSON.stringify(m.method === 'Bad.x'
+    ? { id: m.id, error: { code: -32601, message: 'nope', data: 'd' } }
+    : { id: m.id, result: { got: m.params.x, sessionId: m.sessionId } })));
+  const answers = [];
+  await new Promise((r) => conn.forward('Ok.x', { x: 1 }, { sessionId: 's' }, (a) => { answers.push(a); r(); }));
+  await new Promise((r) => conn.forward('Bad.x', {}, {}, (a) => { answers.push(a); r(); }));
+  assert.deepEqual(answers, [{ result: { got: 1, sessionId: 's' } }, { error: { code: -32601, message: 'nope', data: 'd' } }]);
+});
+
+// Invariant: an answer and the events the browser sent after it reach listeners in that order, even within one read.
+test('forward keeps answers and later events in arrival order', async () => {
+  const { conn } = await connect((ws, m) => {
+    ws.send(JSON.stringify({ id: m.id, result: {} }));
+    ws.send(JSON.stringify({ method: 'Runtime.executionContextCreated', params: {}, sessionId: 's' }));
+  });
+  const order = [];
+  conn.on('event', (e) => order.push(e.method));
+  await new Promise((r) => {
+    conn.forward('Page.enable', {}, { sessionId: 's' }, () => order.push('answer'));
+    conn.once('event', () => setImmediate(r));
+  });
+  assert.deepEqual(order, ['answer', 'Runtime.executionContextCreated']);
+});
+
+// Invariant: an aborted forward leaves nothing pending and its late answer is never delivered; an already-aborted
+// signal sends nothing.
+test('forward: abort drops the pending entry and the late answer', async () => {
+  const seen = [];
+  let answerLate;
+  const { conn } = await connect((ws, m) => { seen.push(m.method); answerLate = () => ws.send(JSON.stringify({ id: m.id, result: {} })); });
+  const abort = new AbortController();
+  let delivered = false;
+  conn.forward('Slow.x', {}, { signal: abort.signal }, () => { delivered = true; });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(conn.pendingCount, 1);
+  abort.abort(new Error('client left'));
+  assert.equal(conn.pendingCount, 0);
+  answerLate();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(delivered, false);
+  conn.forward('Never.x', {}, { signal: abort.signal }, () => { delivered = true; });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(seen, ['Slow.x']);
+  assert.equal(delivered, false);
+});
+
+// Invariant: when the connection closes, a pending forward is answered with a CDP_CLOSED error, and so is a later one.
+test('forward: close answers pending and later forwards with CDP_CLOSED', async () => {
+  const { conn, sockets } = await connect(() => {});
+  const pending = new Promise((r) => conn.forward('Foo.bar', {}, {}, r));
+  await new Promise((r) => setTimeout(r, 20));
+  sockets[0].terminate();
+  assert.match((await pending).error.message, /^CDP_CLOSED: /);
+  assert.equal(conn.closed, true);
+  const later = await new Promise((r) => conn.forward('Foo.bar', {}, {}, r));
+  assert.match(later.error.message, /^CDP_CLOSED: /);
+  assert.equal(conn.pendingCount, 0);
+});
