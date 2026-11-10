@@ -33,7 +33,7 @@ src/tunnel.js            per proxied attached browser: a 127.0.0.1:<random> forw
 src/proxyClient.js       the host proxy client: dial candidates, HMAC handshake, limiter
 src/proxyStore.js        proxy/ rendezvous files: the secret (written) and host.json (read)
 src/proxyProtocol.js     loads proxy/protocol.json (single source of the wire protocol)
-proxy/proxy.py       the proxy itself, run on the Docker host (proxy/protocol.json beside it)
+proxy/proxy.py           the proxy itself, run on the Docker host (proxy/protocol.json beside it)
 src/chromium/{locate,args,keeper}.js
 src/chromium/install.js  runs `playwright-core install chromium` as a child (one at a time) and holds the latest run's state for the panel
 src/runState.js          run/<name>.json, pid checks, reap
