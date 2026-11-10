@@ -72,7 +72,7 @@ One responsibility each: `browserManager` owns processes, files and the namespac
 | `proxy/host.json` | written by the proxy on the Docker host: where it listens, its pid |
 | `trash/<name>-<ts>/` | a deleted profile, removed asynchronously |
 | `relay/token` | the relay's bearer token, 64 hex chars (`src/relayToken.js`); created at boot when missing, kept across boots; a file holding anything else stops the boot |
-| `artifacts/` | files programs posted (`POST api/artifacts`, `<ms>-<random>.<ext>`) and the downloads of the run_code helper's Playwright (`artifactsDir`); the newest `ARTIFACTS_KEEP` files are kept |
+| `artifacts/` | files programs posted (`POST api/artifacts`, `<ms>-<random>.<ext>`) and, for launched browsers, the downloads of the run_code helper's Playwright (`artifactsDir`); the newest `ARTIFACTS_KEEP` files are kept. An attached browser's downloads never land here: the helper passes `noDefaults`, so Chrome keeps its own download behaviour |
 
 Permissions (`src/fsPrivate.js`): the data dir, its top-level dirs (`profiles`, `run`, `settings`, `attached`, `proxy`, `logs`, `trash`, `relay`, `artifacts`), each profile root and each trash entry are `0700`; the plugin's run files, settings files, attached records, the proxy secret, the relay token, artifacts and logs are `0600`. Existing paths are tightened by chmod at boot, create and start. Files nested inside a profile are Chrome's own; the `0700` profile root shields them. The log holds visited URLs and a profile's `DevToolsActivePort` exposes CDP.
 

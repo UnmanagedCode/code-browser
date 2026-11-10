@@ -7,7 +7,8 @@ import { ARTIFACTS_KEEP } from './limits.js';
 
 // Bytes a program hands the backend to keep (POST api/artifacts): screenshots, PDFs, downloads. Programs in cc's plan
 // mode may not write files, so the backend writes them, private to the host user, and answers the path. The same dir
-// is the helper's Playwright `artifactsDir`, so downloads land here too; one retention rule covers both.
+// is the helper's Playwright `artifactsDir`, so a launched browser's downloads land here too and one retention rule
+// covers both. An attached browser's do not: the helper passes `noDefaults`, which leaves Chrome's own download behaviour.
 export const EXT_RE = /^[a-z0-9]{1,8}$/;
 
 export const artifactsDirOf = (dataDir) => path.join(dataDir, 'artifacts');

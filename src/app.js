@@ -76,7 +76,8 @@ export function createApp({ manager, mcp, installer, distDir, dataDir, token, on
           socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
           return;
         }
-        // The CDP relay is for local programs (no Origin, direct only); every other upgrade is the panel's.
+        // The CDP relay is for local programs (no Origin, a loopback Host on this port; its token is the gate); every other
+        // upgrade is the panel's.
         const relay = parsePathname(req.url).startsWith(RELAY_PREFIX);
         const refusal = relay
           ? relayRefusal(req.headers, { listenPort: listenPort() })
