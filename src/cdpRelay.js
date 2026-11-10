@@ -33,8 +33,11 @@ const closeReason = (text) => Buffer.from(text).subarray(0, 123).toString('utf8'
 // control a connect is refused, and taking control drops every client of that browser.
 //
 // `handleUpgrade` runs after app.js has applied the relay's request guard (relayRefusal).
-export function createCdpRelay({ manager, token, log = console, pingMs = RELAY_PING_MS, maxClients = RELAY_MAX_CLIENTS, highWater = RELAY_HIGH_WATER }) {
-  const wss = new WebSocketServer({ noServer: true, maxPayload: CDP_MAX_PAYLOAD, perMessageDeflate: false });
+export function createCdpRelay({
+  manager, token, log = console,
+  pingMs = RELAY_PING_MS, maxClients = RELAY_MAX_CLIENTS, highWater = RELAY_HIGH_WATER, maxPayload = CDP_MAX_PAYLOAD,
+}) {
+  const wss = new WebSocketServer({ noServer: true, maxPayload, perMessageDeflate: false });
   const hubs = new Map(); // entry → the relay's state for that running browser
   const clients = new Set();
   let unknownDropped = 0;
