@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { pickPage } from '../src/runCode/pickPage.js';
 
 // A Playwright BrowserContext double: pages with target ids, CDP sessions that report them, newPage that adds one.
+// An id of 'closed:session' makes newCDPSession throw; 'closed:info' makes Target.getTargetInfo throw (a closed page).
+const CLOSED = 'Target page, context or browser has been closed';
 function fakeContext(ids) {
   const pages = ids.map((id) => ({ id }));
   const sessions = [];
@@ -10,7 +12,12 @@ function fakeContext(ids) {
     sessions,
     pages: () => [...pages],
     async newCDPSession(page) {
-      const s = { detached: false, send: async () => ({ targetInfo: { targetId: page.id } }), detach: async () => { s.detached = true; } };
+      if (page.id === 'closed:session') throw new Error(CLOSED);
+      const send = async () => {
+        if (page.id === 'closed:info') throw new Error(CLOSED);
+        return { targetInfo: { targetId: page.id } };
+      };
+      const s = { detached: false, send, detach: async () => { s.detached = true; } };
       sessions.push(s);
       return s;
     },
@@ -41,4 +48,13 @@ test('attached with no active tab opens its own tab', async () => {
 test('launched with no active tab takes the first tab', async () => {
   assert.equal((await pickPage(fakeContext(['A', 'B']), { activeTargetId: null, kind: 'launched' })).id, 'A');
   assert.equal((await pickPage(fakeContext([]), { activeTargetId: null, kind: 'launched' })).id, 'new');
+});
+
+// Invariant: a page that cannot be probed (closed since the list was taken: newCDPSession or getTargetInfo throws) is
+// not a match and the search goes on, so a later active tab is still chosen and every opened session is detached.
+test('a page that cannot be probed is skipped', async () => {
+  const ctx = fakeContext(['closed:session', 'closed:info', 'B']);
+  assert.equal((await pickPage(ctx, { activeTargetId: 'B', kind: 'launched' })).id, 'B');
+  assert.ok(ctx.sessions.every((s) => s.detached));
+  assert.equal((await pickPage(fakeContext(['closed:session']), { activeTargetId: 'gone', kind: 'attached' })).id, 'new');
 });
