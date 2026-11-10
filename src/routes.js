@@ -8,7 +8,7 @@ import { ARTIFACT_MAX_BYTES } from './limits.js';
 // starting a Chromium install is one of them.
 // `token` routes need the relay's bearer token; `bytes` routes take an application/octet-stream body of at most that
 // many bytes instead of JSON.
-export function buildRoutes({ manager, mcp, installer, dataDir }) {
+export function buildRoutes({ manager, mcp, installer, dataDir, artifactMaxBytes = ARTIFACT_MAX_BYTES }) {
   const name = '([^/]+)';
   // A connect's failure is kept in the browser's summary (`attachError`), not thrown here.
   const accepted = (connecting, n) => {
@@ -64,7 +64,7 @@ export function buildRoutes({ manager, mcp, installer, dataDir }) {
     },
     // A program's bytes (a screenshot), kept under the data dir; the answer is the file's path.
     {
-      method: 'POST', path: /^\/api\/artifacts$/, token: true, bytes: ARTIFACT_MAX_BYTES,
+      method: 'POST', path: /^\/api\/artifacts$/, token: true, bytes: artifactMaxBytes,
       handler: ({ query, body }) => ({ status: 201, body: saveArtifact(dataDir, body, query.get('ext')) }),
     },
     {

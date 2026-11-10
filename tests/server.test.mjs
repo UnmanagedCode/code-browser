@@ -1,6 +1,7 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -433,6 +434,37 @@ test('artifacts: a valid post writes a private file and answers its path', async
   assert.equal(path.dirname(r.json.path), path.join(dataDir, 'artifacts'));
   assert.deepEqual(fs.readFileSync(r.json.path), bytes);
   assert.equal(fs.statSync(r.json.path).mode & 0o777, 0o600);
+});
+
+// Invariant: a chunked artifact body (no Content-Length) that grows past the cap gets a real 413 PAYLOAD_TOO_LARGE answer,
+// not a reset, on a connection the server then closes; nothing is written.
+test('artifacts: a streamed body over the cap answers 413 and closes', async () => {
+  const dataDir = tmpDir();
+  const server = createApp({ manager: fakeManager(), mcp: { handle: async () => ({}) }, installer: fakeInstaller(), distDir: tmpDir(), dataDir, token: TOKEN, artifactMaxBytes: 1024 });
+  const port = await listen(server);
+  servers.push(server);
+  const answer = await new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/api/artifacts?ext=bin', headers: { ...BYTES, authorization: `Bearer ${TOKEN}` } }, (res) => {
+      let text = '';
+      res.on('data', (d) => { text += d; });
+      res.on('end', () => resolve({ status: res.statusCode, connection: res.headers.connection, json: JSON.parse(text) }));
+    });
+    req.on('error', reject);
+    const chunk = Buffer.alloc(16 * 1024);
+    let sent = 0;
+    const pump = () => {
+      while (sent < 1024 * 1024) {
+        sent += chunk.length;
+        if (!req.write(chunk)) { req.once('drain', pump); return; }
+      }
+      req.end();
+    };
+    pump();
+  });
+  assert.equal(answer.status, 413);
+  assert.match(answer.json.error, /^PAYLOAD_TOO_LARGE: /);
+  assert.equal(answer.connection, 'close');
+  assert.equal(fs.existsSync(path.join(dataDir, 'artifacts')), false);
 });
 
 // Invariant: a byte body that grows past the limit while streaming (no Content-Length) is refused with PAYLOAD_TOO_LARGE.

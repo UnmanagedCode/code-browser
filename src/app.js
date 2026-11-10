@@ -11,8 +11,9 @@ import { buildRoutes } from './routes.js';
 // → body (413) → handler. No handler runs before the guards pass.
 // Health is a constant answer and skips the loopback-Host rule (docs/protocol.md → Request guard).
 // `token` is the relay token (relayToken.js); with none, every token route answers 401.
-export function createApp({ manager, mcp, installer, distDir, dataDir, token, onUpgrade, onRelayUpgrade }) {
-  const routes = buildRoutes({ manager, mcp, installer, dataDir });
+// `artifactMaxBytes` overrides ARTIFACT_MAX_BYTES (tests).
+export function createApp({ manager, mcp, installer, distDir, dataDir, token, onUpgrade, onRelayUpgrade, artifactMaxBytes }) {
+  const routes = buildRoutes({ manager, mcp, installer, dataDir, artifactMaxBytes });
   const listenPort = () => server.address()?.port;
 
   async function dispatch(req, res) {
@@ -36,7 +37,8 @@ export function createApp({ manager, mcp, installer, distDir, dataDir, token, on
       let body;
       if (route.bytes) {
         requireOctetStream(req);
-        body = await readBytesBody(req, route.bytes);
+        // A refused body is left unread: the answer closes the connection rather than wait for the rest of it.
+        body = await readBytesBody(req, route.bytes).catch((err) => { res.setHeader('Connection', 'close'); throw err; });
       } else if (route.mutating) {
         requireJson(req);
         body = await readJsonBody(req);

@@ -53,18 +53,23 @@ export function requireOctetStream(req) {
   }
 }
 
-// The raw body as a Buffer. A declared or actual size over `limit` is refused before more is read.
+// The raw body as a Buffer. A declared or actual size over `limit` is refused before more is read: the reader stops
+// (the request is paused, never destroyed here), so the caller can still answer 413 on the same socket.
 export function readBytesBody(req, limit) {
   return new Promise((resolve, reject) => {
     const tooLarge = () => new CodedError('PAYLOAD_TOO_LARGE', `body larger than ${limit} bytes`);
-    if (Number(req.headers['content-length']) > limit) { req.resume(); reject(tooLarge()); return; }
+    if (Number(req.headers['content-length']) > limit) { reject(tooLarge()); return; }
     const chunks = [];
     let size = 0;
-    req.on('data', (c) => {
+    const onData = (c) => {
       size += c.length;
-      if (size > limit) { reject(tooLarge()); req.destroy(); return; }
-      chunks.push(c);
-    });
+      if (size <= limit) { chunks.push(c); return; }
+      req.off('data', onData);
+      req.pause();
+      chunks.length = 0;
+      reject(tooLarge());
+    };
+    req.on('data', onData);
     req.on('error', reject);
     req.on('end', () => resolve(Buffer.concat(chunks)));
   });
