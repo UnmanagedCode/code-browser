@@ -112,7 +112,7 @@ test('CDP relay on real Chromium', { skip: process.env.RUN_REAL_CHROMIUM !== '1'
 
     let a;
     let b;
-    await t.test('G1. two Playwright clients each see the existing tab and can drive it', async () => {
+    await t.test('two Playwright clients each see the existing tab and can drive it', async () => {
       [a, b] = await Promise.all([connect(), connect()]);
       for (const [label, br] of [['A', a], ['B', b]]) {
         const pages = br.contexts()[0].pages();
@@ -131,7 +131,7 @@ test('CDP relay on real Chromium', { skip: process.env.RUN_REAL_CHROMIUM !== '1'
       assert.equal(relay.stats().unknownDropped, 0, 'no event arrived for a session nobody owns');
     });
 
-    await t.test('G2. the panel keeps working while both are connected', async () => {
+    await t.test('the panel keeps working while both are connected', async () => {
       const before = v.frames;
       await waitFor(() => v.frames >= before + 5, { what: 'frames to keep arriving', timeout: 10_000 });
       const created = await a.contexts()[0].newPage();
@@ -144,7 +144,7 @@ test('CDP relay on real Chromium', { skip: process.env.RUN_REAL_CHROMIUM !== '1'
       assert.equal(relay.stats().unknownDropped, 0);
     });
 
-    await t.test('G3. a client that ends leaves nothing behind (browser.close and SIGKILL)', async () => {
+    await t.test('a client that ends leaves nothing behind (browser.close and SIGKILL)', async () => {
       await a.close();
       await waitFor(() => relay.stats().clients === 1, { what: 'A to leave' });
       for (const mode of ['close', 'hold']) {
@@ -169,7 +169,7 @@ test('CDP relay on real Chromium', { skip: process.env.RUN_REAL_CHROMIUM !== '1'
       assert.equal(relay.stats().unknownDropped, 0);
     });
 
-    await t.test('G4. Browser.close through the relay is refused; Chromium outlives every client', async () => {
+    await t.test('Browser.close through the relay is refused; Chromium outlives every client', async () => {
       const raw = new WebSocket(url, auth);
       await new Promise((resolve, reject) => { raw.once('open', resolve); raw.once('error', reject); });
       const reply = new Promise((resolve) => raw.once('message', (d) => resolve(JSON.parse(d.toString()))));
@@ -186,7 +186,7 @@ test('CDP relay on real Chromium', { skip: process.env.RUN_REAL_CHROMIUM !== '1'
       assert.equal(manager.summary(NAME).status, 'running');
     });
 
-    await t.test('G3c. a tab the panel opens after every client left loads', async () => {
+    await t.test('a tab the panel opens after every client left loads', async () => {
       v.send({ msg: 'control', action: 'take' });
       await waitFor(() => v.state()?.controller?.you, { what: 'control' });
       const before = new Set(v.state().tabs.map((tab) => tab.targetId));
