@@ -5,9 +5,15 @@
 export const UNKNOWN_SESSION = { code: -32001, message: 'Session with given id not found.' };
 const REFUSED = -32000;
 
-// Methods no relay client may send: closing or crashing the shared browser, and the non-flat transport, whose
-// replies the relay could not route.
-const FORBIDDEN = new Set(['Browser.close', 'Browser.crash', 'Browser.crashGpuProcess', 'Target.sendMessageToTarget']);
+// Methods no relay client may send, none of which Playwright's connectOverCDP sends: closing or crashing the shared
+// browser; the non-flat transport, whose replies the relay could not route; and anything that opens another CDP
+// channel the relay's filter never sees, which would also outlive the client's teardown: a page-side `window.cdp`
+// (exposeDevToolsProtocol), a DevTools front end (openDevTools), an extension's chrome.debugger (loadUnpacked).
+const FORBIDDEN = new Set([
+  'Browser.close', 'Browser.crash', 'Browser.crashGpuProcess',
+  'Target.sendMessageToTarget',
+  'Target.exposeDevToolsProtocol', 'Target.openDevTools', 'Extensions.loadUnpacked',
+]);
 const NEEDS_FLATTEN = new Set(['Target.attachToTarget', 'Target.setAutoAttach', 'Target.autoAttachRelated']);
 
 // A client frame → `{msg}` or `{close: code, reason}`. 1003: binary; 1007: not a JSON command envelope.

@@ -120,6 +120,8 @@ test('Browser.close/crash, non-flatten attach and an unowned detach are refused 
   const refused = [
     { method: 'Browser.close' }, { method: 'Browser.crash' }, { method: 'Browser.crashGpuProcess' },
     { method: 'Target.sendMessageToTarget', params: { message: '{}', sessionId: 'x' } },
+    { method: 'Target.openDevTools', params: { targetId: 't' } },
+    { method: 'Extensions.loadUnpacked', params: { path: '/tmp/ext' } },
     { method: 'Target.attachToTarget', params: { targetId: 't' } },
     { method: 'Target.setAutoAttach', params: { autoAttach: true, waitForDebuggerOnStart: false, flatten: false } },
     { method: 'Target.autoAttachRelated', params: { targetId: 't', waitForDebuggerOnStart: false } },
@@ -134,6 +136,19 @@ test('Browser.close/crash, non-flatten attach and an unowned detach are refused 
   assert.equal(up().sent.length, before);
   a.send({ id: 99, method: 'Target.setAutoAttach', params: { autoAttach: true, waitForDebuggerOnStart: true, flatten: true } });
   assert.ok((await a.reply(99)).result, 'the flat form passes');
+});
+
+// Invariant: Target.exposeDevToolsProtocol, which would give a page a CDP channel the relay never filters (and that
+// survives the client's teardown), is refused on the root and on an owned page session, and nothing reaches the browser.
+test('Target.exposeDevToolsProtocol is refused upstream-free', async () => {
+  const { port, up } = await stack();
+  const a = await open(port);
+  up().event('Target.attachedToTarget', { sessionId: 'page' }, 'root-1');
+  const before = up().sent.length;
+  a.send({ id: 1, method: 'Target.exposeDevToolsProtocol', params: { targetId: 't', bindingName: 'cdp' } });
+  a.send({ id: 2, method: 'Target.exposeDevToolsProtocol', params: { targetId: 't' }, sessionId: 'page' });
+  for (const id of [1, 2]) assert.match((await a.reply(id)).error.message, /Target\.exposeDevToolsProtocol is not allowed/);
+  assert.equal(up().sent.length, before);
 });
 
 // Invariant: a client's sessions from every route (auto-attach events, attach results) are its own until Chrome detaches

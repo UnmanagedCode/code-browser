@@ -201,7 +201,7 @@ Upgrade checks, in order; a refusal is `HTTP/1.1 <status>` with a `text/plain` b
 
 | Order | Check | Refusal |
 |---|---|---|
-| 1 | No `Origin` at all, and `Host` is a loopback name on the backend's own port (`relayRefusal`, `src/requestGuard.js`): direct only, never through a proxy | `403` (empty body) |
+| 1 | No `Origin` at all, and `Host` is a loopback name on the backend's own port (`relayRefusal`, `src/requestGuard.js`). It judges the `Host` header: a proxy that rewrites `Host` to its own address is refused, one that passes the client's through is not | `403` (empty body) |
 | 2 | `Authorization: Bearer <token>` equals the relay token, checked before anything names a browser | `401 UNAUTHORIZED` |
 | 3 | `<name>` decodes and matches `NAME_RE` | `400 INVALID_NAME` |
 | 4 | a browser of that name exists / runs | `404 NOT_FOUND` / `409 NOT_RUNNING` |
@@ -212,9 +212,10 @@ Upgrade checks, in order; a refusal is `HTTP/1.1 <status>` with a `text/plain` b
 Messages (`ws` options: `maxPayload` = `CDP_MAX_PAYLOAD`, `perMessageDeflate: false`):
 
 - **Client → browser.** Text frames holding `{id: integer, method: string, params?: object, sessionId?: string}`. No `sessionId` → sent on the client's root. A `sessionId` the client owns → sent unchanged. Any other `sessionId` (another client's, the backend's, its own root's, unknown) → answered `{id, error: {code: -32001, message: "Session with given id not found."}, sessionId}`, nothing sent.
-- **Refused methods**, answered `{id, error: {code: -32000, message}}` with nothing sent: `Browser.close`, `Browser.crash`, `Browser.crashGpuProcess`, `Target.sendMessageToTarget`; `Target.attachToTarget`, `Target.setAutoAttach`, `Target.autoAttachRelated` without `flatten: true`; `Target.detachFromTarget` unless `params.sessionId` is one of the client's own child sessions.
+- **Refused methods** (`FORBIDDEN`, `src/relayRoutes.js`), answered `{id, error: {code: -32000, message}}` with nothing sent, on any session: `Browser.close`, `Browser.crash`, `Browser.crashGpuProcess`; `Target.sendMessageToTarget`; the methods that open a CDP channel the relay never filters, which would also outlive the client: `Target.exposeDevToolsProtocol`, `Target.openDevTools`, `Extensions.loadUnpacked`; `Target.attachToTarget`, `Target.setAutoAttach`, `Target.autoAttachRelated` without `flatten: true`; `Target.detachFromTarget` unless `params.sessionId` is one of the client's own child sessions.
 - **Answers** carry the client's own `id`, `result` or the browser's `error` as is, and `sessionId` only when the command had one. Answers and events reach the client in the order the browser sent them.
 - **Events.** An event on the client's root arrives without `sessionId` (the root is the connection, as on Chrome's own socket); an event on one of its child sessions arrives unchanged. Events of the backend's root and page sessions and of other clients never arrive.
+- **Not filtered:** `Browser.setDownloadBehavior` / `Page.setDownloadBehavior` (Playwright sets its own downloads dir with them), so a client can make Chrome write downloads to any path the backend's OS user can write.
 - **Ownership.** `Target.attachedToTarget` on an owned session, and the result of `Target.attachToTarget` / `Target.attachToBrowserTarget`, give the client the new session; `Target.detachedFromTarget` takes it away.
 
 Close codes (the reason text starts with a code where one applies):
