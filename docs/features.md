@@ -21,8 +21,9 @@ code-browser gives an agent and a person one shared headless Chromium. The agent
 4. Before each later snippet script call `browser_info` and respect `controller`.
 
 - The browser keeps its tabs, logins and cookies between programs. A program ends with `browser.close()`, which only disconnects.
-- **The run_code helper** connects through the backend's CDP relay: it works in cc's plan mode (it writes no files; `save()` hands bytes to the backend), an attached Chrome in approval mode asks nothing more after the person's Connect, and it is refused while a person holds control. `connect` returns `{browser, context, page, info, save}`; `info` is `browser_info`'s data. Contract: [protocol.md → run_code module](protocol.md#run_code-module-srcruncode).
+- **The run_code helper** connects through the backend's CDP relay: it works in cc's plan mode (the program itself writes no files: `save()` hands bytes to the backend, and Playwright's downloads go to the backend's artifacts dir), an attached Chrome in approval mode asks nothing more after the person's Connect, and it is refused while a person holds control. `connect` returns `{browser, context, page, info, save}`; `info` is `browser_info`'s data. Contract: [protocol.md → run_code module](protocol.md#run_code-module-srcruncode).
 - **The Bash snippet** connects to the raw CDP endpoint: one new connection per script.
+- **Downloads write as the backend's user.** Any CDP client, the helper's Playwright included, can point Chrome's downloads anywhere the backend's OS user can write (`Browser.setDownloadBehavior`), and Chrome then writes there; code-browser does not filter it, because Playwright sets its own downloads dir the same way.
 - Use `browser.contexts()[0]`. `newContext()` is incognito and invisible to the panel.
 - Both resolve `playwright-core` from the plugin's own `node_modules`; the agent's project needs no install.
 - Both start on the tab the person is looking at (the active tab); in an attached browser with none, on a new tab of the agent's own (`pickPage`, one rule for both).

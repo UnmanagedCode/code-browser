@@ -18,7 +18,7 @@ src/config.js            PORT, data dir ($CONDUCTOR_PLUGIN_DATA_DIR), plugin dir
 src/migrateLegacyStore.js  one-shot boot migration of the legacy store into the data dir
 src/limits.js            every tunable constant and NAME_RE
 src/errors.js            CodedError (optional `details`), describeError (message + details as one string), detailsOf, and the code → HTTP status map
-src/requestGuard.js      Origin↔Host check (requestRefusal); the relay's no-Origin, direct-only check (relayRefusal)
+src/requestGuard.js      Origin↔Host check (requestRefusal); the relay's no-Origin, loopback-Host-on-own-port check (relayRefusal)
 src/http.js              CSP/security headers, JSON and byte body readers, static allowlist
 src/routes.js            REST table (GET handlers read-only)
 src/app.js               HTTP server: guard order, dispatch, clientError, upgrade hook
@@ -218,7 +218,7 @@ Related: an agent reading untrusted pages in a logged-in shared profile can be p
 ### The relay token
 
 - **What it gates:** the CDP relay and `POST api/artifacts`. Through the relay an approval-mode browser is a connection the person already allowed; without a gate any process that reaches loopback could use that approval, including another OS user on the host and a client coming through cc's proxy.
-- **How:** `relay/token` is private to the backend's OS user (`0600` in a `0700` dir; on Windows the data dir's default ACLs). Tool results name the file (`helper.tokenFile`) and never carry the value, which would hand it to anything that can POST `api/mcp`. The relay is also direct-only (`relayRefusal`): no `Origin`, a loopback `Host` on the backend's own port, so a proxied client is refused even with the token.
+- **How:** `relay/token` is private to the backend's OS user (`0600` in a `0700` dir; on Windows the data dir's default ACLs). Tool results name the file (`helper.tokenFile`) and never carry the value, which would hand it to anything that can POST `api/mcp`. The bearer token is the gate. `relayRefusal` adds a check on the `Host` header (no `Origin`, a loopback name on the backend's own port): it refuses a proxied request whose proxy rewrites `Host` to its own address, but a proxy that passes the client's `Host` through is not told apart from a direct client.
 - **What it does not stop:** a process running as the same user. It can read the token, call `api/mcp`, or connect to Chromium's raw CDP port, where the controller is advisory. Like the unsandboxed opt-in above, the data dir is private to the host user, not to the agent.
 
 ### Attached browsers and the host proxy
