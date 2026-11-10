@@ -2,19 +2,30 @@
 
 > See also: [README](../README.md) · [protocol](protocol.md) · [architecture](architecture.md)
 
-code-browser gives an agent and a person one shared headless Chromium. The agent drives it with its own Playwright scripts; the person watches, and can take over, in the **Code Browser** panel. A person can also attach a browser they run themselves (see [Attach your own browser](#attach-your-own-browser)); agents then use it through the same tools.
+code-browser gives an agent and a person one shared headless Chromium. The agent drives it with Playwright, from a cc `run_code` program (the run_code helper) or from its own scripts run through Bash; the person watches, and can take over, in the **Code Browser** panel. A person can also attach a browser they run themselves (see [Attach your own browser](#attach-your-own-browser)); agents then use it through the same tools.
 
 ## Agent workflow
 
 1. Call `start_browser` (optionally with a `name`). The first call starts the plugin backend and the browser.
-2. Read the result: it carries the controller state, the panel path for the user, the rules, any warnings (`notes`) and a ready-to-run Playwright snippet (`snippet`; in text, a `js` fence).
-3. Save the snippet as an `.mjs` file, replace `// … your steps …`, run it with `node` through Bash.
-4. Before each later script call `browser_info` and respect `controller`.
+2. Read the result: it carries the controller state, the panel path for the user, the rules, any warnings (`notes`), the run_code helper's location (`helper`) and a ready-to-run Bash snippet (`snippet`; in text, a `js` fence).
+3. Drive it, preferably from `run_code` with the helper:
 
-- The browser keeps its tabs, logins and cookies between scripts. A script ends with `browser.close()`, which only disconnects.
+   ```js
+   const { browser, page, save } = await (await cc.code_browser.import()).connect({ name: 'default' });
+   await page.goto('https://example.com');
+   const shot = await save(await page.screenshot(), 'png'); // absolute path under the data dir; open it with Read
+   await browser.close();                                   // disconnects only
+   ```
+
+   Where `cc.code_browser.import` is unavailable, load the same helper by URL: `(await import(info.helper.module)).default({ cc, module: null })`, with `info` from `browser_info`. Otherwise, from Bash: save the snippet as an `.mjs` file, replace `// … your steps …`, run it with `node`.
+4. Before each later snippet script call `browser_info` and respect `controller`.
+
+- The browser keeps its tabs, logins and cookies between programs. A program ends with `browser.close()`, which only disconnects.
+- **The run_code helper** connects through the backend's CDP relay: it works in cc's plan mode (it writes no files; `save()` hands bytes to the backend), an attached Chrome in approval mode asks nothing more after the person's Connect, and it is refused while a person holds control. `connect` returns `{browser, context, page, info, save}`; `info` is `browser_info`'s data. Contract: [protocol.md → run_code module](protocol.md#run_code-module-srcruncode).
+- **The Bash snippet** connects to the raw CDP endpoint: one new connection per script.
 - Use `browser.contexts()[0]`. `newContext()` is incognito and invisible to the panel.
-- The snippet resolves `playwright-core` from the plugin's own `node_modules`; the agent's project needs no install.
-- The snippet's page selection picks the tab the person is looking at (the active tab).
+- Both resolve `playwright-core` from the plugin's own `node_modules`; the agent's project needs no install.
+- Both start on the tab the person is looking at (the active tab); in an attached browser with none, on a new tab of the agent's own (`pickPage`, one rule for both).
 - Give the user the `panelPath` as is. It is relative to the address they open cc at; do not add a host.
 - **Viewport:** a launched browser's pages are `DEFAULT_WINDOW.width` px wide (`src/limits.js`) and their height follows the shape of the person's panel, so the screen has no letterbox bars. It can change between scripts: read `innerHeight`, and do not call `page.setViewportSize`. `browser_info` says so for launched browsers. An attached browser is never resized ([Screen](#panel)).
 - A browser **name** is a persistent profile: the same name keeps logins and cookies across stops, including session cookies.
@@ -29,13 +40,15 @@ Every tool answers in both of cc's formats, json (the complete data) and text (p
 | `list_browsers` | name, `kind`, status, controller, CDP endpoint, sandbox state, the read-only `allowUnsandboxed`, and `attached` for an attached browser |
 | `start_browser` | starts (creating on first use) a browser; idempotent. Refuses an attached browser with `ATTACHED` |
 | `stop_browser` | stops it; the profile is kept. For an attached browser it only disconnects |
-| `browser_info` | CDP endpoint, tabs, active tab, controller, `sandbox`, read-only `allowUnsandboxed`, `kind`, `attached`, panel path, snippet |
+| `browser_info` | CDP endpoint, tabs, active tab, controller, `sandbox`, read-only `allowUnsandboxed`, `kind`, `attached`, panel path, snippet, `helper` (the run_code helper's module URL, relay, token file path) |
 
 No tool attaches or connects a browser: only a person does, in the panel.
 
-### The controller is advisory for the agent
+### The controller: enforced on the relay, advisory on the raw endpoint
 
-The agent talks to Chromium over its own CDP connection; the backend is not on that path and cannot pause it. The agent is *told* the state: `controller` in `start_browser`/`browser_info`/`list_browsers`, and a do-not-drive note while a person holds control. A script that ignores it can still act. For the person it is enforced: see Control.
+- **run_code helper (the relay):** enforced. While a person holds control, `connect` fails with `BROWSER_CONTROLLED`. When a person takes control, every connected program is dropped: its pending calls fail with `BROWSER_CONTROLLED` in the message. After the person hands back, a new `connect` works.
+- **Bash snippet (the raw CDP endpoint):** advisory. The script talks to Chromium over its own CDP connection; the backend is not on that path and cannot stop it. The agent is *told* the state: `controller` in `start_browser`/`browser_info`/`list_browsers`, and a do-not-drive note while a person holds control. A script that ignores it can still act.
+- For the person it is enforced: see Control.
 
 ## Panel
 
@@ -147,10 +160,10 @@ The viewer of a disconnected attached browser shows *This browser is disconnecte
 
 ### What agents can and cannot do
 
-- **Use it:** `browser_info` gives a loopback CDP endpoint, the tabs, the controller and a snippet. The snippet opens the agent's **own tab** when no tab is active, and the attached note tells it not to close tabs it did not open.
+- **Use it:** through the run_code helper, or `browser_info`'s loopback CDP endpoint and snippet. Both open the agent's **own tab** when no tab is active, and the attached note tells it not to close tabs it did not open. The helper passes Playwright's `noDefaults` for an attached browser, so it does not override its downloads, focus or media settings.
 - **Disconnect it:** `stop_browser` closes code-browser's connection only.
 - **Never attach or reconnect it:** `start_browser` on an attached browser is refused with `ATTACHED` and the panel path; the agent asks the person to press **Connect**. A disconnect may be deliberate (the person closed Chrome or pressed Disconnect), and in approval mode a reconnect would raise a dialog nobody asked for.
-- **Approval mode:** each script opens a new connection, so Chrome asks again for each one. The approval note tells the agent to warn the person before each script and to use as few scripts as possible; a script waits until **Allow** and fails with `403` on cancel.
+- **Approval mode:** the run_code helper rides on code-browser's own connection, which the person allowed at **Connect**, so it raises no dialog. Each Bash snippet script opens a new connection, so Chrome asks again for each one; the approval note tells the agent to warn the person before each snippet script and to use as few as possible; a script waits until **Allow** and fails with `403` on cancel.
 
 Nothing code-browser does closes the browser or its tabs: Disconnect, Forget, `stop_browser` and a backend shutdown close only code-browser's own connection and proxy tunnel. After a backend restart the browser is listed *stopped* and is never connected again on its own.
 
@@ -159,7 +172,7 @@ Nothing code-browser does closes the browser or its tabs: Disconnect, Forget, `s
 - Watching a tab in the panel brings it to the front in the person's window (screencasts of background tabs need it).
 - A minimised or fully covered window may produce no frames.
 - The controller covers panel viewers only: the person at the browser's own window can always act.
-- While an agent's script is connected, Playwright auto-dismisses JavaScript dialogs on every tab, the person's included.
+- While an agent's program or script is connected, Playwright auto-dismisses JavaScript dialogs on every tab, the person's included.
 
 ## Install and Chromium
 
