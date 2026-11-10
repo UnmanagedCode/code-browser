@@ -1,4 +1,4 @@
-// The real CDP proxy (proxy/cdp_proxy.py) with the backend's client. Python-gated: fails closed without a Python
+// The real host proxy (proxy/proxy.py) with the backend's client. Python-gated: fails closed without a Python
 // >= 3.9 unless CODE_BROWSER_SKIP_PYTHON=1 (tests/helpers.mjs, requirePython).
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -136,7 +136,7 @@ test("a peer's error text is labelled unverified", async () => {
 // Invariant: with no host.json, a connect says to start the proxy on the Docker host.
 test('no proxy running says how to start it', async () => {
   const dataDir = path.join(tmpDir(), 'data');
-  await assert.rejects(openProxied(dataDir, 9222, IN_TEST), (e) => e.code === 'no_proxy' && /cdp_proxy\.py/.test(e.message));
+  await assert.rejects(openProxied(dataDir, 9222, IN_TEST), (e) => e.code === 'no_proxy' && /proxy\/proxy\.py/.test(e.message));
 });
 
 // Invariant: a human's attach "through the proxy" runs the browser over the backend's tunnel (an endpoint on the

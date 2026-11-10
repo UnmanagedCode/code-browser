@@ -1,4 +1,4 @@
-// An in-process stand-in for proxy/cdp_proxy.py, so the default `npm test` covers the proxied path without Python.
+// An in-process stand-in for proxy/proxy.py, so the default `npm test` covers the proxied path without Python.
 // It speaks the real wire protocol (proxy/protocol.json) with its own HMAC code, refuses the auth frames the real
 // proxy refuses (same checks, same order, same codes), publishes host.json in <dataDir>/proxy/, and pipes an
 // authenticated connection to 127.0.0.1:<port>. `mode: 'blackhole'` accepts and never says hello.

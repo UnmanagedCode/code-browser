@@ -4,7 +4,7 @@ import net from 'node:net';
 import { PROTOCOL } from './proxyProtocol.js';
 import { ensureSecret, readHost } from './proxyStore.js';
 
-// The wire client for the CDP proxy (proxy/cdp_proxy.py): newline-delimited JSON frames over raw TCP and a
+// The wire client for the host proxy (proxy/proxy.py): newline-delimited JSON frames over raw TCP and a
 // mutual HMAC challenge-response on every connection (the secret itself never crosses the wire). Each
 // authenticated connection names one port and is then a byte pipe to 127.0.0.1:<port> on the Docker host.
 const { frames: FRAMES, macLabels: LABELS, errorCodes: ERROR_CODES } = PROTOCOL;
@@ -230,7 +230,7 @@ function dialAndAuth({ host, port, target, secret, limiter, signal }) {
 // `signal`'s reason once it aborts.
 export async function openProxied(dataDir, port, { env = process.env, inContainer = runningInContainer, gateway = defaultGatewayIPv4, limiter = sharedLimiter, signal } = {}) {
   const host = await readHost(dataDir);
-  if (!host) throw proxyError('no CDP proxy is running: start it on the Docker host with `python3 proxy/cdp_proxy.py` from the code-browser checkout (docs/proxy.md)', 'no_proxy');
+  if (!host) throw proxyError('no host proxy is running: start it on the Docker host with `python3 proxy/proxy.py` from the code-browser checkout (docs/host-proxy.md)', 'no_proxy');
   if (host.error) throw proxyError(host.error, 'bad_host_file');
   const secret = await ensureSecret(dataDir);
   let last = null;

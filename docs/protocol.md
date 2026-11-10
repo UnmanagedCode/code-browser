@@ -189,9 +189,9 @@ Owned by `src/screencast.js`; the numbers are `MAX_FPS`, `VIEWER_HIGH_WATER` in 
 - The screencast runs only on the active tab and only while some viewer has a view; its size is the largest viewer's request. A `view` or `viewport` size above `MAX_FRAME_DIM` is scaled down as a whole (`fitDims` in `src/viewerGateway.js`), keeping its aspect.
 - For a **launched** browser the largest viewer by area (`maxWidth * maxHeight`, both > 0) also sets the page viewport's height from its aspect, after a debounce ([architecture.md](architecture.md#viewport-fit)); an attached browser is never resized.
 
-## CDP proxy wire protocol
+## Host proxy wire protocol
 
-Between the backend (client, `src/proxyClient.js`) and `proxy/cdp_proxy.py` on the Docker host. Every value named here lives in `proxy/protocol.json`, which both sides read (`src/proxyProtocol.js`); nothing restates it. Running and security model: [proxy.md](proxy.md).
+Between the backend (client, `src/proxyClient.js`) and `proxy/proxy.py` on the Docker host. Every value named here lives in `proxy/protocol.json`, which both sides read (`src/proxyProtocol.js`); nothing restates it. Running and security model: [host-proxy.md](host-proxy.md).
 
 **Transport:** raw TCP, the backend dials. Newline-delimited JSON frames (`frames`), each at most `maxFrameBytes`, until the handshake ends; after `welcome` the connection is a byte pipe to `127.0.0.1:<port>` on the host.
 

@@ -1,4 +1,4 @@
-"""code-browser CDP proxy.
+"""code-browser host proxy.
 
 Runs on the Docker HOST and lets a containerised code-browser reach a browser's
 remote-debugging port on this host's loopback. code-browser dials OUT to this
@@ -13,7 +13,7 @@ The two sides meet through a rendezvous directory in code-browser's store
 (<projectsRoot>/.code-conductor/plugins/data/code-browser/proxy/): code-browser writes the shared secret
 there, the proxy writes its listen address. The wire protocol (frames, MAC
 labels, caps, timings, error codes) lives in protocol.json next to this file;
-keep the two files together. See docs/proxy.md and docs/protocol.md.
+keep the two files together. See docs/host-proxy.md and docs/protocol.md.
 """
 
 import argparse
@@ -511,7 +511,7 @@ def parse_ports(value):
 
 def parse_args(argv, default_host=default_listen_host):
     parser = argparse.ArgumentParser(
-        prog="cdp_proxy.py",
+        prog="proxy.py",
         description="Let a containerised code-browser reach a browser's remote-debugging port on this host's loopback.")
     parser.add_argument("--listen", metavar="IP:PORT",
                         help="listener code-browser dials (default: the docker0 address, else 127.0.0.1, port %d)"
