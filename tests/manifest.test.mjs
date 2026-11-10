@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { checkSchema } from './_jsonSchemaSubset.mjs';
 
 const manifest = JSON.parse(fs.readFileSync(new URL('../conductor.plugin.json', import.meta.url), 'utf8'));
 
 // The key sets cc's manifest validator accepts (code-conductor docs/plugins.md); any other key makes the plugin invalid.
-const TOP = ['id', 'name', 'version', 'pluginApi', 'backend', 'frontend', 'mcp', 'conventions', 'roles', 'playbooks', 'claudePlugin', 'menuItems'];
+const TOP = ['id', 'name', 'version', 'pluginApi', 'backend', 'frontend', 'mcp', 'conventions', 'roles', 'playbooks', 'claudePlugin', 'runCodeModule', 'menuItems'];
 const BACKEND = ['start', 'healthPath', 'readyWhen'];
 const FRONTEND = ['path', 'navLabel', 'keepAlive'];
 const MCP = ['endpoint', 'scope', 'timeoutMs', 'tools'];
@@ -126,4 +127,17 @@ test('the summary property schemas are identical wherever they are written out',
 // Invariant: descriptions describe data, not a rendering: none promises "returns json/text", mentions raw text or `meta`.
 test('descriptions are format-neutral', () => {
   for (const tool of manifest.mcp.tools) assert.doesNotMatch(tool.description, /returns? (json|text)|raw text|\bmeta\b/i, tool.name);
+});
+
+// Invariant: runCodeModule names, in the form cc's validator accepts (a relative .js/.mjs path, no '..', no leading '/'),
+// a git-tracked file whose default export is a function: the factory cc calls for cc.code_browser.import().
+test('runCodeModule names a tracked module whose default export is a function', async () => {
+  const rel = manifest.runCodeModule;
+  assert.equal(typeof rel, 'string');
+  assert.match(rel, /\.(mjs|js)$/);
+  assert.ok(!rel.startsWith('/') && !rel.split(/[\\/]/).includes('..'), rel);
+  const root = new URL('..', import.meta.url);
+  assert.doesNotThrow(() => execFileSync('git', ['ls-files', '--error-unmatch', rel], { cwd: root, stdio: 'pipe' }), `${rel} is not tracked`);
+  const mod = await import(new URL(rel, root).href);
+  assert.equal(typeof mod.default, 'function');
 });
