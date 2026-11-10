@@ -58,3 +58,7 @@ export const LOG_SCAN_CHARS = 256 * 1024;
 export const RELAY_MAX_CLIENTS = 8;
 export const RELAY_HIGH_WATER = CDP_MAX_PAYLOAD;
 export const RELAY_PING_MS = 20_000;
+
+// Artifacts (POST api/artifacts): the largest body accepted, and how many files the artifacts dir keeps.
+export const ARTIFACT_MAX_BYTES = 64 * 1024 * 1024;
+export const ARTIFACTS_KEEP = 200;

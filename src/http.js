@@ -45,6 +45,31 @@ export function requireJson(req) {
   }
 }
 
+const BYTES_TYPE = /^application\/octet-stream\s*(;|$)/i;
+
+export function requireOctetStream(req) {
+  if (!BYTES_TYPE.test(req.headers['content-type'] ?? '')) {
+    throw new CodedError('UNSUPPORTED_MEDIA_TYPE', 'Content-Type must be application/octet-stream');
+  }
+}
+
+// The raw body as a Buffer. A declared or actual size over `limit` is refused before more is read.
+export function readBytesBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    const tooLarge = () => new CodedError('PAYLOAD_TOO_LARGE', `body larger than ${limit} bytes`);
+    if (Number(req.headers['content-length']) > limit) { req.resume(); reject(tooLarge()); return; }
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) { reject(tooLarge()); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('error', reject);
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+  });
+}
+
 // An empty body reads as {}.
 export function readJsonBody(req, limit = MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {

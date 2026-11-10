@@ -1,15 +1,18 @@
 import http from 'node:http';
 import { CodedError, describeError, detailsOf, statusFor } from './errors.js';
-import { parsePathname, readJsonBody, requireJson, sendJson, serveStatic } from './http.js';
+import { parsePathname, readBytesBody, readJsonBody, requireJson, requireOctetStream, sendJson, serveStatic } from './http.js';
 import { RELAY_PREFIX } from './cdpRelay.js';
 import { relayRefusal, requestRefusal } from './requestGuard.js';
+import { checkBearer } from './relayToken.js';
 import { buildRoutes } from './routes.js';
 
 // The HTTP server. Check order for every request: Origin/Host (403) → route (404/405)
-// → panel-only route without an Origin (403) → content type (415) → body → handler. No handler runs before the guards pass.
+// → panel-only route without an Origin (403) → token route without the bearer token (401) → content type (415)
+// → body (413) → handler. No handler runs before the guards pass.
 // Health is a constant answer and skips the loopback-Host rule (docs/protocol.md → Request guard).
-export function createApp({ manager, mcp, installer, distDir, onUpgrade, onRelayUpgrade }) {
-  const routes = buildRoutes({ manager, mcp, installer });
+// `token` is the relay token (relayToken.js); with none, every token route answers 401.
+export function createApp({ manager, mcp, installer, distDir, dataDir, token, onUpgrade, onRelayUpgrade }) {
+  const routes = buildRoutes({ manager, mcp, installer, dataDir });
   const listenPort = () => server.address()?.port;
 
   async function dispatch(req, res) {
@@ -27,12 +30,19 @@ export function createApp({ manager, mcp, installer, distDir, onUpgrade, onRelay
       if (route.requireOrigin && req.headers.origin === undefined) {
         return sendJson(res, 403, { error: 'FORBIDDEN: this route is for the panel only and needs an Origin' });
       }
+      if (route.token && !(token && checkBearer(req.headers, token))) {
+        return sendJson(res, 401, { error: 'UNAUTHORIZED: this route needs Authorization: Bearer <the relay token>' });
+      }
       let body;
-      if (route.mutating) {
+      if (route.bytes) {
+        requireOctetStream(req);
+        body = await readBytesBody(req, route.bytes);
+      } else if (route.mutating) {
         requireJson(req);
         body = await readJsonBody(req);
       }
-      const out = await route.handler({ params: m.slice(1).map(decodeURIComponent), body });
+      const query = new URL(req.url, 'http://localhost').searchParams;
+      const out = await route.handler({ params: m.slice(1).map(decodeURIComponent), query, body });
       if (out && out.status && out.body) return sendJson(res, out.status, out.body);
       return sendJson(res, 200, out);
     }

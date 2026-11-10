@@ -1,5 +1,6 @@
 // Entry: build state, wire each feature once, listen. Order: config → migration → manager → mcp → installer → boot → relay token → listen.
 import { createApp } from './src/app.js';
+import { ensureArtifactsDir } from './src/artifacts.js';
 import { createBrowserManager } from './src/browserManager.js';
 import { createCdpRelay } from './src/cdpRelay.js';
 import { createChromiumInstaller } from './src/chromium/install.js';
@@ -22,9 +23,10 @@ const installer = createChromiumInstaller();
 
 await manager.boot();
 const relayToken = ensureRelayToken(config.dataDir);
+ensureArtifactsDir(config.dataDir);
 const gateway = createViewerGateway({ manager });
 const relay = createCdpRelay({ manager, token: relayToken });
-const server = createApp({ manager, mcp, installer, distDir: config.distDir, onUpgrade: gateway.handleUpgrade, onRelayUpgrade: relay.handleUpgrade });
+const server = createApp({ manager, mcp, installer, distDir: config.distDir, dataDir: config.dataDir, token: relayToken, onUpgrade: gateway.handleUpgrade, onRelayUpgrade: relay.handleUpgrade });
 server.listen(config.port, '127.0.0.1', () => {
   console.log(`code-browser listening on 127.0.0.1:${server.address().port} (data: ${config.dataDir})`);
 });
