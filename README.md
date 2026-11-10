@@ -4,7 +4,7 @@ A shared headless Chromium for code-conductor. An agent drives it with Playwrigh
 
 - **Agent:** `start_browser` → run the returned Playwright snippet → `browser_info` before each later script. Tabs, logins and cookies persist per browser name.
 - **Person:** open the panel (cc's **Code Browser** entry, or the panel link the agent gives you) to watch, switch tabs, and take control to click, type, scroll and answer page dialogs.
-- **Your own browser:** a person can attach a Chrome they run themselves in the panel; agents then use it through the same tools, and code-browser only ever disconnects from it. Through Docker, a small host-side proxy carries the connection: [docs/proxy.md](docs/proxy.md).
+- **Your own browser:** a person can attach a Chrome they run themselves in the panel; agents then use it through the same tools, and code-browser only ever disconnects from it. Through Docker, a small host-side proxy carries the connection: run `make proxy` on the Docker host ([docs/proxy.md](docs/proxy.md)).
 
 Details: [docs/features.md](docs/features.md) · [docs/protocol.md](docs/protocol.md) · [docs/architecture.md](docs/architecture.md) · [docs/proxy.md](docs/proxy.md)
 

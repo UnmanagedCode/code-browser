@@ -29,8 +29,15 @@ A browser on any other machine is not supported.
 | Platform | Command |
 |---|---|
 | Linux / macOS | `python3 proxy/cdp_proxy.py` |
+| Linux / macOS, short form | `make proxy` (from the checkout, or `make -C <checkout> proxy` from anywhere) |
 | Windows | `py -3 proxy\cdp_proxy.py` |
 | A debug port other than 9222 | add `--ports <port>[,<port>…]` (the list replaces the default) |
+
+With `make`, the same flags go in `ARGS` and the interpreter in `PYTHON`:
+
+- `make proxy ARGS="--ports 9222,9223"` passes the arguments through verbatim.
+- `make proxy PYTHON=python3.11` runs the proxy with another interpreter.
+- `make help` lists the targets and variables.
 
 - On start it prints `code-browser-proxy listening on <ip>:<port>` (stdout), then logs (stderr) the store it found, the ports it forwards to and, if code-browser has not written its secret yet, `waiting for code-browser to create <path>`. It never logs the secret.
 - Stop it with Ctrl-C or `SIGTERM` (exit code 0): it cuts every connection and removes its `host.json`. An attached browser it carried shows *Disconnected* in the panel; press **Connect** once the proxy is back.
