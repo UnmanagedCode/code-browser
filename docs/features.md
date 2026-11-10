@@ -129,7 +129,7 @@ In the browser list, **Attach a browser…** opens the form:
 - **Name:** `a-z`, `0-9`, `-`; one namespace with code-browser's own browsers.
 - **Debug address:** `127.0.0.1:<port>` or `localhost:<port>` (default `127.0.0.1:9222`): the *Server running at* address on `chrome://inspect/#remote-debugging`, or your `--remote-debugging-port`. Chrome's debug server listens on loopback only, so nothing else is accepted.
 - **Where the browser runs:**
-  - *On the Docker host — through code-browser's proxy*: code-browser runs in a container and the browser on its Docker host. Start the proxy there first ([proxy.md](proxy.md)). The proxy forwards only to port 9222 unless it was started with `--ports`.
+  - *On the Docker host — through code-browser's proxy*: code-browser runs in a container and the browser on its Docker host. Start the proxy there first ([host-proxy.md](host-proxy.md)). The proxy forwards only to port 9222 unless it was started with `--ports`.
   - *On this machine — direct*: code-browser runs directly on the machine where the browser runs.
 - **Cancel** closes the form and returns to the button. **Attach** saves the browser and connects, then closes the form. The row shows *connecting*; if Chrome asks *Allow remote debugging?*, click **Allow**. A failed connect shows its reason on the row as text (for example Chrome's refusal, nothing listening, or the proxy's `--ports` hint).
 

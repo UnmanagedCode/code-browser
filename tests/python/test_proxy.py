@@ -1,4 +1,4 @@
-"""Unit tests for proxy/cdp_proxy.py. Standard library only; run from npm test via
+"""Unit tests for proxy/proxy.py. Standard library only; run from npm test via
 tests/proxy.test.mjs, or directly: python3 -m unittest discover -s tests/python -v
 """
 
@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PROXY_DIR = ROOT / "proxy"
 sys.path.insert(0, str(PROXY_DIR))
 
-import cdp_proxy  # noqa: E402
+import proxy  # noqa: E402
 
 PROTOCOL = json.loads((PROXY_DIR / "protocol.json").read_text(encoding="utf-8"))
 FRAMES = PROTOCOL["frames"]
@@ -44,47 +44,47 @@ def write_secret(rdir, secret=SECRET):
 class Source(unittest.TestCase):
     # Invariant: the proxy parses as Python 3.9, the oldest version it claims to support.
     def test_parses_as_python_3_9(self):
-        ast.parse((PROXY_DIR / "cdp_proxy.py").read_text(encoding="utf-8"), feature_version=(3, 9))
+        ast.parse((PROXY_DIR / "proxy.py").read_text(encoding="utf-8"), feature_version=(3, 9))
 
     # Invariant: the MAC agrees with the shared fixture vector (the Node client checks the same vector).
     def test_mac_vector(self):
         v = VECTOR
-        self.assertEqual(cdp_proxy.mac(v["secret"], LABELS["client"], v["nonceProxy"], v["nonceClient"], v["port"]), v["clientMac"])
-        self.assertEqual(cdp_proxy.mac(v["secret"], LABELS["proxy"], v["nonceProxy"], v["nonceClient"], v["port"]), v["proxyMac"])
+        self.assertEqual(proxy.mac(v["secret"], LABELS["client"], v["nonceProxy"], v["nonceClient"], v["port"]), v["clientMac"])
+        self.assertEqual(proxy.mac(v["secret"], LABELS["proxy"], v["nonceProxy"], v["nonceClient"], v["port"]), v["proxyMac"])
         self.assertNotEqual(v["clientMac"], v["proxyMac"], "distinct labels stop a reflected MAC")
 
     # Invariant: the proxy's default reach is exactly 127.0.0.1:9222; widening it means changing this literal.
     def test_default_reach_is_9222_only(self):
         self.assertEqual(PROTOCOL["defaultPorts"], [9222])
-        self.assertEqual(cdp_proxy.parse_args([], default_host=lambda: "127.0.0.1").ports, [9222])
+        self.assertEqual(proxy.parse_args([], default_host=lambda: "127.0.0.1").ports, [9222])
 
     # Invariant: without --ports the proxy forwards only to protocol.json's defaultPorts; --ports replaces that list.
     def test_default_and_replaced_ports(self):
         local = lambda: "127.0.0.1"  # noqa: E731
-        self.assertEqual(cdp_proxy.parse_args([], default_host=local).ports, PROTOCOL["defaultPorts"])
-        self.assertEqual(cdp_proxy.parse_args(["--ports", "9333, 9444,9333"], default_host=local).ports, [9333, 9444])
+        self.assertEqual(proxy.parse_args([], default_host=local).ports, PROTOCOL["defaultPorts"])
+        self.assertEqual(proxy.parse_args(["--ports", "9333, 9444,9333"], default_host=local).ports, [9333, 9444])
         for bad in ["", "0", "65536", "x", "9222,abc"]:
             with self.assertRaises(SystemExit, msg=bad), mock.patch("sys.stderr"):
-                cdp_proxy.parse_args(["--ports", bad], default_host=local)
+                proxy.parse_args(["--ports", bad], default_host=local)
 
     # Invariant: the listener defaults to docker0 where it exists, else loopback, on defaultListenPort.
     def test_default_listen(self):
-        self.assertEqual(cdp_proxy.default_listen_host(lambda: "172.17.0.1"), "172.17.0.1")
-        self.assertEqual(cdp_proxy.default_listen_host(lambda: None), "127.0.0.1")
-        args = cdp_proxy.parse_args([], default_host=lambda: "172.17.0.1")
+        self.assertEqual(proxy.default_listen_host(lambda: "172.17.0.1"), "172.17.0.1")
+        self.assertEqual(proxy.default_listen_host(lambda: None), "127.0.0.1")
+        args = proxy.parse_args([], default_host=lambda: "172.17.0.1")
         self.assertEqual((args.listen_host, args.listen_port), ("172.17.0.1", PROTOCOL["defaultListenPort"]))
 
     # Invariant: the listener is never put where the LAN reaches it: wildcards and the default-route address are refused.
     def test_listen_guard(self):
-        self.assertIsNotNone(cdp_proxy.listen_problem("0.0.0.0", None))
+        self.assertIsNotNone(proxy.listen_problem("0.0.0.0", None))
         for not_ipv4 in (":7078", "[::]:7078", "localhost:7078", "127.0.0.1:99999", "127.0.0.1"):
             with self.assertRaises(SystemExit, msg=not_ipv4), mock.patch("sys.stderr"):
-                cdp_proxy.parse_args(["--listen", not_ipv4])
-        self.assertIsNotNone(cdp_proxy.listen_problem("192.168.1.5", "192.168.1.5"))
-        self.assertIsNone(cdp_proxy.listen_problem("127.0.0.1", "127.0.0.1"))
-        self.assertIsNone(cdp_proxy.listen_problem("172.17.0.1", "192.168.1.5"))
+                proxy.parse_args(["--listen", not_ipv4])
+        self.assertIsNotNone(proxy.listen_problem("192.168.1.5", "192.168.1.5"))
+        self.assertIsNone(proxy.listen_problem("127.0.0.1", "127.0.0.1"))
+        self.assertIsNone(proxy.listen_problem("172.17.0.1", "192.168.1.5"))
         with self.assertRaises(SystemExit) as cm:
-            cdp_proxy.main(["--listen", "0.0.0.0:7078"])
+            proxy.main(["--listen", "0.0.0.0:7078"])
         self.assertIn("wildcard", str(cm.exception.code))
 
 
@@ -101,41 +101,41 @@ class Rendezvous(unittest.TestCase):
     def test_find_store(self):
         expected = self.root / ".code-conductor" / "plugins" / "data" / "code-browser"
         expected.mkdir(parents=True)
-        script = self.root / "a" / "plugin" / "proxy" / "cdp_proxy.py"
+        script = self.root / "a" / "plugin" / "proxy" / "proxy.py"
         script.parent.mkdir(parents=True)
-        store, _ = cdp_proxy.find_store(script)
+        store, _ = proxy.find_store(script)
         self.assertEqual(store, expected.resolve())
-        self.assertEqual(cdp_proxy.find_store(script, override=str(self.root))[0], expected.resolve())
-        self.assertIsNone(cdp_proxy.find_store(script, override=str(self.root / "a"))[0])
+        self.assertEqual(proxy.find_store(script, override=str(self.root))[0], expected.resolve())
+        self.assertIsNone(proxy.find_store(script, override=str(self.root / "a"))[0])
 
     # Invariant: there is no legacy fallback: a root holding only the old .code-browser store has no store.
     def test_find_store_ignores_legacy(self):
         (self.root / ".code-browser").mkdir()
-        script = self.root / "a" / "proxy" / "cdp_proxy.py"
+        script = self.root / "a" / "proxy" / "proxy.py"
         script.parent.mkdir(parents=True)
-        self.assertIsNone(cdp_proxy.find_store(script)[0])
-        self.assertIsNone(cdp_proxy.find_store(script, override=str(self.root))[0])
+        self.assertIsNone(proxy.find_store(script)[0])
+        self.assertIsNone(proxy.find_store(script, override=str(self.root))[0])
 
     # Invariant: the proxy's hardcoded store path ends in the plugin id cc names the data dir after.
     def test_store_relpath_matches_manifest_id(self):
         manifest = json.loads((ROOT / "conductor.plugin.json").read_text(encoding="utf-8"))
-        self.assertEqual(cdp_proxy.STORE_RELPATH.name, manifest["id"])
+        self.assertEqual(proxy.STORE_RELPATH.name, manifest["id"])
 
     # Invariant: a missing store exits non-zero naming the relative path the person must create or point at.
     def test_main_names_store_path(self):
         with self.assertRaises(SystemExit) as cm:
-            cdp_proxy.main(["--projects-root", str(self.root), "--listen", "127.0.0.1:0"])
+            proxy.main(["--projects-root", str(self.root), "--listen", "127.0.0.1:0"])
         self.assertIn(".code-conductor/plugins/data/code-browser", str(cm.exception.code))
 
     # Invariant: host.json is published atomically 0600 and removed only while it still names this pid.
     def test_host_json(self):
-        path = cdp_proxy.write_host_json(self.root, "127.0.0.1:7078", 4242)
+        path = proxy.write_host_json(self.root, "127.0.0.1:7078", 4242)
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         self.assertEqual(json.loads(path.read_text()), {"protocolVersion": PROTOCOL["protocolVersion"], "listen": "127.0.0.1:7078", "pid": 4242})
         self.assertEqual([p.name for p in self.root.iterdir()], [RDV["proxyFile"]], "no tmp file is left behind")
-        self.assertFalse(cdp_proxy.remove_host_json_if_ours(self.root, 1))
+        self.assertFalse(proxy.remove_host_json_if_ours(self.root, 1))
         self.assertTrue(path.exists())
-        self.assertTrue(cdp_proxy.remove_host_json_if_ours(self.root, 4242))
+        self.assertTrue(proxy.remove_host_json_if_ours(self.root, 4242))
         self.assertFalse(path.exists())
 
     # Invariant: a rendezvous file is read only when it is a small regular file; a FIFO never blocks the read.
@@ -143,11 +143,11 @@ class Rendezvous(unittest.TestCase):
         fifo = self.root / "fifo"
         os.mkfifo(str(fifo))
         with self.assertRaisesRegex(ValueError, "not a regular file"):
-            cdp_proxy.read_small_file(fifo)
+            proxy.read_small_file(fifo)
         big = self.root / "big"
         big.write_text("x" * (PROTOCOL["maxRendezvousBytes"] + 1))
         with self.assertRaisesRegex(ValueError, "larger than"):
-            cdp_proxy.read_small_file(big)
+            proxy.read_small_file(big)
 
     # Invariant: a symlinked rendezvous file is never followed: the secret is refused, and host.json is not removed
     # through it.
@@ -155,28 +155,28 @@ class Rendezvous(unittest.TestCase):
         target = self.root / "elsewhere.json"
         target.write_text(json.dumps({"secret": SECRET, "pid": 7}))
         (self.root / RDV["backendFile"]).symlink_to(target)
-        with self.assertRaises(cdp_proxy.SecretUnavailable):
-            cdp_proxy.read_secret(self.root)
+        with self.assertRaises(proxy.SecretUnavailable):
+            proxy.read_secret(self.root)
         (self.root / RDV["proxyFile"]).symlink_to(target)
-        self.assertFalse(cdp_proxy.remove_host_json_if_ours(self.root, 7))
+        self.assertFalse(proxy.remove_host_json_if_ours(self.root, 7))
         self.assertTrue(target.exists())
 
     # Invariant: the proxy makes its rendezvous dir 0700, tightening one that already exists.
     def test_proxy_dir_is_tightened(self):
         (self.root / RDV["dir"]).mkdir(mode=0o755)
         os.chmod(str(self.root / RDV["dir"]), 0o755)
-        path = cdp_proxy.proxy_dir(self.root)
+        path = proxy.proxy_dir(self.root)
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o700)
 
     # Invariant: a missing, malformed or short secret is reported with the path, never used.
     def test_read_secret_refusals(self):
-        with self.assertRaises(cdp_proxy.SecretUnavailable):
-            cdp_proxy.read_secret(self.root)
+        with self.assertRaises(proxy.SecretUnavailable):
+            proxy.read_secret(self.root)
         write_secret(self.root, "short")
-        with self.assertRaisesRegex(cdp_proxy.SecretUnavailable, "at least"):
-            cdp_proxy.read_secret(self.root)
+        with self.assertRaisesRegex(proxy.SecretUnavailable, "at least"):
+            proxy.read_secret(self.root)
         write_secret(self.root)
-        self.assertEqual(cdp_proxy.read_secret(self.root), SECRET)
+        self.assertEqual(proxy.read_secret(self.root), SECRET)
 
 
 class Wire(unittest.IsolatedAsyncioTestCase):
@@ -186,7 +186,7 @@ class Wire(unittest.IsolatedAsyncioTestCase):
         write_secret(self.rdir)
         self.echo_conns = 0
         self.logged = []
-        patcher = mock.patch.object(cdp_proxy, "log", self.logged.append)
+        patcher = mock.patch.object(proxy, "log", self.logged.append)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -205,8 +205,8 @@ class Wire(unittest.IsolatedAsyncioTestCase):
         await self.start_proxy([self.echo_port])
 
     async def start_proxy(self, ports):
-        self.proxy = cdp_proxy.Proxy(self.rdir, ports, 0)
-        self.server = await asyncio.start_server(self.proxy.handle, "127.0.0.1", 0, limit=cdp_proxy.MAX_FRAME_BYTES)
+        self.proxy = proxy.Proxy(self.rdir, ports, 0)
+        self.server = await asyncio.start_server(self.proxy.handle, "127.0.0.1", 0, limit=proxy.MAX_FRAME_BYTES)
         self.proxy_port = self.server.sockets[0].getsockname()[1]
         self.proxy.listen_port = self.proxy_port
 
@@ -299,7 +299,7 @@ class Wire(unittest.IsolatedAsyncioTestCase):
 
     # Invariant: at most maxPendingHandshakes unauthenticated connections are held; one more is cut with no hello.
     async def test_pending_cap(self):
-        with mock.patch.object(cdp_proxy, "MAX_PENDING_HANDSHAKES", 2):
+        with mock.patch.object(proxy, "MAX_PENDING_HANDSHAKES", 2):
             held = []
             for _ in range(2):
                 r, w = await asyncio.open_connection("127.0.0.1", self.proxy_port)
@@ -312,7 +312,7 @@ class Wire(unittest.IsolatedAsyncioTestCase):
 
     # Invariant: a client that never authenticates is cut after the handshake deadline.
     async def test_handshake_timeout(self):
-        with mock.patch.object(cdp_proxy, "HANDSHAKE_TIMEOUT_S", 0.2):
+        with mock.patch.object(proxy, "HANDSHAKE_TIMEOUT_S", 0.2):
             r, w = await asyncio.open_connection("127.0.0.1", self.proxy_port)
             await r.readline()
             self.assertEqual(await asyncio.wait_for(r.read(100), 2), b"")

@@ -29,7 +29,7 @@ test('loadConfig refuses an unset or empty CONDUCTOR_PLUGIN_DATA_DIR', () => {
 // Invariant: only src/migrateLegacyStore.js names the legacy store path.
 test('only the migration file names the legacy store', () => {
   const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? walk(path.join(dir, d.name)) : [path.join(dir, d.name)]));
-  const files = [path.join(root, 'server.js'), path.join(root, 'proxy', 'cdp_proxy.py'),
+  const files = [path.join(root, 'server.js'), path.join(root, 'proxy', 'proxy.py'),
     ...walk(path.join(root, 'src')).filter((f) => f.endsWith('.js') && path.basename(f) !== 'migrateLegacyStore.js')];
   assert.match('<root>/.code-browser/', /\.code-browser\b/);
   for (const f of files) assert.doesNotMatch(fs.readFileSync(f, 'utf8'), /\.code-browser\b/, path.relative(root, f));

@@ -23,7 +23,7 @@ export function tmpDir(prefix = 'code-browser-test-') {
 }
 
 // code-browser's data dir under a projects root, as cc sets CONDUCTOR_PLUGIN_DATA_DIR and as the proxy finds it
-// (STORE_RELPATH in proxy/cdp_proxy.py).
+// (STORE_RELPATH in proxy/proxy.py).
 export const storeDir = (projectsRoot) => path.join(projectsRoot, '.code-conductor', 'plugins', 'data', 'code-browser');
 
 export function listen(server) {
@@ -178,7 +178,7 @@ export function rawExchange(port, text, { timeout = 2000 } = {}) {
   });
 }
 
-// ---- attached browsers: a fake Chromium the "user" launched themselves, and the CDP proxy ----
+// ---- attached browsers: a fake Chromium the "user" launched themselves, and the host proxy ----
 
 const liveChildren = new Set();
 process.once('exit', () => { for (const c of liveChildren) { try { c.kill('SIGKILL'); } catch { /* gone */ } } });
@@ -234,7 +234,7 @@ export function requirePython(t) {
   throw new Error(`${PYTHON_MISSING} (${py.reason})`);
 }
 
-export const PROXY_SCRIPT = new URL('../proxy/cdp_proxy.py', import.meta.url).pathname;
+export const PROXY_SCRIPT = new URL('../proxy/proxy.py', import.meta.url).pathname;
 
 // The real proxy on 127.0.0.1:<any>, for the store under `projectsRoot`, forwarding to `ports` (its default when null).
 export async function startProxy({ projectsRoot, ports = null }) {

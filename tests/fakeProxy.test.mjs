@@ -29,7 +29,7 @@ async function exchange(build) {
   } finally { socket.destroy(); }
 }
 
-// Invariant: the fake proxy rejects every auth frame the real proxy rejects (tests/python/test_cdp_proxy.py
+// Invariant: the fake proxy rejects every auth frame the real proxy rejects (tests/python/test_proxy.py
 // test_bad_frames and test_version_mismatch), with the same error code, so a client frame-shape regression fails
 // even when the Python tests are skipped.
 test('the fake proxy refuses malformed auth frames like the real one', async () => {

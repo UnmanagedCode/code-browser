@@ -1,6 +1,6 @@
-# CDP proxy (your own browser, code-browser in Docker)
+# Host proxy (your own browser, code-browser in Docker)
 
-> See also: [README](../README.md) · [features](features.md) · [protocol](protocol.md#cdp-proxy-wire-protocol) · [architecture](architecture.md)
+> See also: [README](../README.md) · [features](features.md) · [protocol](protocol.md#host-proxy-wire-protocol) · [architecture](architecture.md)
 
 A small Python program you run on the **Docker host** when code-browser runs in a container and you want to attach a browser that runs on that host ([features.md → Attach your own browser](features.md#attach-your-own-browser)). A Chrome remote-debugging port listens on the host's loopback only, which a container cannot reach; the proxy carries code-browser's connections to it.
 
@@ -20,7 +20,7 @@ A browser on any other machine is not supported.
 ## Requirements
 
 - Python **3.9 or newer**, standard library only: nothing to `pip install`.
-- The `proxy/` directory: `cdp_proxy.py` plus `protocol.json`. **Keep the two files together**; the proxy reads its protocol from `protocol.json` beside it. Run the copy from the code-browser checkout that code-browser itself runs from, so both speak the same protocol version.
+- The `proxy/` directory: `proxy.py` plus `protocol.json`. **Keep the two files together**; the proxy reads its protocol from `protocol.json` beside it. Run the copy from the code-browser checkout that code-browser itself runs from, so both speak the same protocol version.
 - The host must see code-browser's store, `<projectsRoot>/.code-conductor/plugins/data/code-browser/`, as a directory. That holds when the projects root is a bind mount (the usual devcontainer setup on Docker Desktop and native Linux).
 - code-browser has started once, so the store exists.
 
@@ -28,9 +28,9 @@ A browser on any other machine is not supported.
 
 | Platform | Command |
 |---|---|
-| Linux / macOS | `python3 proxy/cdp_proxy.py` |
-| Linux / macOS, short form | `make proxy` (from the checkout, or `make -C <checkout> proxy` from anywhere) |
-| Windows | `py -3 proxy\cdp_proxy.py` |
+| Linux / macOS | `python3 proxy/proxy.py` |
+| Linux / macOS, with make | `make proxy` (from the checkout, or `make -C <checkout> proxy` from anywhere) |
+| Windows | `py -3 proxy\proxy.py` |
 | A debug port other than 9222 | add `--ports <port>[,<port>…]` (the list replaces the default) |
 
 With `make`, the same flags go in `ARGS` and the interpreter in `PYTHON`:
@@ -47,7 +47,7 @@ With `make`, the same flags go in `ARGS` and the interpreter in `PYTHON`:
 
 ### Discovery
 
-The proxy finds code-browser's store by walking **up from its own script's directory** (never the working directory) to the first ancestor holding a `.code-conductor/plugins/data/code-browser` directory. Running the copy inside the projects root (the project checkout `<projectsRoot>/code-browser/proxy/cdp_proxy.py`, or a library install `<projectsRoot>/.plugins/<name>/proxy/cdp_proxy.py`) finds `<projectsRoot>/.code-conductor/plugins/data/code-browser`.
+The proxy finds code-browser's store by walking **up from its own script's directory** (never the working directory) to the first ancestor holding a `.code-conductor/plugins/data/code-browser` directory. Running the copy inside the projects root (the project checkout `<projectsRoot>/code-browser/proxy/proxy.py`, or a library install `<projectsRoot>/.plugins/<name>/proxy/proxy.py`) finds `<projectsRoot>/.code-conductor/plugins/data/code-browser`.
 
 - `--projects-root <dir>` overrides the walk: the store is `<dir>/.code-conductor/plugins/data/code-browser`, which must exist.
 - Finding none exits non-zero: `code-browser-proxy: no .code-conductor/plugins/data/code-browser found in any parent of <script dir> (searched: …) — start code-browser once so it creates <projectsRoot>/.code-conductor/plugins/data/code-browser, or pass --projects-root <dir>`.
@@ -93,13 +93,13 @@ A sample systemd **system** unit (a user unit cannot order itself after `docker.
 
 ```ini
 [Unit]
-Description=code-browser CDP proxy
+Description=code-browser host proxy
 After=network-online.target docker.service
 Wants=network-online.target docker.service
 
 [Service]
 User=<the user that owns <projectsRoot>/.code-conductor/plugins/data/code-browser>
-ExecStart=/usr/bin/python3 <projectsRoot>/<path-to>/proxy/cdp_proxy.py
+ExecStart=/usr/bin/python3 <projectsRoot>/<path-to>/proxy/proxy.py
 Restart=on-failure
 RestartSec=5
 

@@ -1,12 +1,12 @@
 # Architecture
 
-> See also: [README](../README.md) · [features](features.md) · [protocol](protocol.md) · [proxy](proxy.md)
+> See also: [README](../README.md) · [features](features.md) · [protocol](protocol.md) · [host proxy](host-proxy.md)
 
 ## Stack
 
 - **Backend:** plain ESM JavaScript, `node server.js`, `node:http`. Runtime dependencies: `ws` (the panel socket and the backend's CDP client) and `playwright-core` (Chromium lookup, and the package the agent snippet resolves). The backend never drives pages with Playwright: its own CDP client avoids Playwright's dialog auto-dismissal and extra state.
 - **Panel:** React, TypeScript, Vite (`base: './'`), plain CSS on cc's theme tokens (no inline styles, so the CSP needs no `'unsafe-inline'`). Built into the gitignored `frontend/dist` by `prepare`.
-- **CDP proxy:** `proxy/cdp_proxy.py`, one standard-library Python file (3.9+) the user runs on the Docker host, with its wire protocol in `proxy/protocol.json` ([proxy.md](proxy.md)).
+- **Host proxy:** `proxy/proxy.py`, one standard-library Python file (3.9+) the user runs on the Docker host, with its wire protocol in `proxy/protocol.json` ([host-proxy.md](host-proxy.md)).
 - **Plugin contract:** `conductor.plugin.json`. cc starts the backend lazily, passing `PORT`, `PROJECTS_ROOT` and `CONDUCTOR_PLUGIN_DATA_DIR`. Core reads only `PORT`, `CONDUCTOR_PLUGIN_ID` and the data dir; the [store migration](#store-migration) reads `PROJECTS_ROOT`. MCP calls arrive as plain `POST api/mcp` ([protocol.md](protocol.md#mcp-wire-format)).
 - **No install scripts** in the runtime dependency tree (`tests/deps.test.mjs`). `package-lock.json` is gitignored.
 
@@ -30,10 +30,10 @@ src/browserSettings.js   settings/<name>.json: the per-browser unsandboxed opt-i
 src/attachStore.js       attached/<name>.json: a person's own browser, {address, via}; parseAttachTarget, the one address validator (loopback ports only) for the form and stored records
 src/cdpDiscovery.js      /json/version discovery (JSON or approval mode): settles once on any outcome, with a total deadline and an abort signal
 src/tunnel.js            per proxied attached browser: a 127.0.0.1:<random> forwarder, one proxied upstream per connection
-src/proxyClient.js       the CDP proxy client: dial candidates, HMAC handshake, limiter
+src/proxyClient.js       the host proxy client: dial candidates, HMAC handshake, limiter
 src/proxyStore.js        proxy/ rendezvous files: the secret (written) and host.json (read)
 src/proxyProtocol.js     loads proxy/protocol.json (single source of the wire protocol)
-proxy/cdp_proxy.py       the proxy itself, run on the Docker host (proxy/protocol.json beside it)
+proxy/proxy.py       the proxy itself, run on the Docker host (proxy/protocol.json beside it)
 src/chromium/{locate,args,keeper}.js
 src/chromium/install.js  runs `playwright-core install chromium` as a child (one at a time) and holds the latest run's state for the panel
 src/runState.js          run/<name>.json, pid checks, reap
@@ -60,7 +60,7 @@ One responsibility each: `browserManager` owns processes, files and the namespac
 | `settings/<name>.json` | `{"allowUnsandboxed":true}`; exists only while the opt-in is on (revoking deletes it) |
 | `logs/<name>.log` | Chromium output, truncated on each launch |
 | `attached/<name>.json` | `{"address":"127.0.0.1:<port>","via":"proxy"\|"direct"}`: an attached browser; written when a person attaches (before the connect succeeds), removed by Forget. No secret |
-| `proxy/secret.json` | the CDP proxy's shared secret (`src/proxyStore.js`); written at boot when missing or invalid |
+| `proxy/secret.json` | the host proxy's shared secret (`src/proxyStore.js`); written at boot when missing or invalid |
 | `proxy/host.json` | written by the proxy on the Docker host: where it listens, its pid |
 | `trash/<name>-<ts>/` | a deleted profile, removed asynchronously |
 
@@ -78,7 +78,7 @@ Profiles and attached records share one namespace: `names()` is their union, and
 - **Refusals** (an `Error` naming both paths): data dir not empty (keep one: delete the legacy dir, or delete the data dir); `EXDEV` (different filesystems: `mv` it with code-browser stopped, or delete the legacy dir; there is no copy fallback); legacy path or an existing data dir that is not a directory.
 - **A refusal stops the backend before it listens and leaves the legacy store untouched** (missing parents of the data dir may already exist, and an empty data dir may already be removed). Every refusal and error names both paths. Continuing would make boot create an empty store beside the old one, and every later start would hit "not empty".
 - **Stop the browsers first.** Before the first start on the new code, stop every running browser, or stop code-browser in Settings → Plugins: the migration renames the store out from under any running Chromium and its keeper.
-- **Restart the proxy after a move:** it resolves the store once at startup ([proxy.md](proxy.md#running-it)).
+- **Restart the proxy after a move:** it resolves the store once at startup ([host-proxy.md](host-proxy.md#running-it)).
 
 ## Browser lifecycle
 
@@ -191,12 +191,12 @@ Chromium runs on the cc host and browses untrusted pages. Those pages can send r
 
 Related: an agent reading untrusted pages in a logged-in shared profile can be prompt-injected.
 
-### Attached browsers and the CDP proxy
+### Attached browsers and the host proxy
 
 - **Only a person attaches or connects.** No MCP tool reaches attach or connect, and both routes are `requireOrigin`, so cc's MCP bridge and plain scripts get `403`. Like the opt-in this is a **human-intent gate, not a defence against a malicious agent**: an agent with shell access can add an `Origin`, write `attached/*.json`, or read the proxy secret and dial the proxy itself.
 - **Refused attach values:** a non-loopback host, a bad port, an unknown `via`, a duplicate address or browser id (including code-browser's own launched Chromium). The backend dials nothing but loopback and the proxy named in `host.json`, so the attach form is no SSRF surface.
 - **Reaching the forwarded CDP:** container processes reach the tunnel on `127.0.0.1:<random>` only while connected, unauthenticated: the same bar as a launched browser's CDP port. Web pages in code-browser's own headless browser are stopped by Chrome's own guards, which the byte-transparent tunnel and proxy pass through unchanged: the `Origin` check refuses their WebSocket, a rebound hostname fails the `Host` check, `/json/new` needs `PUT`, and in approval mode `/json*` is `404`. Host processes can reach the browser's debug port directly; that is inherent to remote debugging, and approval mode adds Chrome's per-connection consent.
-- **The proxy secret** stays in the backend: no summary, tool result, record or log carries it. Who holds it and what it grants: [proxy.md → Security model](proxy.md#security-model). By default the proxy forwards to `127.0.0.1:9222` only (`defaultPorts`, `proxy/protocol.json`).
+- **The proxy secret** stays in the backend: no summary, tool result, record or log carries it. Who holds it and what it grants: [host-proxy.md → Security model](host-proxy.md#security-model). By default the proxy forwards to `127.0.0.1:9222` only (`defaultPorts`, `proxy/protocol.json`).
 - **The wire** between container and host carries CDP in clear after the handshake.
 
 ## Testing
@@ -207,7 +207,7 @@ Run: `npm test` (backend `node --test`, including the Python-gated proxy tests, 
 - **Fake Chromium** (`tests/fakes/fakeChromium.mjs`): a Node script injected through `CODE_BROWSER_CHROMIUM`, run through the real keeper and launch path. It serves a CDP subset (targets, attach, screencast with ack-paced frames, navigation and history, dialogs, recorded `Input.*`, every `Target.activateTarget` in `Fake.getState`) plus test-only `Fake.*` methods, and Chromium's devtools guards (`Host` must be an IP or `localhost`, a WebSocket with an `Origin` is `403`, `webSocketDebuggerUrl` built from `Host`). Env knobs: `FAKE_CHROMIUM_REQUIRE_NO_SANDBOX` (the fake writes `fake-argv.json` and `fake-pid` only after its sandbox check, so their absence proves no unsandboxed launch), `FAKE_CHROMIUM_NO_PORT`, `FAKE_CHROMIUM_IGNORE_CLOSE`, `FAKE_CHROMIUM_APPROVAL` (Chrome's approval mode: empty `404` on `/json*`, the browser upgrade held until `PUT /fake/approval?answer=allow|deny`). It exits on `Browser.close`, so a fake still alive proves none was sent.
 - **External fake** (`externalFake` in `tests/helpers.mjs`): the same fake started outside code-browser, as a person's own browser.
 - **Fake proxy** (`tests/fakes/fakeProxy.mjs`): an in-process stand-in that speaks the real wire protocol, so the default run covers the proxied path (cancellation, cleanup, no secret in tool results) without Python; `mode: 'blackhole'` accepts and never says hello.
-- **CDP proxy:** `tests/python/test_cdp_proxy.py` (stdlib `unittest`) covers the proxy alone; `tests/proxy.test.mjs` runs that suite (and checks it ran tests) and the real proxy against the backend's client and manager (`startProxy` helper; the backend dials `127.0.0.1` through `CODE_BROWSER_PROXY_DIAL_HOST`). Python-gated and **fail closed**: without Python 3.9+ these tests fail unless `CODE_BROWSER_SKIP_PYTHON=1` skips them; `CODE_BROWSER_PYTHON` picks the interpreter. Both suites check the MAC vector in `tests/fixtures/proxy-mac-vector.json`.
+- **Host proxy:** `tests/python/test_proxy.py` (stdlib `unittest`) covers the proxy alone; `tests/proxy.test.mjs` runs that suite (and checks it ran tests) and the real proxy against the backend's client and manager (`startProxy` helper; the backend dials `127.0.0.1` through `CODE_BROWSER_PROXY_DIAL_HOST`). Python-gated and **fail closed**: without Python 3.9+ these tests fail unless `CODE_BROWSER_SKIP_PYTHON=1` skips them; `CODE_BROWSER_PYTHON` picks the interpreter. Both suites check the MAC vector in `tests/fixtures/proxy-mac-vector.json`.
 - **Live stack** (`liveStack` in `tests/helpers.mjs`): real manager, session and gateway over the fake, with a second CDP client standing in for an agent.
 - **Typed MCP:** `tests/_jsonSchemaSubset.mjs` is a test-only port of cc's `checkSchema`/`validate`; `call` in `tests/_mcpCall.mjs` asserts the reply shape of every tool call in the suite and validates json against the manifest `outputSchema`. `tests/mcp.live.test.mjs` validates replies with real session data (tabs, crash, attach failure, attached browser) and the oldest stored layout `migrateLegacyStore` can move in, all on temp data dirs. `tests/jsonSchemaSubset.test.mjs` compares the port's keyword and type sets with cc's when `CODE_CONDUCTOR_DIR` is set.
 - **Config, migration, boot:** `tests/config.test.mjs` (data dir comes only from the variable; only `src/migrateLegacyStore.js` names the legacy path), `tests/migrateLegacyStore.test.mjs` (no-ops, move, modes, refusals), `tests/boot.test.mjs` (spawns `server.js`: migration precedes boot, a refusal does not listen, a missing variable refuses). A test that spawns `server.js` sets `PROJECTS_ROOT` to a fixture and `CONDUCTOR_PLUGIN_DATA_DIR` explicitly: agent shells export the real `PROJECTS_ROOT`, and `migrateLegacyStore` takes `env` with no default for the same reason.

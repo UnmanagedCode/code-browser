@@ -4,7 +4,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { PROTOCOL } from './proxyProtocol.js';
 
-// The CDP proxy's rendezvous directory, <dataDir>/proxy/: two files, each with a single writer. The backend
+// The host proxy's rendezvous directory, <dataDir>/proxy/: two files, each with a single writer. The backend
 // writes the shared secret (backendFile); the proxy writes where it listens (proxyFile). The proxy finds this
 // directory by walking up from its own script, so neither side needs configuring.
 const { dir: DIR, backendFile: SECRET_FILE, proxyFile: HOST_FILE } = PROTOCOL.rendezvous;
@@ -87,7 +87,7 @@ export async function ensureSecret(dataDir) {
     await fs.rename(tmp, file);
     return secret;
   } catch (e) {
-    throw new Error(`cannot provision the CDP proxy secret in ${file}: ${e.message}`);
+    throw new Error(`cannot provision the host proxy secret in ${file}: ${e.message}`);
   }
 }
 
