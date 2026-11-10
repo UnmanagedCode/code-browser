@@ -35,3 +35,18 @@ export function requestRefusal(headers, { requireOrigin = false, listenPort } = 
   }
   return null;
 }
+
+// The CDP relay's rule (docs/protocol.md → CDP relay). A relay client is a local program, never a page: any Origin
+// is refused, as Chromium refuses one on its own CDP sockets. The Host must be a loopback name on this backend's
+// own port, so the relay is direct-only: a request through a proxy (cc's included) carries the proxy's port.
+export function relayRefusal(headers, { listenPort }) {
+  if (headers.origin !== undefined) return 'the relay accepts no Origin';
+  const host = headers.host;
+  if (!host) return 'no Host';
+  let h;
+  try { h = new URL(`http://${host}`); } catch { return 'Host is malformed'; }
+  if (h.username || h.password || h.pathname !== '/' || h.search || h.hash) return 'Host is malformed';
+  if (!LOOPBACK_HOSTS.has(h.hostname)) return 'Host is not a loopback name';
+  if (Number(h.port || 80) !== listenPort) return "Host does not name this backend's own port";
+  return null;
+}

@@ -1,11 +1,13 @@
-// Entry: build state, wire each feature once, listen. Order: config → migration → manager → mcp → installer → boot → listen.
+// Entry: build state, wire each feature once, listen. Order: config → migration → manager → mcp → installer → boot → relay token → listen.
 import { createApp } from './src/app.js';
 import { createBrowserManager } from './src/browserManager.js';
+import { createCdpRelay } from './src/cdpRelay.js';
 import { createChromiumInstaller } from './src/chromium/install.js';
 import { createSessionForEntry } from './src/browserSession.js';
 import { loadConfig } from './src/config.js';
 import { migrateLegacyStore } from './src/migrateLegacyStore.js';
 import { createMcp } from './src/mcp.js';
+import { ensureRelayToken } from './src/relayToken.js';
 import { createViewerGateway } from './src/viewerGateway.js';
 
 const config = loadConfig();
@@ -19,8 +21,10 @@ const mcp = createMcp({ manager, pluginDir: config.pluginDir, pluginId: config.p
 const installer = createChromiumInstaller();
 
 await manager.boot();
+const relayToken = ensureRelayToken(config.dataDir);
 const gateway = createViewerGateway({ manager });
-const server = createApp({ manager, mcp, installer, distDir: config.distDir, onUpgrade: gateway.handleUpgrade });
+const relay = createCdpRelay({ manager, token: relayToken });
+const server = createApp({ manager, mcp, installer, distDir: config.distDir, onUpgrade: gateway.handleUpgrade, onRelayUpgrade: relay.handleUpgrade });
 server.listen(config.port, '127.0.0.1', () => {
   console.log(`code-browser listening on 127.0.0.1:${server.address().port} (data: ${config.dataDir})`);
 });
@@ -31,6 +35,7 @@ async function shutdown() {
   stopping = true;
   server.close();
   gateway.close();
+  relay.close();
   installer.close();
   await manager.shutdown();
   process.exit(0);

@@ -147,6 +147,8 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
   }
 
   function onEvent({ method, params, sessionId }) {
+    // Sessions the backend did not open (CDP relay clients share this connection) are none of the panel's business.
+    if (sessionId !== undefined && !tabOfSession.has(sessionId)) return;
     switch (method) {
       case 'Target.targetCreated':
         if (!isPage(params.targetInfo) || tabs.tabs.some((t) => t.targetId === params.targetInfo.targetId)) return;
@@ -233,6 +235,8 @@ export function createBrowserSession({ name, cdp, sandbox, attached = false, log
       activeTargetId: tabs.activeId,
     }),
     pendingDialogs: () => [...dialogs.values()],
+    // True for a page session this session opened (the CDP relay tells its own sessions from the backend's).
+    ownsSession: (sessionId) => tabOfSession.has(sessionId),
     activateTab: (tabId) => apply({ type: 'activate', targetId: tabId }),
     async newTab() { await cdp.send('Target.createTarget', { url: 'about:blank' }); },
     async closeTab(tabId) {

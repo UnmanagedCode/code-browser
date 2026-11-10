@@ -1,13 +1,14 @@
 import http from 'node:http';
 import { CodedError, describeError, detailsOf, statusFor } from './errors.js';
 import { parsePathname, readJsonBody, requireJson, sendJson, serveStatic } from './http.js';
-import { requestRefusal } from './requestGuard.js';
+import { RELAY_PREFIX } from './cdpRelay.js';
+import { relayRefusal, requestRefusal } from './requestGuard.js';
 import { buildRoutes } from './routes.js';
 
 // The HTTP server. Check order for every request: Origin/Host (403) → route (404/405)
 // → panel-only route without an Origin (403) → content type (415) → body → handler. No handler runs before the guards pass.
 // Health is a constant answer and skips the loopback-Host rule (docs/protocol.md → Request guard).
-export function createApp({ manager, mcp, installer, distDir, onUpgrade }) {
+export function createApp({ manager, mcp, installer, distDir, onUpgrade, onRelayUpgrade }) {
   const routes = buildRoutes({ manager, mcp, installer });
   const listenPort = () => server.address()?.port;
 
@@ -54,7 +55,7 @@ export function createApp({ manager, mcp, installer, distDir, onUpgrade }) {
         "Content-Security-Policy: default-src 'none'\r\nX-Content-Type-Options: nosniff\r\n\r\n");
     }
   });
-  if (onUpgrade) {
+  if (onUpgrade || onRelayUpgrade) {
     server.on('upgrade', (req, socket, head) => {
       socket.on('error', () => {});
       // Nothing an upgrade handler does may take the process down: refuse or drop the socket instead.
@@ -63,11 +64,21 @@ export function createApp({ manager, mcp, installer, distDir, onUpgrade }) {
           socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
           return;
         }
-        if (requestRefusal(req.headers, { requireOrigin: true, listenPort: listenPort() })) {
+        // The CDP relay is for local programs (no Origin, direct only); every other upgrade is the panel's.
+        const relay = parsePathname(req.url).startsWith(RELAY_PREFIX);
+        const refusal = relay
+          ? relayRefusal(req.headers, { listenPort: listenPort() })
+          : requestRefusal(req.headers, { requireOrigin: true, listenPort: listenPort() });
+        if (refusal) {
           socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
           return;
         }
-        onUpgrade(req, socket, head);
+        const handler = relay ? onRelayUpgrade : onUpgrade;
+        if (!handler) {
+          socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+          return;
+        }
+        handler(req, socket, head);
       } catch (err) {
         console.error('code-browser: upgrade failed:', err);
         socket.destroy();

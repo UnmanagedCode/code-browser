@@ -43,7 +43,9 @@ export class CdpConnection extends EventEmitter {
       if (!p) return;
       this.#pending.delete(msg.id);
       clearTimeout(p.timer);
-      if (msg.error) p.reject(new CodedError('CDP_ERROR', `${p.method}: ${msg.error.message}`));
+      p.signal?.removeEventListener('abort', p.onAbort);
+      if (p.onAnswer) p.onAnswer(msg.error ? { error: msg.error } : { result: msg.result ?? {} });
+      else if (msg.error) p.reject(new CodedError('CDP_ERROR', `${p.method}: ${msg.error.message}`));
       else p.resolve(msg.result ?? {});
     } else if (msg.method) {
       this.emit('event', { method: msg.method, params: msg.params ?? {}, sessionId: msg.sessionId });
@@ -55,7 +57,9 @@ export class CdpConnection extends EventEmitter {
     this.closed = true;
     for (const p of this.#pending.values()) {
       clearTimeout(p.timer);
-      p.reject(new CodedError('CDP_CLOSED', `${p.method}: connection closed`));
+      p.signal?.removeEventListener('abort', p.onAbort);
+      if (p.onAnswer) p.onAnswer(p.closedAnswer('connection closed'));
+      else p.reject(new CodedError('CDP_CLOSED', `${p.method}: connection closed`));
     }
     this.#pending.clear();
     this.emit('close');
@@ -78,6 +82,30 @@ export class CdpConnection extends EventEmitter {
       });
     });
   }
+
+  // A command forwarded on someone else's behalf (the CDP relay). `onAnswer` receives the raw answer, `{result}` or
+  // `{error: {code, message, data}}`, synchronously as it arrives, so answers and events keep the order Chromium sent
+  // them in (a promise would deliver an answer after the events of the same read: Playwright then drops an
+  // execution context for a frame it does not know yet). No timeout of its own. When the connection closes the answer
+  // is a CDP_CLOSED error; when `signal` aborts the command is dropped and its answer is never delivered.
+  forward(method, params, { sessionId, signal } = {}, onAnswer) {
+    const closedAnswer = (why) => ({ error: { code: -32000, message: `CDP_CLOSED: ${method}: ${why}` } });
+    if (signal?.aborted) return;
+    if (this.closed) { onAnswer(closedAnswer('connection closed')); return; }
+    const id = ++this.#nextId;
+    const onAbort = () => { this.#pending.delete(id); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    this.#pending.set(id, { method, onAnswer, closedAnswer, signal, onAbort });
+    this.#ws.send(JSON.stringify({ id, method, params, sessionId }), (err) => {
+      if (!err || !this.#pending.has(id)) return;
+      this.#pending.delete(id);
+      signal?.removeEventListener('abort', onAbort);
+      onAnswer(closedAnswer(err.message));
+    });
+  }
+
+  // How many commands await an answer (tests observe that an abort leaves none behind).
+  get pendingCount() { return this.#pending.size; }
 
   close() {
     this.#ws.terminate();

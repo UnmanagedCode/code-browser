@@ -46,8 +46,15 @@ export const INSTALL_POLL_MS = 1000;
 export const MAX_BODY_BYTES = 64 * 1024;
 export const WS_MAX_PAYLOAD = 64 * 1024;
 
-// CDP client and launch polling
-export const CDP_MAX_PAYLOAD = 64 * 1024 * 1024;
+// CDP client and launch polling. CDP_MAX_PAYLOAD matches Playwright's own CDP socket: relay clients share the
+// backend's upstream connection, and one answer larger than this would close it for the panel too.
+export const CDP_MAX_PAYLOAD = 256 * 1024 * 1024;
 export const POLL_MS = 25;
 export const LOG_TAIL_CHARS = 2000;
 export const LOG_SCAN_CHARS = 256 * 1024;
+
+// CDP relay (api/relay/<name>): helper clients per browser, and the most a client may leave unread before it is
+// dropped. The high-water mark is checked before each send, so one answer of up to CDP_MAX_PAYLOAD always fits.
+export const RELAY_MAX_CLIENTS = 8;
+export const RELAY_HIGH_WATER = CDP_MAX_PAYLOAD;
+export const RELAY_PING_MS = 20_000;
