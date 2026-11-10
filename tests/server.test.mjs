@@ -1,12 +1,15 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { createApp } from '../src/app.js';
 import { parseAttachTarget } from '../src/attachStore.js';
 import { CodedError } from '../src/errors.js';
-import { CSP } from '../src/http.js';
+import { CSP, readBytesBody } from '../src/http.js';
+import { ARTIFACT_MAX_BYTES } from '../src/limits.js';
 import { buildRoutes } from '../src/routes.js';
 import { JSON_HEADERS, listen, rawExchange, request, tmpDir } from './helpers.mjs';
 
@@ -74,9 +77,9 @@ function fakeInstaller({ hang = false } = {}) {
 }
 
 const servers = [];
-async function boot({ manager = fakeManager(), dist, mcp, installer = fakeInstaller() } = {}) {
+async function boot({ manager = fakeManager(), dist, mcp, installer = fakeInstaller(), dataDir, token } = {}) {
   const mcpStub = mcp ?? { calls: [], async handle(body) { this.calls.push(body); return { result: 'ok' }; } };
-  const server = createApp({ manager, mcp: mcpStub, installer, distDir: dist ?? path.join(tmpDir(), 'missing') });
+  const server = createApp({ manager, mcp: mcpStub, installer, distDir: dist ?? path.join(tmpDir(), 'missing'), dataDir, token });
   const port = await listen(server);
   servers.push(server);
   return { port, manager, mcp: mcpStub, installer, host: `127.0.0.1:${port}` };
@@ -347,6 +350,129 @@ test('an upgrade handler that throws cannot take the process down', async () => 
   const answer = await rawExchange(port, `GET /api/ws HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nOrigin: http://127.0.0.1:${port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`);
   assert.equal(answer, '');
   assert.equal((await request(port, { path: '/api/health' })).status, 200);
+});
+
+// Invariant: an upgrade under /api/relay/ goes to the relay only after the relay guard (no Origin, loopback Host on this
+// port), and never to the panel's handler; every other upgrade still needs a matching Origin and never reaches the relay.
+test('upgrade dispatch: relay guard for /api/relay/, Origin required elsewhere', async () => {
+  const seen = [];
+  const handler = (which) => (req, socket) => { seen.push(which); socket.end('HTTP/1.1 418 Teapot\r\nContent-Length: 0\r\n\r\n'); };
+  const server = createApp({ manager: fakeManager(), mcp: { handle: async () => ({}) }, distDir: tmpDir(), onUpgrade: handler('panel'), onRelayUpgrade: handler('relay') });
+  const port = await listen(server);
+  servers.push(server);
+  const upgrade = (p, headers) => rawExchange(port, `GET ${p} HTTP/1.1\r\n${Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('')}Upgrade: websocket\r\nConnection: Upgrade\r\n\r\n`);
+  const own = `127.0.0.1:${port}`;
+  for (const headers of [
+    { Host: own, Origin: `http://${own}` },
+    { Host: `rebound.evil.test:${port}` },
+    { Host: 'cc.example:9' },
+    { Host: '127.0.0.1:9' },
+  ]) {
+    assert.match(await upgrade('/api/relay/a', headers), /^HTTP\/1\.1 403 /, JSON.stringify(headers));
+  }
+  assert.deepEqual(seen, []);
+  assert.match(await upgrade('/api/relay/a', { Host: own }), /^HTTP\/1\.1 418 /);
+  assert.match(await upgrade('/api/relay/a', { Host: `localhost:${port}` }), /^HTTP\/1\.1 418 /);
+  assert.deepEqual(seen, ['relay', 'relay']);
+  assert.match(await upgrade('/api/ws', { Host: own }), /^HTTP\/1\.1 403 /, 'the panel socket still needs an Origin');
+  assert.match(await upgrade('/api/ws', { Host: own, Origin: `http://${own}` }), /^HTTP\/1\.1 418 /);
+  assert.deepEqual(seen, ['relay', 'relay', 'panel']);
+});
+
+// Invariant: with no relay handler wired, a relay upgrade is a 404 and never reaches the panel's handler.
+test('a relay upgrade without a relay is 404', async () => {
+  let called = false;
+  const server = createApp({ manager: fakeManager(), mcp: { handle: async () => ({}) }, distDir: tmpDir(), onUpgrade: () => { called = true; } });
+  const port = await listen(server);
+  servers.push(server);
+  const answer = await rawExchange(port, `GET /api/relay/a HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`);
+  assert.match(answer, /^HTTP\/1\.1 404 /);
+  assert.equal(called, false);
+});
+
+// ---- artifacts: POST api/artifacts ----
+const TOKEN = 'ab'.repeat(32);
+const BYTES = { 'content-type': 'application/octet-stream' };
+
+// Invariant: the artifacts route checks, in order, the Origin rule (403), the bearer token (401, whatever the content
+// type), the content type (415) and the declared size (413); nothing is written before all pass.
+test('artifacts: Origin, then token, then octet-stream, then size', async () => {
+  const dataDir = tmpDir();
+  const { port } = await boot({ dataDir, token: TOKEN });
+  const auth = { authorization: `Bearer ${TOKEN}` };
+  const post = (headers, body = 'x', p = '/api/artifacts?ext=png') => request(port, { method: 'POST', path: p, headers, body });
+  assert.equal((await post({ ...BYTES, ...auth, origin: 'http://evil.test' })).status, 403);
+  for (const headers of [BYTES, { 'content-type': 'text/plain' }, { ...BYTES, authorization: `Bearer ${'cd'.repeat(32)}` }, { ...BYTES, authorization: TOKEN }]) {
+    const r = await post(headers);
+    assert.equal(r.status, 401, JSON.stringify(headers));
+    assert.match(r.json.error, /^UNAUTHORIZED: /);
+  }
+  for (const type of ['text/plain', 'application/json', 'multipart/form-data; boundary=x', undefined]) {
+    assert.equal((await post({ ...auth, ...(type ? { 'content-type': type } : {}) })).status, 415, String(type));
+  }
+  const big = await rawExchange(port, `POST /api/artifacts?ext=png HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nAuthorization: Bearer ${TOKEN}\r\n` +
+    `Content-Type: application/octet-stream\r\nContent-Length: ${ARTIFACT_MAX_BYTES + 1}\r\nConnection: close\r\n\r\n`);
+  assert.match(big, /^HTTP\/1\.1 413 /);
+  assert.equal(fs.existsSync(path.join(dataDir, 'artifacts')), false, 'nothing written by a refused request');
+  assert.equal((await post({ ...BYTES, ...auth }, 'x', '/api/artifacts?ext=..')).status, 400);
+});
+
+// Invariant: with no token configured, the artifacts route refuses everyone.
+test('artifacts: no token configured means 401', async () => {
+  const { port } = await boot({ dataDir: tmpDir() });
+  const r = await request(port, { method: 'POST', path: '/api/artifacts?ext=png', headers: { ...BYTES, authorization: 'Bearer ' }, body: 'x' });
+  assert.equal(r.status, 401);
+});
+
+// Invariant: an accepted artifact answers 201 with the path of a private file holding exactly the posted bytes.
+test('artifacts: a valid post writes a private file and answers its path', async () => {
+  const dataDir = tmpDir();
+  const { port } = await boot({ dataDir, token: TOKEN });
+  const bytes = Buffer.from([0, 1, 2, 255, 254]);
+  const r = await request(port, { method: 'POST', path: '/api/artifacts?ext=png', headers: { ...BYTES, authorization: `Bearer ${TOKEN}` }, body: bytes });
+  assert.equal(r.status, 201);
+  assert.equal(path.dirname(r.json.path), path.join(dataDir, 'artifacts'));
+  assert.deepEqual(fs.readFileSync(r.json.path), bytes);
+  assert.equal(fs.statSync(r.json.path).mode & 0o777, 0o600);
+});
+
+// Invariant: a chunked artifact body (no Content-Length) that grows past the cap gets a real 413 PAYLOAD_TOO_LARGE answer,
+// not a reset, on a connection the server then closes; nothing is written.
+test('artifacts: a streamed body over the cap answers 413 and closes', async () => {
+  const dataDir = tmpDir();
+  const server = createApp({ manager: fakeManager(), mcp: { handle: async () => ({}) }, installer: fakeInstaller(), distDir: tmpDir(), dataDir, token: TOKEN, artifactMaxBytes: 1024 });
+  const port = await listen(server);
+  servers.push(server);
+  const answer = await new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/api/artifacts?ext=bin', headers: { ...BYTES, authorization: `Bearer ${TOKEN}` } }, (res) => {
+      let text = '';
+      res.on('data', (d) => { text += d; });
+      res.on('end', () => resolve({ status: res.statusCode, connection: res.headers.connection, json: JSON.parse(text) }));
+    });
+    req.on('error', reject);
+    const chunk = Buffer.alloc(16 * 1024);
+    let sent = 0;
+    const pump = () => {
+      while (sent < 1024 * 1024) {
+        sent += chunk.length;
+        if (!req.write(chunk)) { req.once('drain', pump); return; }
+      }
+      req.end();
+    };
+    pump();
+  });
+  assert.equal(answer.status, 413);
+  assert.match(answer.json.error, /^PAYLOAD_TOO_LARGE: /);
+  assert.equal(answer.connection, 'close');
+  assert.equal(fs.existsSync(path.join(dataDir, 'artifacts')), false);
+});
+
+// Invariant: a byte body that grows past the limit while streaming (no Content-Length) is refused with PAYLOAD_TOO_LARGE.
+test('readBytesBody refuses a streamed body over the limit', async () => {
+  const req = Object.assign(Readable.from([Buffer.alloc(6), Buffer.alloc(6)]), { headers: {} });
+  await assert.rejects(readBytesBody(req, 10), (e) => e.code === 'PAYLOAD_TOO_LARGE');
+  const ok = Object.assign(Readable.from([Buffer.from('ab'), Buffer.from('cd')]), { headers: {} });
+  assert.deepEqual(await readBytesBody(ok, 10), Buffer.from('abcd'));
 });
 
 // Invariant: DNS rebinding onto the backend's own port is refused: a hostname that is not loopback, naming this

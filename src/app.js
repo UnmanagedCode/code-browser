@@ -1,14 +1,19 @@
 import http from 'node:http';
 import { CodedError, describeError, detailsOf, statusFor } from './errors.js';
-import { parsePathname, readJsonBody, requireJson, sendJson, serveStatic } from './http.js';
-import { requestRefusal } from './requestGuard.js';
+import { parsePathname, readBytesBody, readJsonBody, requireJson, requireOctetStream, sendJson, serveStatic } from './http.js';
+import { RELAY_PREFIX } from './cdpRelay.js';
+import { relayRefusal, requestRefusal } from './requestGuard.js';
+import { checkBearer } from './relayToken.js';
 import { buildRoutes } from './routes.js';
 
 // The HTTP server. Check order for every request: Origin/Host (403) → route (404/405)
-// → panel-only route without an Origin (403) → content type (415) → body → handler. No handler runs before the guards pass.
+// → panel-only route without an Origin (403) → token route without the bearer token (401) → content type (415)
+// → body (413) → handler. No handler runs before the guards pass.
 // Health is a constant answer and skips the loopback-Host rule (docs/protocol.md → Request guard).
-export function createApp({ manager, mcp, installer, distDir, onUpgrade }) {
-  const routes = buildRoutes({ manager, mcp, installer });
+// `token` is the relay token (relayToken.js); with none, every token route answers 401.
+// `artifactMaxBytes` overrides ARTIFACT_MAX_BYTES (tests).
+export function createApp({ manager, mcp, installer, distDir, dataDir, token, onUpgrade, onRelayUpgrade, artifactMaxBytes }) {
+  const routes = buildRoutes({ manager, mcp, installer, dataDir, artifactMaxBytes });
   const listenPort = () => server.address()?.port;
 
   async function dispatch(req, res) {
@@ -26,12 +31,20 @@ export function createApp({ manager, mcp, installer, distDir, onUpgrade }) {
       if (route.requireOrigin && req.headers.origin === undefined) {
         return sendJson(res, 403, { error: 'FORBIDDEN: this route is for the panel only and needs an Origin' });
       }
+      if (route.token && !(token && checkBearer(req.headers, token))) {
+        return sendJson(res, 401, { error: 'UNAUTHORIZED: this route needs Authorization: Bearer <the relay token>' });
+      }
       let body;
-      if (route.mutating) {
+      if (route.bytes) {
+        requireOctetStream(req);
+        // A refused body is left unread: the answer closes the connection rather than wait for the rest of it.
+        body = await readBytesBody(req, route.bytes).catch((err) => { res.setHeader('Connection', 'close'); throw err; });
+      } else if (route.mutating) {
         requireJson(req);
         body = await readJsonBody(req);
       }
-      const out = await route.handler({ params: m.slice(1).map(decodeURIComponent), body });
+      const query = new URL(req.url, 'http://localhost').searchParams;
+      const out = await route.handler({ params: m.slice(1).map(decodeURIComponent), query, body });
       if (out && out.status && out.body) return sendJson(res, out.status, out.body);
       return sendJson(res, 200, out);
     }
@@ -54,7 +67,7 @@ export function createApp({ manager, mcp, installer, distDir, onUpgrade }) {
         "Content-Security-Policy: default-src 'none'\r\nX-Content-Type-Options: nosniff\r\n\r\n");
     }
   });
-  if (onUpgrade) {
+  if (onUpgrade || onRelayUpgrade) {
     server.on('upgrade', (req, socket, head) => {
       socket.on('error', () => {});
       // Nothing an upgrade handler does may take the process down: refuse or drop the socket instead.
@@ -63,11 +76,22 @@ export function createApp({ manager, mcp, installer, distDir, onUpgrade }) {
           socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
           return;
         }
-        if (requestRefusal(req.headers, { requireOrigin: true, listenPort: listenPort() })) {
+        // The CDP relay is for local programs (no Origin, a loopback Host on this port; its token is the gate); every other
+        // upgrade is the panel's.
+        const relay = parsePathname(req.url).startsWith(RELAY_PREFIX);
+        const refusal = relay
+          ? relayRefusal(req.headers, { listenPort: listenPort() })
+          : requestRefusal(req.headers, { requireOrigin: true, listenPort: listenPort() });
+        if (refusal) {
           socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
           return;
         }
-        onUpgrade(req, socket, head);
+        const handler = relay ? onRelayUpgrade : onUpgrade;
+        if (!handler) {
+          socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+          return;
+        }
+        handler(req, socket, head);
       } catch (err) {
         console.error('code-browser: upgrade failed:', err);
         socket.destroy();

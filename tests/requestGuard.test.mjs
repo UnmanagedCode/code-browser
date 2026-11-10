@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { requestRefusal } from '../src/requestGuard.js';
+import { relayRefusal, requestRefusal } from '../src/requestGuard.js';
 
 // Invariant: a request that carries an Origin passes only when Origin's host:port equals Host.
 test('matching Origin and Host passes; mismatched host or port is refused', () => {
@@ -50,4 +50,18 @@ test('listenPort: direct connections must use a loopback host', () => {
 test('listenPort: a Host without a port means the scheme default', () => {
   assert.match(requestRefusal({ host: 'evil.test' }, { listenPort: 80 }), /loopback/);
   assert.equal(requestRefusal({ host: 'localhost' }, { listenPort: 80 }), null);
+});
+
+// Invariant: the relay is for local programs and direct only: any Origin is refused, and so is any Host but a loopback
+// name on the backend's own port (a proxied request names the proxy's host or port).
+test('relayRefusal: no Origin, loopback Host on the own port only', () => {
+  for (const host of ['127.0.0.1:7471', 'localhost:7471', '[::1]:7471']) assert.equal(relayRefusal({ host }, { listenPort: 7471 }), null, host);
+  assert.match(relayRefusal({ host: '127.0.0.1:7471', origin: 'http://127.0.0.1:7471' }, { listenPort: 7471 }), /Origin/);
+  assert.match(relayRefusal({ host: '127.0.0.1:7471', origin: 'null' }, { listenPort: 7471 }), /Origin/);
+  assert.match(relayRefusal({ host: 'rebound.evil.test:7471' }, { listenPort: 7471 }), /loopback/);
+  assert.match(relayRefusal({ host: '127.0.0.1:9' }, { listenPort: 7471 }), /own port/);
+  assert.match(relayRefusal({ host: 'cc.example:7471' }, { listenPort: 7471 }), /loopback/);
+  assert.match(relayRefusal({ host: '127.0.0.1' }, { listenPort: 7471 }), /own port/);
+  assert.match(relayRefusal({}, { listenPort: 7471 }), /no Host/);
+  assert.match(relayRefusal({ host: 'user@127.0.0.1:7471' }, { listenPort: 7471 }), /malformed/);
 });

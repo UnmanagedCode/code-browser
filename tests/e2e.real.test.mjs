@@ -281,6 +281,43 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
       await p2.getByText('Agent has control').waitFor();
     });
 
+    // The run_code helper as a program reaches it without cc's import(): by the file URL in browser_info's helper.module,
+    // under cc's plan-mode permissions. `cc` here is a stand-in for cc's runtime object: browser_info over api/mcp in json.
+    await t.test('5b. the run_code helper on the absolute-path route under --permission: connect, evaluate, save, MODULE_UNKNOWN', async () => {
+      const program = `
+const cc = { code_browser: { browser_info: async (args) => {
+  const r = await (await fetch(${JSON.stringify(`http://127.0.0.1:${port}/api/mcp`)}, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ tool: 'browser_info', arguments: args, format: 'json' }) })).json();
+  if (r.error) throw Object.assign(new Error(r.code + ': ' + r.error), { code: r.code });
+  return r.structured;
+} } };
+const info = await cc.code_browser.browser_info({ name: 'e2e' });
+const mod = await import(info.helper.module);
+let unknown = null;
+try { mod.default({ cc, module: 'nope' }); } catch (e) { unknown = e.code; }
+const { browser, page, save } = await mod.default({ cc, module: null }).connect({ name: 'e2e' });
+await page.goto(${JSON.stringify(`${fixtureUrl}?helper`)});
+const title = await page.evaluate(() => document.title);
+const shot = await save(await page.screenshot(), 'png');
+await browser.close();
+console.log(JSON.stringify({ title, shot, unknown }));
+`;
+      const file = path.join(projectsRoot, `helper-${Date.now()}.mjs`);
+      fs.writeFileSync(file, program);
+      const child = spawn(process.execPath, ['--permission', '--allow-fs-read=*', file], { cwd: projectsRoot, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 });
+      let out = '';
+      child.stdout.on('data', (d) => { out += d; });
+      child.stderr.on('data', (d) => { out += d; });
+      assert.equal(await new Promise((resolve) => child.on('close', resolve)), 0, out);
+      const r = JSON.parse(out.trim().split('\n').at(-1));
+      assert.equal(r.title, 'fixture');
+      assert.equal(r.unknown, 'MODULE_UNKNOWN');
+      assert.equal(path.dirname(r.shot), path.join(dataDir, 'artifacts'));
+      assert.deepEqual(fs.readFileSync(r.shot).subarray(0, 8), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'a PNG');
+      assert.equal(modeOf(r.shot), 0o600);
+      assert.equal((await listed()).status, 'running', 'disconnecting the helper leaves the browser running');
+    });
+
     await t.test('6. the panel follows a new agent tab and shows a page dialog', async () => {
       await agent(`const p2 = await context.newPage(); await p2.goto(${JSON.stringify(`${fixtureUrl}?second`)});`);
       await p1.getByRole('tab', { name: 'second', selected: true }).waitFor({ timeout: 10_000 });
@@ -483,7 +520,7 @@ console.log(await page.textContent('#result'));`);
       assert.notEqual(Number(endpoint.port), own.port, 'agents reach the browser through the backend tunnel');
       assert.equal(info.sandbox, null);
       for (const text of [JSON.stringify(info), JSON.stringify(await tool(backend.port, 'list_browsers'))]) assert.ok(!text.includes(secretOf()));
-      assert.match(info.snippet, /your own tab/);
+      assert.match(info.snippet, /pickPage\(context, \{ activeTargetId: null, kind: "attached" \}\)/, "pickPage's attached rule: the agent's own tab");
       assert.match((await toolText(backend.port, 'browser_info', { name: 'mine' })).text, /```js\n[\s\S]*connectOverCDP/);
       await agent(`await page.goto(${JSON.stringify(fixtureUrl)});`, 'mine');
       const shapeOf = async () => agent(`console.log(JSON.stringify(await page.evaluate(() => ({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio }))));`, 'mine');

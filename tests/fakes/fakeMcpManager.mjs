@@ -1,4 +1,8 @@
 import { CodedError } from '../../src/errors.js';
+import { createHelperInfo } from '../../src/helperInfo.js';
+
+// The `helper` field for MCP tests: a plugin dir, data dir and port of no real backend.
+export const testHelperInfo = createHelperInfo({ pluginDir: '/plug', dataDir: '/data', port: () => 7470 });
 
 // A manager double for the MCP tool tests: the summary shape of the real manager, with canned tabs.
 export function fakeManager({ controller = 'agent', sandbox = true, refuse = false, attached = null, asksApproval = false, tabs = null } = {}) {

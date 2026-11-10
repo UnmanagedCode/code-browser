@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createMcp } from '../src/mcp.js';
+import { testHelperInfo } from './fakes/fakeMcpManager.mjs';
 import { PROTOCOL } from '../src/proxyProtocol.js';
 import { call } from './_mcpCall.mjs';
 import { fakeProxy } from './fakes/fakeProxy.mjs';
@@ -18,7 +19,7 @@ test('no tool result carries the proxy secret', async () => {
   const secret = JSON.parse(fs.readFileSync(path.join(dataDir, 'proxy', PROTOCOL.rendezvous.backendFile), 'utf8')).secret;
   const proxy = await fakeProxy(dataDir);
   const f = await externalFake();
-  const mcp = createMcp({ manager: stack.manager, pluginDir: '/plug', pluginId: 'code-browser' });
+  const mcp = createMcp({ manager: stack.manager, pluginDir: '/plug', pluginId: 'code-browser', helperInfo: testHelperInfo });
   try {
     await stack.manager.attach('mine', { address: f.address, via: 'proxy' });
     await waitFor(() => stack.manager.session('mine').snapshot().tabs.length === 1, { what: 'tabs through the proxy' });

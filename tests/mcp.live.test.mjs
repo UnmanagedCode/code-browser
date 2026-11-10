@@ -7,6 +7,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { createBrowserManager } from '../src/browserManager.js';
 import { createMcp } from '../src/mcp.js';
+import { testHelperInfo } from './fakes/fakeMcpManager.mjs';
 import { readRun } from '../src/runState.js';
 import { call } from './_mcpCall.mjs';
 import { FAKE_CHROMIUM, externalFake, liveStack, pidAlive, tmpDir, waitFor } from './helpers.mjs';
@@ -18,7 +19,7 @@ afterEach(async () => {
   stack = null;
   for (const fn of cleanups.splice(0)) await fn();
 });
-const mcpOf = (manager) => createMcp({ manager, pluginDir: '/plug', pluginId: 'code-browser' });
+const mcpOf = (manager) => createMcp({ manager, pluginDir: '/plug', pluginId: 'code-browser', helperInfo: testHelperInfo });
 const freePort = () => new Promise((resolve) => {
   const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
 });

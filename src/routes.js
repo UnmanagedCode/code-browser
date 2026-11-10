@@ -1,10 +1,14 @@
+import { saveArtifact } from './artifacts.js';
 import { CodedError } from './errors.js';
+import { ARTIFACT_MAX_BYTES } from './limits.js';
 
 // REST table. Every GET handler is read-only: <img> tags and simple requests from any page can reach them.
 // `mutating` routes require a JSON body (the guard enforces it before the handler runs).
 // `requireOrigin` routes are for the panel only: a request with no Origin (cc's MCP bridge, curl) is refused;
 // starting a Chromium install is one of them.
-export function buildRoutes({ manager, mcp, installer }) {
+// `token` routes need the relay's bearer token; `bytes` routes take an application/octet-stream body of at most that
+// many bytes instead of JSON.
+export function buildRoutes({ manager, mcp, installer, dataDir, artifactMaxBytes = ARTIFACT_MAX_BYTES }) {
   const name = '([^/]+)';
   // A connect's failure is kept in the browser's summary (`attachError`), not thrown here.
   const accepted = (connecting, n) => {
@@ -57,6 +61,11 @@ export function buildRoutes({ manager, mcp, installer }) {
     {
       method: 'POST', path: /^\/api\/chromium\/install$/, mutating: true, requireOrigin: true,
       handler: () => ({ status: 202, body: { install: installer.start() } }),
+    },
+    // A program's bytes (a screenshot), kept under the data dir; the answer is the file's path.
+    {
+      method: 'POST', path: /^\/api\/artifacts$/, token: true, bytes: artifactMaxBytes,
+      handler: ({ query, body }) => ({ status: 201, body: saveArtifact(dataDir, body, query.get('ext')) }),
     },
     {
       method: 'POST', path: /^\/api\/mcp$/, mutating: true,

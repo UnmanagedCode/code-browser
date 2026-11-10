@@ -1,13 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { pluginDir } from '../src/config.js';
+import { createHelperInfo } from '../src/helperInfo.js';
+import { ensureRelayToken, relayTokenFile } from '../src/relayToken.js';
+import { tmpDir } from './helpers.mjs';
 import { createMcp } from '../src/mcp.js';
 import { buildSnippet } from '../src/snippet.js';
 import { call } from './_mcpCall.mjs';
-import { fakeManager } from './fakes/fakeMcpManager.mjs';
+import { fakeManager, testHelperInfo } from './fakes/fakeMcpManager.mjs';
 
 const manifest = JSON.parse(fs.readFileSync(new URL('../conductor.plugin.json', import.meta.url), 'utf8'));
-const make = (opts, manager = fakeManager(opts)) => createMcp({ manager, pluginDir: '/plug', pluginId: 'code-browser' });
+const make = (opts, manager = fakeManager(opts)) => createMcp({ manager, pluginDir: '/plug', pluginId: 'code-browser', helperInfo: testHelperInfo });
 const PANEL_E2E = '/#plugin/code-browser/?browser=e2e';
 
 // Invariant: the manifest advertises exactly the tools the handler serves, so no tool is declared but dead.
@@ -42,7 +47,9 @@ test('start_browser/browser_info: json data and text view agree', async () => {
     assert.equal(r.meta.cdpEndpoint, 'http://127.0.0.1:9333');
     assert.equal(r.meta.controller, 'agent');
     assert.deepEqual(r.meta.tabs.map((t) => t.targetId), ['T1']);
-    assert.deepEqual(Object.keys(r.meta), ['name', 'kind', 'status', 'attached', 'cdpEndpoint', 'controller', 'sandbox', 'allowUnsandboxed', 'tabs', 'panelPath']);
+    assert.deepEqual(Object.keys(r.meta), ['name', 'kind', 'status', 'attached', 'cdpEndpoint', 'controller', 'sandbox', 'allowUnsandboxed', 'tabs', 'panelPath', 'helper']);
+    assert.deepEqual(r.meta.helper, testHelperInfo('e2e'));
+    assert.ok(r.text.includes('In run_code: const { page } = await (await cc.code_browser.import()).connect({ name: "e2e" });'));
     assert.ok(r.text.includes(PANEL_E2E));
     assert.match(r.text, /relative to the address the user opens cc at/);
     assert.match(r.text, /Do not add a host/);
@@ -57,6 +64,7 @@ test('start_browser/browser_info: json data and text view agree', async () => {
   assert.deepEqual(started2.structured, d);
   assert.equal(d.panelPath, PANEL_E2E);
   assert.equal(d.snippet, buildSnippet({ pluginDir: '/plug', cdpEndpoint: 'http://127.0.0.1:9333', activeTargetId: 'T1' }));
+  assert.deepEqual(d.helper, testHelperInfo('e2e'));
   assert.ok(d.rules.some((r) => /never `newContext\(\)`/.test(r)) && d.rules.some((r) => /viewport is \d+ px wide/.test(r)));
   assert.deepEqual(d.notes, []);
   assert.ok(info.text.includes(`\`\`\`js\n${d.snippet.trimEnd()}\n\`\`\``), 'text fences the same snippet');
@@ -241,18 +249,18 @@ test('browser_info on an attached browser: data, note and own-tab snippet', asyn
   assert.match(r.text, /user's own browser/);
   assert.match(r.text, /Work in your own tab/);
   assert.match(r.text, /stop_browser only disconnects/);
-  assert.match(r.text, /context\.newPage\(\); \/\/ your own tab/);
+  assert.match(r.text, /kind: "attached"/);
   assert.doesNotMatch(r.text, /Allow remote debugging/);
   const d = (await call(mcp, 'browser_info', { name: 'mine' }, 'json')).structured;
   assert.equal(d.kind, 'attached');
   assert.equal(d.notes.length, 1);
   assert.match(d.notes[0], /Work in your own tab/);
-  assert.match(d.snippet, /context\.newPage\(\); \/\/ your own tab/);
+  assert.match(d.snippet, /pickPage\(context, \{ activeTargetId: null, kind: "attached" \}\)/);
   assert.ok(!d.rules.some((x) => /viewport/.test(x)), 'the viewport rule is for launched browsers');
 });
 
-// Invariant: when Chrome asks approval per connection, the agent is told (text and notes) to warn the user before each
-// script and the snippet waits for the click.
+// Invariant: when Chrome asks approval per connection, the agent is told (text and notes) that the run_code helper asks
+// nothing and to warn the user before each snippet script, and the snippet waits for the click.
 test('an attached browser that asks approval adds the approval note', async () => {
   const manager = fakeManager({ attached: 'direct', asksApproval: true });
   manager.ensure('mine');
@@ -260,7 +268,8 @@ test('an attached browser that asks approval adds the approval note', async () =
   const mcp = make({}, manager);
   const r = await call(mcp, 'browser_info', { name: 'mine' }, 'text');
   assert.match(r.text, /Allow remote debugging\?/);
-  assert.match(r.text, /Tell the user before you run a script/);
+  assert.match(r.text, /run_code helper .* asks nothing/);
+  assert.match(r.text, /tell the user before you run one/);
   assert.match(r.text, /connectOverCDP\("ws:\/\/127\.0\.0\.1:9333\/devtools\/browser", \{ timeout: \d+ \}\)/);
   const d = (await call(mcp, 'browser_info', { name: 'mine' }, 'json')).structured;
   assert.equal(d.notes.length, 2);
@@ -277,5 +286,42 @@ test('no tool\'s text equals its json', async () => {
     const j = await call(mcp, tool, { name: 'a' }, 'json');
     assert.notDeepEqual(t, j);
     assert.notEqual(t.text, JSON.stringify(j.structured));
+  }
+});
+
+// Invariant: `helper` locates everything the run_code helper needs: its own module as a file URL to the real file, the
+// relay for this browser on the backend's port, the artifacts route, and the token file and artifacts dir under the
+// data dir.
+test('helper names the module, relay, artifacts route, token file and artifacts dir', async () => {
+  const dataDir = tmpDir();
+  const helperInfo = createHelperInfo({ pluginDir, dataDir, port: () => 7470 });
+  const manager = fakeManager();
+  const mcp = createMcp({ manager, pluginDir, pluginId: 'code-browser', helperInfo });
+  const { helper } = (await call(mcp, 'start_browser', { name: 'a' }, 'json')).structured;
+  assert.ok(helper.module.startsWith('file:'));
+  assert.equal(fileURLToPath(helper.module), fileURLToPath(new URL('../src/runCode/index.js', import.meta.url)));
+  assert.ok(fs.existsSync(fileURLToPath(helper.module)));
+  assert.equal(helper.relay, 'ws://127.0.0.1:7470/api/relay/a');
+  assert.equal(helper.artifacts, 'http://127.0.0.1:7470/api/artifacts');
+  assert.equal(helper.tokenFile, relayTokenFile(dataDir));
+  assert.ok(helper.artifactsDir.startsWith(`${dataDir}/`));
+});
+
+// Invariant: the relay token's value appears in no tool result, json or text: tools name the file only.
+test('the relay token value is in no tool result', async () => {
+  const dataDir = tmpDir();
+  const token = ensureRelayToken(dataDir);
+  for (const opts of [{}, { attached: 'direct', asksApproval: true }, { controller: 'human', sandbox: false }]) {
+    const manager = fakeManager(opts);
+    const mcp = createMcp({ manager, pluginDir, pluginId: 'code-browser', helperInfo: createHelperInfo({ pluginDir, dataDir, port: () => 7470 }) });
+    manager.ensure('a');
+    if (opts.attached) manager.state.get('a').status = 'running';
+    const results = [];
+    for (const format of ['json', 'text']) {
+      if (!opts.attached) results.push(await call(mcp, 'start_browser', { name: 'a' }, format));
+      results.push(await call(mcp, 'browser_info', { name: 'a' }, format), await call(mcp, 'list_browsers', {}, format));
+    }
+    results.push(await call(mcp, 'stop_browser', { name: 'a' }, 'json'));
+    for (const r of results) assert.ok(!JSON.stringify(r).includes(token), JSON.stringify(opts));
   }
 });

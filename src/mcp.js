@@ -4,21 +4,7 @@ import { assertName } from './browserManager.js';
 import { panelPath } from './panelLink.js';
 import { buildSnippet } from './snippet.js';
 import { TEXT_VIEWS } from './mcpViews.js';
-
-const HUMAN_NOTE = 'A human currently has control of this browser. Do not drive it: do not click, type or navigate. '
-  + 'Call browser_info again later; it shows controller "agent" once control is back.';
-
-const UNSANDBOXED_NOTE = "WARNING: this browser runs without Chromium's sandbox (the host has no usable one), so a compromised page could "
-  + 'run code as the host user. Do not browse untrusted pages in it, especially with logged-in profiles.';
-
-const ATTACHED_NOTE = "This is the user's own browser, which they attached in the panel: its other tabs and logged-in sessions are theirs. "
-  + "Work in your own tab and do not close tabs you did not open. `sandbox` is null because code-browser did not launch it, "
-  + 'so nothing is known about its sandbox or profile. stop_browser only disconnects, and only the user can reconnect it. '
-  + 'A person may be using its window right now.';
-
-const APPROVAL_NOTE = 'Chrome asks the user "Allow remote debugging?" for every connection to this browser, and each script you run '
-  + 'opens a new one. Tell the user before you run a script; it waits until they click Allow and fails with 403 if they cancel. '
-  + 'Do the work in as few scripts as possible.';
+import { APPROVAL_NOTE, ATTACHED_NOTE, HUMAN_NOTE, UNSANDBOXED_NOTE } from './notes.js';
 
 const RELATIVE_PATH = 'relative to the address the user opens cc at; do not add a host';
 
@@ -58,7 +44,8 @@ function messageOf(err) {
 //   format "text" → {text, meta?}  (an absent format means text)
 //   a refusal     → {error, code, details?}
 // Each handler returns the complete json data; src/mcpViews.js renders the text from it.
-export function createMcp({ manager, pluginDir, pluginId }) {
+// `helperInfo(name)` builds the `helper` field (src/helperInfo.js).
+export function createMcp({ manager, pluginDir, pluginId, helperInfo }) {
   const nameOf = (args) => assertName(args.name ?? DEFAULT_BROWSER_NAME);
 
   async function browserInfo(name) {
@@ -88,6 +75,7 @@ export function createMcp({ manager, pluginDir, pluginId }) {
         ...(info.kind === 'launched' ? [`The page viewport is ${DEFAULT_WINDOW.width} px wide; its height follows the shape of the person's panel and can change between scripts. Read innerHeight instead of assuming it, and do not set your own viewport (page.setViewportSize): it conflicts with the panel's.`] : []),
       ],
       snippet: buildSnippet({ pluginDir, cdpEndpoint: info.cdpEndpoint, activeTargetId: info.activeTargetId, attached, asksApproval }),
+      helper: helperInfo(name),
     };
   }
 

@@ -14,13 +14,15 @@ Applied by `src/app.js` to every HTTP request, in this order; no handler runs be
 | 1 | A request that carries an `Origin` must have the same host:port as `Host`; and a `Host` that names the backend's own port must be a loopback name (`127.0.0.1`, `localhost`, `[::1]`). `api/health` skips the loopback rule. (`src/requestGuard.js`, `requestRefusal`) | `403` |
 | 2 | Route lookup | `404` unknown path, `405` wrong method |
 | 2b | A route marked `requireOrigin` (the panel-only routes, below) needs an `Origin` header | `403` |
-| 3 | Every state-changing route (`POST`, `DELETE`), `api/mcp` included, needs `Content-Type: application/json` | `415` |
-| 4 | Body read: size cap `MAX_BODY_BYTES` (`src/limits.js`), valid JSON; an empty body reads as `{}` | `413`, `400` |
+| 2c | A route marked `token` (`POST api/artifacts`) needs `Authorization: Bearer <relay token>` (`checkBearer`, `src/relayToken.js`) | `401 UNAUTHORIZED` |
+| 3 | Every state-changing route (`POST`, `DELETE`), `api/mcp` included, needs `Content-Type: application/json`; a route marked `bytes` (`POST api/artifacts`) needs `application/octet-stream` instead | `415` |
+| 4 | Body read: JSON routes cap `MAX_BODY_BYTES` (`src/limits.js`), valid JSON, an empty body reads as `{}`; a `bytes` route caps its own limit (`ARTIFACT_MAX_BYTES`), and a declared `Content-Length` over it is refused before anything is read | `413`, `400` |
 
 - A request with **no** `Origin` skips only check 1. cc calls `api/mcp` server-side without one.
 - A foreign `Origin` is refused on `api/mcp` too, and a `text/plain` or form body is refused with `415` whatever the `Origin`.
 - A **panel-only route** (`requireOrigin` in `src/routes.js`: `POST api/browsers/:name/allow-unsandboxed`, `…/attach`, `…/connect`, `POST api/chromium/install`) additionally refuses a request with **no** `Origin` (`403`, before the content-type check). A browser always sends `Origin` on a `fetch` POST and cc's proxy passes it through, so the panel is unaffected; cc's MCP bridge and plain scripts send none. This is not a defence against a client that adds the header.
-- A WebSocket upgrade must carry an `Origin` (see below).
+- A WebSocket upgrade must carry an `Origin` (see below), except the CDP relay, which must carry none ([CDP relay](#cdp-relay-apirelayname)).
+- `POST api/artifacts` is for local programs: a page cannot send `application/octet-stream` without a preflight, and none holds the token.
 - Every response carries the CSP and `nosniff`, `no-referrer`, `no-store` (`src/http.js`, `SECURITY_HEADERS`), including `404`, `503` and the reply to a malformed request (`clientError`).
 
 ## REST
@@ -39,6 +41,7 @@ Applied by `src/app.js` to every HTTP request, in this order; no handler runs be
 | `POST api/browsers/:name/connect` | `{}` | `202 {browser: summary}` (status `connecting`); panel-only; connects an attached browser in the background; `400 BAD_REQUEST` for a profile, `404 NOT_FOUND` for an unknown name |
 | `DELETE api/browsers/:name` | — | `{ok:true}`; stops the browser and moves the profile to the trash dir. For an attached browser: disconnects and removes the record only |
 | `POST api/mcp` | `{tool, arguments, caller, format}` | see MCP |
+| `POST api/artifacts?ext=<ext>` | raw bytes, `application/octet-stream` | `201 {path}`: the absolute path of a new file under `<dataDir>/artifacts`, mode `0600`. Needs the bearer token. `ext` must match `EXT_RE` (`src/artifacts.js`), else `400 BAD_REQUEST`. The dir keeps the newest `ARTIFACTS_KEEP` files (the new one always among them; subdirectories untouched) |
 
 `summary` = `{name, kind: "launched"|"attached", status: "running"|"stopped"|"connecting", controller: "agent"|"human", sandbox: boolean|null, allowUnsandboxed: boolean, sandboxUnavailable: boolean, lastExit: {code, signal, at}|null, cdpEndpoint: string|null, attached: {address, via, asksApproval: boolean|null}|null, attachError: string|null}`. `lastExit` is set only after an unexpected exit (for an attached browser: the connection dropped; the panel shows *Disconnected*). `allowUnsandboxed` is the human's per-browser opt-in to run without Chromium's sandbox. `sandboxUnavailable` is true after a start was refused for want of a sandbox, until a start succeeds or the browser is deleted; it is held in memory and does not survive a backend restart.
 
@@ -50,7 +53,7 @@ Attached browsers (`kind: "attached"`, a person's own browser):
 - `sandbox` is `null`, `allowUnsandboxed` and `sandboxUnavailable` are `false`.
 - `cdpEndpoint` is a URL on the backend's own loopback: `http://127.0.0.1:<port>` (direct), `http://127.0.0.1:<tunnel port>` (through the proxy), or `ws://…/devtools/browser` in approval mode. It never carries the proxy secret.
 
-Errors are `{error: "<CODE>: <message>"}` (plus `details` when the error carries extras) with the status from `src/errors.js` (`statusFor`): `INVALID_NAME`/`BAD_REQUEST`/`BAD_ENDPOINT` 400, `FORBIDDEN` 403, `NOT_FOUND` 404, `EXISTS`/`NOT_RUNNING`/`SANDBOX_UNAVAILABLE`/`ATTACHED`/`INSTALL_RUNNING` 409, `PAYLOAD_TOO_LARGE` 413, `UNSUPPORTED_MEDIA_TYPE` 415, anything else 500 (`CHROMIUM_NOT_FOUND`, `LAUNCH_FAILED`, `INSTALL_UNAVAILABLE`). A failed connect of an attached browser has no HTTP status: attach and connect answer `202` before connecting, and the failure arrives as the summary's `attachError` (an `ATTACH_FAILED` or `EXISTS` message).
+Errors are `{error: "<CODE>: <message>"}` (plus `details` when the error carries extras) with the status from `src/errors.js` (`statusFor`): `INVALID_NAME`/`BAD_REQUEST`/`BAD_ENDPOINT` 400, `UNAUTHORIZED` 401, `FORBIDDEN` 403, `NOT_FOUND` 404, `EXISTS`/`NOT_RUNNING`/`SANDBOX_UNAVAILABLE`/`ATTACHED`/`INSTALL_RUNNING`/`BROWSER_CONTROLLED` 409, `PAYLOAD_TOO_LARGE` 413, `UNSUPPORTED_MEDIA_TYPE` 415, `RELAY_FULL` 503, anything else 500 (`CHROMIUM_NOT_FOUND`, `LAUNCH_FAILED`, `INSTALL_UNAVAILABLE`). A failed connect of an attached browser has no HTTP status: attach and connect answer `202` before connecting, and the failure arrives as the summary's `attachError` (an `ATTACH_FAILED` or `EXISTS` message).
 
 A `CodedError` that carries machine-readable extras also returns them as `details`: `CHROMIUM_NOT_FOUND` has `tried` + `install`, or `path`; `LAUNCH_FAILED` has `logTail`. `error` still renders them as text through `describeError` in `src/errors.js` (the tried paths, the install command, the log tail), so a caller that reads only `error` loses nothing. An error without extras has no `details` key.
 
@@ -86,7 +89,7 @@ Check order in `handle`: `format`, then `tool`, then `arguments`, then the tool.
 | `list_browsers` | — | `{browsers: [summary]}`, every browser | one line per browser using the json field names with JSON-literal values, then a hint to call `browser_info` |
 | `start_browser` | `name?` | as `browser_info`; creates the profile when the name is new; no-op when running | as `browser_info` |
 | `stop_browser` | `name?` | `{name, kind, status: "stopped"}` | one sentence; for an attached browser it says code-browser only disconnected and that only the user reconnects |
-| `browser_info` | `name?` | `{...summary, tabs, activeTargetId, panelPath, notes, rules, snippet}` | `{text, meta}` |
+| `browser_info` | `name?` | `{...summary, tabs, activeTargetId, panelPath, notes, rules, snippet, helper}` | `{text, meta}` |
 
 `name` defaults to `default` and must match `NAME_RE` (`src/limits.js`). No tool attaches or connects a browser, and every tool takes `name` only; other arguments (such as `allowUnsandboxed`) are ignored. `arguments` must be an object (`BAD_REQUEST` otherwise).
 
@@ -96,11 +99,12 @@ Check order in `handle`: `format`, then `tool`, then `arguments`, then the tool.
 
 - `tabs`: `[{targetId, url, title, active}]`, every tab; `activeTargetId`.
 - `panelPath`: `/#plugin/<id>/?browser=<name>`, relative to the address the user opens cc at; do not add a host.
-- `notes`: the warnings that apply now, in text order: the do-not-drive note when `controller` is `human`; the `WARNING` when `sandbox` is `false`; for an attached browser the attached note (`ATTACHED_NOTE` in `src/mcp.js`: the user's tabs and logins, work in your own tab, do not close tabs you did not open, `sandbox` is null, `stop_browser` only disconnects and only the user reconnects, a person may be using the window); when `attached.asksApproval` the approval note (`APPROVAL_NOTE`: every script's connection raises Chrome's dialog, tell the user first, use few scripts).
+- `notes`: the warnings that apply now, in text order (`src/notes.js`): the do-not-drive note when `controller` is `human` (`HUMAN_NOTE`, which also says the run_code helper is refused); the `WARNING` when `sandbox` is `false`; for an attached browser the attached note (`ATTACHED_NOTE`: the user's tabs and logins, work in your own tab, do not close tabs you did not open, `sandbox` is null, `stop_browser` only disconnects and only the user reconnects, a person may be using the window); when `attached.asksApproval` the approval note (`APPROVAL_NOTE`: the run_code helper asks nothing, each Bash snippet script raises Chrome's dialog, tell the user first, use few snippet scripts).
 - `rules`: the Playwright rules (the viewport rule only for launched browsers).
-- `snippet`: the whole ready-to-run script (`src/snippet.js`: for an attached browser with no active tab it opens its own tab; in approval mode `connectOverCDP` waits `APPROVAL_TIMEOUT_MS`).
+- `snippet`: the whole ready-to-run Bash script (`src/snippet.js`). It connects to the raw `cdpEndpoint`, picks its page with the helper's `pickPage` (imported by file URL), and in approval mode `connectOverCDP` waits `APPROVAL_TIMEOUT_MS`.
+- `helper`: `{module, relay, artifacts, tokenFile, artifactsDir}` for the [run_code module](#run_code-module-srcruncode) (`src/helperInfo.js`): `module` is the module's `file:` URL; `relay` is `ws://127.0.0.1:<port>/api/relay/<name>`; `artifacts` is `http://127.0.0.1:<port>/api/artifacts`; `tokenFile` is the path of the relay token file (never its value: no tool result carries the token); `artifactsDir` is `<dataDir>/artifacts`.
 
-`browser_info` text: each note followed by a blank line, the `Panel:` line with its relative-address note, `Rules:` as `- ` bullets, then the snippet in a `js` fence. `meta` is `{name, kind, status, attached, cdpEndpoint, controller, sandbox, allowUnsandboxed, tabs, panelPath}`; the json-only fields (`lastExit`, `attachError`, `sandboxUnavailable`, `activeTargetId`) are a text summary, not a cap.
+`browser_info` text: each note followed by a blank line, the `Panel:` line with its relative-address note, `Rules:` as `- ` bullets, the `In run_code:` line (`await (await cc.code_browser.import()).connect({ name })`), then the snippet in a `js` fence after `From Bash, …`. `meta` is `{name, kind, status, attached, cdpEndpoint, controller, sandbox, allowUnsandboxed, tabs, panelPath, helper}`; the json-only fields (`lastExit`, `attachError`, `sandboxUnavailable`, `activeTargetId`) are a text summary, not a cap.
 
 Refusals (`code`, with `details`):
 
@@ -188,6 +192,72 @@ Owned by `src/screencast.js`; the numbers are `MAX_FPS`, `VIEWER_HIGH_WATER` in 
 - A viewer that joins gets the cached latest frame at once. A tab switch drops the cache and discards frames of the old tab.
 - The screencast runs only on the active tab and only while some viewer has a view; its size is the largest viewer's request. A `view` or `viewport` size above `MAX_FRAME_DIM` is scaled down as a whole (`fitDims` in `src/viewerGateway.js`), keeping its aspect.
 - For a **launched** browser the largest viewer by area (`maxWidth * maxHeight`, both > 0) also sets the page viewport's height from its aspect, after a debounce ([architecture.md](architecture.md#viewport-fit)); an attached browser is never resized.
+
+## CDP relay: `api/relay/<name>`
+
+A WebSocket that speaks CDP for local programs (the run_code helper, any Playwright `connectOverCDP`), carried over the backend's own connection to the browser (`src/cdpRelay.js`; the routing rules are the pure functions of `src/relayRoutes.js`). URL: `relayUrl(port, name)` = `ws://127.0.0.1:<port>/api/relay/<name>`.
+
+Upgrade checks, in order; a refusal is `HTTP/1.1 <status>` with a `text/plain` body `CODE: message` (Playwright appends the body to the error it throws):
+
+| Order | Check | Refusal |
+|---|---|---|
+| 1 | No `Origin` at all, and `Host` is a loopback name on the backend's own port (`relayRefusal`, `src/requestGuard.js`). It judges the `Host` header: a proxy that rewrites `Host` to its own address is refused, one that passes the client's through is not | `403` (empty body) |
+| 2 | `Authorization: Bearer <token>` equals the relay token, checked before anything names a browser | `401 UNAUTHORIZED` |
+| 3 | `<name>` decodes and matches `NAME_RE` | `400 INVALID_NAME` |
+| 4 | a browser of that name exists / runs | `404 NOT_FOUND` / `409 NOT_RUNNING` |
+| 5 | no human holds control | `409 BROWSER_CONTROLLED` |
+| 6 | the browser has fewer than `RELAY_MAX_CLIENTS` clients (attaches in progress count) | `503 RELAY_FULL` |
+| 7 | `Target.attachToBrowserTarget` gives the client its own root session; control is checked again after it (a take during the attach detaches that root and refuses `409 BROWSER_CONTROLLED`) | as above |
+
+Messages (`ws` options: `maxPayload` = `CDP_MAX_PAYLOAD`, `perMessageDeflate: false`):
+
+- **Client → browser.** Text frames holding `{id: integer, method: string, params?: object, sessionId?: string}`. No `sessionId` → sent on the client's root. A `sessionId` the client owns → sent unchanged. Any other `sessionId` (another client's, the backend's, its own root's, unknown) → answered `{id, error: {code: -32001, message: "Session with given id not found."}, sessionId}`, nothing sent.
+- **Refused methods** (`FORBIDDEN`, `src/relayRoutes.js`), answered `{id, error: {code: -32000, message}}` with nothing sent, on any session: `Browser.close`, `Browser.crash`, `Browser.crashGpuProcess`; `Target.sendMessageToTarget`; the methods that open a CDP channel the relay never filters, which would also outlive the client: `Target.exposeDevToolsProtocol`, `Target.openDevTools`, `Extensions.loadUnpacked`; `Target.attachToTarget`, `Target.setAutoAttach`, `Target.autoAttachRelated` without `flatten: true`; `Target.detachFromTarget` unless `params.sessionId` is one of the client's own child sessions.
+- **Answers** carry the client's own `id`, `result` or the browser's `error` as is, and `sessionId` only when the command had one. Answers and events reach the client in the order the browser sent them.
+- **Events.** An event on the client's root arrives without `sessionId` (the root is the connection, as on Chrome's own socket); an event on one of its child sessions arrives unchanged. Events of the backend's root and page sessions and of other clients never arrive.
+- **Not filtered:** `Browser.setDownloadBehavior` / `Page.setDownloadBehavior` (Playwright sets its own downloads dir with them), so a client can make Chrome write downloads to any path the backend's OS user can write.
+- **Ownership.** `Target.attachedToTarget` on an owned session, and the result of `Target.attachToTarget` / `Target.attachToBrowserTarget`, give the client the new session; `Target.detachedFromTarget` takes it away.
+
+Close codes (the reason text starts with a code where one applies):
+
+| Code | When |
+|---|---|
+| `4001` | a human took control of the browser: every client of it is dropped; reason `BROWSER_CONTROLLED: …`. Clients are dropped, never paused; a new connect works once control is back |
+| `4002` | the backend's connection to the browser closed (stopped, crashed, disconnected); reason `CDP_CLOSED: …` |
+| `1001` | the backend is shutting down |
+| `1003` | a binary frame |
+| `1007` | a frame that is not JSON or not a command envelope |
+| `1008` | the client left more than `RELAY_HIGH_WATER` unread |
+| `1009` | a frame over `CDP_MAX_PAYLOAD` |
+
+- Commands still in flight when a client is dropped, for any of the codes above (`4002` included), get no answer of their own: the close reason is the answer (Playwright rejects each pending call with it appended).
+- A client that misses a pong (`RELAY_PING_MS`) is terminated.
+- When a client goes, for whatever reason, its sessions are detached, each child on its parent session and children before parents, then its root; `Browser.close` is never sent, so the browser and its tabs keep running.
+
+## run_code module (`src/runCode/`)
+
+The module a cc `run_code` program loads to get a connected Playwright page (entry `src/runCode/index.js`). cc serves `cc.code_browser.import()` from the file the manifest's `runCodeModule` key names (`src/runCode/index.js`); on a cc without plugin modules the absolute-path route below works.
+
+- **Through cc:** `const cb = await cc.code_browser.import()`. cc calls the default export once per requested name with `ctx = {pluginId, baseUrl, caller, cc, module}` (`module`: the name asked for, or `null`), evaluates the file once per run and memoizes the result per name.
+- **Without cc's import:** `const cb = (await import(info.helper.module)).default({ cc, module: null })`, with `info` from `browser_info`.
+- The factory reads only `ctx.cc` and `ctx.module`, and does no I/O (a failed load is memoized for the run, so runtime state such as a stopped browser must fail later, at `connect`).
+
+| `ctx.module` | Factory result |
+|---|---|
+| `null` | `{connect}` |
+| anything else | throws `Error` with `code: "MODULE_UNKNOWN"`, naming the requested and the known modules (cc passes it through as `MODULE_UNKNOWN`) |
+
+Named modules are entries of `MODULES` in `src/runCode/index.js`. A factory call without a `cc` object throws a `TypeError` (cc reports `MODULE_LOAD_FAILED`).
+
+`connect({name = DEFAULT_BROWSER_NAME, timeout = CDP_TIMEOUT_MS} = {})` → `{browser, context, page, info, save}`:
+
+1. `info = await cc.code_browser.browser_info({name})`; its refusals (`NOT_RUNNING`, `NOT_FOUND`, …) reach the program unchanged.
+2. `info.controller === "human"` → throws `BROWSER_CONTROLLED` (message `HUMAN_NOTE`) without dialling.
+3. Reads the token from `info.helper.tokenFile` and calls Playwright's `connectOverCDP(info.helper.relay, {headers: {authorization: "Bearer <token>"}, artifactsDir: info.helper.artifactsDir, noDefaults: info.kind === "attached", timeout})`, using code-browser's own `playwright-core`. A refused upgrade throws an error whose `code` is the relay's (`UNAUTHORIZED`, `INVALID_NAME`, `NOT_FOUND`, `NOT_RUNNING`, `BROWSER_CONTROLLED`, `RELAY_FULL`).
+4. `context = browser.contexts()[0]`; `page = pickPage(context, info)` (`src/runCode/pickPage.js`): the active tab, else (attached browser) a new tab of its own, else the first tab.
+
+- `save(bytes, ext)`: `bytes` a `Buffer`/`Uint8Array`, `ext` per `EXT_RE`; posts to `info.helper.artifacts` with the token and resolves the file's absolute path. A refusal throws with the backend's code (`PAYLOAD_TOO_LARGE`, `BAD_REQUEST`, …).
+- `browser.close()` only disconnects. A human taking control mid-program rejects pending calls with `BROWSER_CONTROLLED` in the message (close `4001`).
 
 ## Host proxy wire protocol
 

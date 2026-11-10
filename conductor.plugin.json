@@ -11,6 +11,7 @@
     "path": "/",
     "navLabel": "Code Browser"
   },
+  "runCodeModule": "src/runCode/index.js",
   "mcp": {
     "endpoint": "/api/mcp",
     "timeoutMs": 60000,
@@ -170,7 +171,7 @@
       },
       {
         "name": "start_browser",
-        "description": "Start (creating on first use) a persistent headless Chromium that you and the human share. Workflow: start_browser -> read the snippet in the result -> run it via Bash as an .mjs script (it connects to the browser over CDP with Playwright; the browser and its tabs keep state between scripts). The project needs no Playwright install. A browser name keeps its logins and cookies across stops. The page's viewport height follows the human's panel shape (launched browsers), so read innerHeight instead of assuming it. The human watches and can take control in a panel: obey `controller` in the result, and while it is \"human\" do not drive the page, call browser_info again later. When the host has no usable Chromium sandbox the start is refused with SANDBOX_UNAVAILABLE unless a human has turned on \"Allow without sandbox\" for that browser in the panel; you cannot turn it on, so ask the user. Check `sandbox` in the result and do not browse untrusted pages when it is false. An attached browser (the user's own, which a human attached in the panel) cannot be started or reconnected by you: start_browser refuses it with ATTACHED and the panel path, so ask the user to press Connect there.",
+        "description": "Start (creating on first use) a persistent headless Chromium that you and the human share; a browser name keeps its logins and cookies across stops. Drive it with Playwright: in run_code, `await (await cc.code_browser.import()).connect({ name })` returns a connected `browser`, `context` and `page`; from Bash, run the result's `snippet` as an .mjs script (no Playwright install needed). A human watches in a panel and can take control.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -202,7 +203,8 @@
             "panelPath",
             "notes",
             "rules",
-            "snippet"
+            "snippet",
+            "helper"
           ],
           "properties": {
             "name": {
@@ -376,7 +378,38 @@
             },
             "snippet": {
               "type": "string",
-              "description": "a ready-to-run Playwright .mjs script that connects to the browser"
+              "description": "a ready-to-run Playwright .mjs script for Bash that connects to the browser"
+            },
+            "helper": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "module",
+                "relay",
+                "artifacts",
+                "tokenFile",
+                "artifactsDir"
+              ],
+              "description": "for the run_code helper; you only need `module`",
+              "properties": {
+                "module": {
+                  "type": "string",
+                  "description": "file URL of the helper: `(await import(module)).default({ cc, module: null })` where cc.code_browser.import is unavailable"
+                },
+                "relay": {
+                  "type": "string"
+                },
+                "artifacts": {
+                  "type": "string"
+                },
+                "tokenFile": {
+                  "type": "string",
+                  "description": "path of the relay token file; the helper reads it"
+                },
+                "artifactsDir": {
+                  "type": "string"
+                }
+              }
             }
           }
         }
@@ -425,7 +458,7 @@
       },
       {
         "name": "browser_info",
-        "description": "Current state of a running shared browser: CDP endpoint, open tabs, the active tab, and who controls it. Includes a ready-to-run Playwright snippet (`snippet`) and the panel path (`panelPath`) to give the user. The page's viewport height follows the human's panel shape (launched browsers). Call it before each script: if controller is \"human\" the human has taken over, so do not drive the page until it is \"agent\" again. The browser may run unsandboxed where a human allowed it (read-only `allowUnsandboxed`): check `sandbox`. `kind` is attached for the user's own browser: work in your own tab there, and when `attached.asksApproval` is true, Chrome asks the user to allow every script's connection, so tell them before each script.",
+        "description": "Current state of a running shared browser: tabs, the active tab, who controls it (`controller`), the CDP endpoint, the Bash `snippet`, `helper.module` (the run_code helper's file URL, for `await import()` where cc.code_browser.import is unavailable), and `panelPath` to give the user. Call it before each snippet script, and while `controller` is \"human\" do not drive the page.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -457,7 +490,8 @@
             "panelPath",
             "notes",
             "rules",
-            "snippet"
+            "snippet",
+            "helper"
           ],
           "properties": {
             "name": {
@@ -631,7 +665,38 @@
             },
             "snippet": {
               "type": "string",
-              "description": "a ready-to-run Playwright .mjs script that connects to the browser"
+              "description": "a ready-to-run Playwright .mjs script for Bash that connects to the browser"
+            },
+            "helper": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "module",
+                "relay",
+                "artifacts",
+                "tokenFile",
+                "artifactsDir"
+              ],
+              "description": "for the run_code helper; you only need `module`",
+              "properties": {
+                "module": {
+                  "type": "string",
+                  "description": "file URL of the helper: `(await import(module)).default({ cc, module: null })` where cc.code_browser.import is unavailable"
+                },
+                "relay": {
+                  "type": "string"
+                },
+                "artifacts": {
+                  "type": "string"
+                },
+                "tokenFile": {
+                  "type": "string",
+                  "description": "path of the relay token file; the helper reads it"
+                },
+                "artifactsDir": {
+                  "type": "string"
+                }
+              }
             }
           }
         }

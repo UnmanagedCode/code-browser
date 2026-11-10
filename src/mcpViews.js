@@ -24,7 +24,9 @@ function browserInfo(d) {
     'Rules:',
     ...d.rules.map((rule) => `- ${rule}`),
     '',
-    'Save this as an .mjs file and run it with node via Bash:',
+    `In run_code: const { page } = await (await cc.code_browser.import()).connect({ name: ${lit(d.name)} });`,
+    '',
+    'From Bash, save this as an .mjs file and run it with node:',
     '```js',
     d.snippet.trimEnd(),
     '```',
@@ -40,6 +42,7 @@ function browserInfo(d) {
     allowUnsandboxed: d.allowUnsandboxed,
     tabs: d.tabs,
     panelPath: d.panelPath,
+    helper: d.helper,
   };
   return { text, meta };
 }
