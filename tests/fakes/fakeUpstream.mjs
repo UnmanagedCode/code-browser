@@ -5,7 +5,8 @@ import { CodedError } from '../../src/errors.js';
 // The backend's upstream CDP connection (src/cdp.js CdpConnection), scripted, for relay tests. Every command is
 // recorded in `sent` as {via: 'send'|'forward', method, params, sessionId}. Answers come from `handlers[method]`
 // (default: Target.attachToBrowserTarget → a fresh root id, anything else → {}); a handler returning HOLD keeps the
-// command pending until `answer()` (or `drop()`).
+// command pending until `answer()` (or `drop()`). Like CdpConnection, `drop()` rejects pending sends and drops pending
+// forwards unanswered.
 export const HOLD = Symbol('hold');
 
 export function fakeUpstream() {
@@ -34,8 +35,7 @@ export function fakeUpstream() {
 
   cdp.forward = (method, params, { sessionId, signal } = {}, onAnswer) => {
     cdp.sent.push({ via: 'forward', method, params, sessionId });
-    if (signal?.aborted) return;
-    if (cdp.closed) { onAnswer({ error: { code: -32000, message: 'CDP_CLOSED' } }); return; }
+    if (signal?.aborted || cdp.closed) return;
     const a = answerFor(method, params);
     const id = ++n;
     held.set(id, { method, onAnswer, signal });
@@ -59,8 +59,7 @@ export function fakeUpstream() {
     cdp.closed = true;
     for (const [id, h] of held) {
       held.delete(id);
-      if (h.onAnswer) h.onAnswer({ error: { code: -32000, message: 'CDP_CLOSED' } });
-      else h.reject(new CodedError('CDP_CLOSED', 'connection closed'));
+      if (!h.onAnswer) h.reject(new CodedError('CDP_CLOSED', 'connection closed'));
     }
     cdp.emit('close');
   };

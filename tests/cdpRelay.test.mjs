@@ -230,15 +230,19 @@ test('a take mid-command drops the client with 4001; after release a connect wor
   await open(port);
 });
 
-// Invariant: when the browser's upstream connection closes, its clients are closed with 4002.
-test('an upstream close ends its clients with 4002', async () => {
+// Invariant: when the browser's upstream connection closes, its clients are closed with 4002 and a CDP_CLOSED reason, and
+// a command in flight gets no answer of its own: the close reason is its only answer.
+test('an upstream close ends its clients with 4002 and no per-command answer', async () => {
   const { port, up } = await stack();
   up().handlers['Runtime.evaluate'] = () => HOLD;
   const a = await open(port);
   a.send({ id: 1, method: 'Runtime.evaluate' });
   await waitFor(() => up().heldIds().length === 1, { what: 'the held evaluate' });
   up().drop();
-  assert.equal((await a.closed).code, CLOSE_UPSTREAM);
+  const closed = await a.closed;
+  assert.equal(closed.code, CLOSE_UPSTREAM);
+  assert.match(closed.reason, /^CDP_CLOSED: /);
+  assert.deepEqual(a.messages.filter((m) => m.id === 1), []);
 });
 
 // Invariant: what is not a CDP command envelope closes the client: binary 1003, not JSON or not an envelope 1007, a frame

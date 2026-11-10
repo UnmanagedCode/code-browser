@@ -58,8 +58,7 @@ export class CdpConnection extends EventEmitter {
     for (const p of this.#pending.values()) {
       clearTimeout(p.timer);
       p.signal?.removeEventListener('abort', p.onAbort);
-      if (p.onAnswer) p.onAnswer(p.closedAnswer('connection closed'));
-      else p.reject(new CodedError('CDP_CLOSED', `${p.method}: connection closed`));
+      if (!p.onAnswer) p.reject(new CodedError('CDP_CLOSED', `${p.method}: connection closed`));
     }
     this.#pending.clear();
     this.emit('close');
@@ -86,21 +85,20 @@ export class CdpConnection extends EventEmitter {
   // A command forwarded on someone else's behalf (the CDP relay). `onAnswer` receives the raw answer, `{result}` or
   // `{error: {code, message, data}}`, synchronously as it arrives, so answers and events keep the order Chromium sent
   // them in (a promise would deliver an answer after the events of the same read: Playwright then drops an
-  // execution context for a frame it does not know yet). No timeout of its own. When the connection closes the answer
-  // is a CDP_CLOSED error; when `signal` aborts the command is dropped and its answer is never delivered.
+  // execution context for a frame it does not know yet). No timeout of its own. Only the browser answers: when `signal`
+  // aborts, or the connection is or becomes closed, the command is dropped and `onAnswer` is never called. The caller
+  // learns of a close from the 'close' event (the relay ends its client with the close reason, which Playwright reports;
+  // a per-command error answer it would rewrite as a navigation).
   forward(method, params, { sessionId, signal } = {}, onAnswer) {
-    const closedAnswer = (why) => ({ error: { code: -32000, message: `CDP_CLOSED: ${method}: ${why}` } });
-    if (signal?.aborted) return;
-    if (this.closed) { onAnswer(closedAnswer('connection closed')); return; }
+    if (signal?.aborted || this.closed) return;
     const id = ++this.#nextId;
     const onAbort = () => { this.#pending.delete(id); };
     signal?.addEventListener('abort', onAbort, { once: true });
-    this.#pending.set(id, { method, onAnswer, closedAnswer, signal, onAbort });
+    this.#pending.set(id, { method, onAnswer, signal, onAbort });
     this.#ws.send(JSON.stringify({ id, method, params, sessionId }), (err) => {
       if (!err || !this.#pending.has(id)) return;
       this.#pending.delete(id);
       signal?.removeEventListener('abort', onAbort);
-      onAnswer(closedAnswer(err.message));
     });
   }
 

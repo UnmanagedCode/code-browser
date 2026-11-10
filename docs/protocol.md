@@ -229,13 +229,13 @@ Close codes (the reason text starts with a code where one applies):
 | `1008` | the client left more than `RELAY_HIGH_WATER` unread |
 | `1009` | a frame over `CDP_MAX_PAYLOAD` |
 
-- Commands still in flight when a client is dropped get no answer of their own: the close reason is the answer (Playwright rejects each pending call with it appended).
+- Commands still in flight when a client is dropped, for any of the codes above (`4002` included), get no answer of their own: the close reason is the answer (Playwright rejects each pending call with it appended).
 - A client that misses a pong (`RELAY_PING_MS`) is terminated.
 - When a client goes, for whatever reason, its sessions are detached, each child on its parent session and children before parents, then its root; `Browser.close` is never sent, so the browser and its tabs keep running.
 
 ## run_code module (`src/runCode/`)
 
-The module a cc `run_code` program loads to get a connected Playwright page (entry `src/runCode/index.js`). cc serves `cc.code_browser.import()` from the file the manifest's `runCodeModule` key names; where that is unavailable (no such key, or a cc without plugin modules) the absolute-path route below works.
+The module a cc `run_code` program loads to get a connected Playwright page (entry `src/runCode/index.js`). cc serves `cc.code_browser.import()` from the file the manifest's `runCodeModule` key names (`src/runCode/index.js`); on a cc without plugin modules the absolute-path route below works.
 
 - **Through cc:** `const cb = await cc.code_browser.import()`. cc calls the default export once per requested name with `ctx = {pluginId, baseUrl, caller, cc, module}` (`module`: the name asked for, or `null`), evaluates the file once per run and memoizes the result per name.
 - **Without cc's import:** `const cb = (await import(info.helper.module)).default({ cc, module: null })`, with `info` from `browser_info`.

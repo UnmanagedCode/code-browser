@@ -103,15 +103,20 @@ test('forward: abort drops the pending entry and the late answer', async () => {
   assert.equal(delivered, false);
 });
 
-// Invariant: when the connection closes, a pending forward is answered with a CDP_CLOSED error, and so is a later one.
-test('forward: close answers pending and later forwards with CDP_CLOSED', async () => {
+// Invariant: when the connection closes, a pending forward is dropped unanswered (only the browser answers a forward),
+// so is a later one; the caller learns of the close from 'close'. A pending send still rejects with CDP_CLOSED.
+test('forward: close drops pending and later forwards unanswered; send still rejects', async () => {
   const { conn, sockets } = await connect(() => {});
-  const pending = new Promise((r) => conn.forward('Foo.bar', {}, {}, r));
+  const answers = [];
+  conn.forward('Foo.bar', {}, {}, (a) => answers.push(a));
+  const sent = conn.send('Foo.baz');
   await new Promise((r) => setTimeout(r, 20));
+  const closed = new Promise((r) => conn.once('close', r));
   sockets[0].terminate();
-  assert.match((await pending).error.message, /^CDP_CLOSED: /);
-  assert.equal(conn.closed, true);
-  const later = await new Promise((r) => conn.forward('Foo.bar', {}, {}, r));
-  assert.match(later.error.message, /^CDP_CLOSED: /);
+  await closed;
+  await assert.rejects(sent, (e) => e.code === 'CDP_CLOSED');
+  conn.forward('Foo.bar', {}, {}, (a) => answers.push(a));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(answers, []);
   assert.equal(conn.pendingCount, 0);
 });
