@@ -200,6 +200,16 @@ test('CDP relay on real Chromium', { skip: process.env.RUN_REAL_CHROMIUM !== '1'
       await waitFor(() => v.state()?.controller?.kind === 'agent', { what: 'release' });
     });
 
+    // Through the relay a client's answers and events must keep Chromium's order, or Playwright drops the execution
+    // context of a page that was already loaded when it attached (the panel's tab here) and evaluate never settles.
+    await t.test('a new client can evaluate on every tab, including one the panel loaded', async () => {
+      const c = await connect();
+      const pages = c.contexts()[0].pages();
+      assert.ok(pages.length >= 2);
+      for (const p of pages) assert.equal(await within(p.evaluate(() => document.readyState), 5000, `evaluate on ${p.url()}`), 'complete');
+      await c.close();
+    });
+
     await t.test('controller gate: refused while a person holds control, dropped on take, back after release', async () => {
       v.send({ msg: 'control', action: 'take' });
       await waitFor(() => v.state()?.controller?.you, { what: 'control' });
