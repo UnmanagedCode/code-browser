@@ -10,8 +10,10 @@ import { ARTIFACTS_KEEP } from './limits.js';
 // is the helper's Playwright `artifactsDir`, so downloads land here too; one retention rule covers both.
 export const EXT_RE = /^[a-z0-9]{1,8}$/;
 
+export const artifactsDirOf = (dataDir) => path.join(dataDir, 'artifacts');
+
 export function ensureArtifactsDir(dataDir) {
-  const dir = path.join(dataDir, 'artifacts');
+  const dir = artifactsDirOf(dataDir);
   ensurePrivateDir(dir);
   return dir;
 }

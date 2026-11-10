@@ -53,16 +53,30 @@ test('no tool takes anything but name or is named for the sandbox opt-in', () =>
   }
 });
 
-// Invariant: the tools that start or describe a browser tell the agent about the refusal, that only a human can lift it
-// in the panel, and to check `sandbox`.
-test('descriptions explain the sandbox refusal and the human opt-in', () => {
+// Invariant: the listing explains allowUnsandboxed and attached browsers. start_browser and browser_info leave the
+// sandbox refusal, the opt-in and attached browsers to the point of use (the SANDBOX_UNAVAILABLE and ATTACHED refusals,
+// and `notes`; see tests/mcp.test.mjs).
+test('list_browsers explains allowUnsandboxed and attached', () => {
+  const desc = manifest.mcp.tools.find((t) => t.name === 'list_browsers').description;
+  assert.match(desc, /allowUnsandboxed/);
+  assert.match(desc, /attached/);
+});
+
+// Invariant: before its first call an agent learns both ways to drive the browser: the run_code helper through
+// cc.code_browser.import() (or helper.module where that is unavailable) and the Bash snippet; and to obey `controller`.
+test('start_browser and browser_info name the run_code helper and the snippet', () => {
   const desc = (name) => manifest.mcp.tools.find((t) => t.name === name).description;
-  assert.match(desc('start_browser'), /SANDBOX_UNAVAILABLE/);
-  assert.match(desc('start_browser'), /human/);
-  assert.match(desc('start_browser'), /panel/);
-  assert.match(desc('start_browser'), /`sandbox`/);
-  assert.match(desc('browser_info'), /`sandbox`/);
-  for (const name of ['browser_info', 'list_browsers']) assert.match(desc(name), /allowUnsandboxed/, name);
+  assert.ok(desc('start_browser').includes('cc.code_browser.import()'));
+  assert.match(desc('start_browser'), /`snippet`/);
+  assert.match(desc('browser_info'), /`helper\.module`/);
+  assert.match(desc('browser_info'), /`snippet`/);
+  assert.match(desc('browser_info'), /`controller`/);
+});
+
+// Invariant: no tool is named `import`: cc reserves it in every plugin namespace (cc.<ns>.import), and such a tool would
+// make the manifest invalid.
+test('no tool is named import', () => {
+  for (const tool of manifest.mcp.tools) assert.notEqual(tool.name, 'import');
 });
 
 // Invariant: no tool attaches or connects a browser: that is a human's action in the panel only.
@@ -70,15 +84,10 @@ test('no tool is named for attaching or connecting', () => {
   for (const tool of manifest.mcp.tools) assert.doesNotMatch(tool.name, /attach|connect/, tool.name);
 });
 
-// Invariant: the tools tell the agent that an attached browser is the user's: start refuses it (ATTACHED), stop only
-// disconnects, and the listing and info explain kind and attached.
-test('descriptions explain attached browsers', () => {
+// Invariant: stop_browser tells the agent that for an attached browser it only disconnects.
+test('stop_browser says it only disconnects an attached browser', () => {
   const desc = (name) => manifest.mcp.tools.find((t) => t.name === name).description;
-  assert.match(desc('start_browser'), /ATTACHED/);
-  assert.match(desc('start_browser'), /Connect/);
   assert.match(desc('stop_browser'), /only disconnects/);
-  for (const name of ['list_browsers', 'browser_info']) assert.match(desc(name), /attached/, name);
-  assert.match(desc('browser_info'), /asksApproval/);
 });
 
 // Invariant: the panel is called one thing everywhere it names itself: manifest name, nav label and page title.

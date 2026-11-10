@@ -7,6 +7,7 @@ import { createChromiumInstaller } from './src/chromium/install.js';
 import { createSessionForEntry } from './src/browserSession.js';
 import { loadConfig } from './src/config.js';
 import { migrateLegacyStore } from './src/migrateLegacyStore.js';
+import { createHelperInfo } from './src/helperInfo.js';
 import { createMcp } from './src/mcp.js';
 import { ensureRelayToken } from './src/relayToken.js';
 import { createViewerGateway } from './src/viewerGateway.js';
@@ -18,7 +19,9 @@ const manager = createBrowserManager({
   dataDir: config.dataDir,
   createSession: (entry) => createSessionForEntry(entry),
 });
-const mcp = createMcp({ manager, pluginDir: config.pluginDir, pluginId: config.pluginId });
+let server;
+const helperInfo = createHelperInfo({ pluginDir: config.pluginDir, dataDir: config.dataDir, port: () => server.address().port });
+const mcp = createMcp({ manager, pluginDir: config.pluginDir, pluginId: config.pluginId, helperInfo });
 const installer = createChromiumInstaller();
 
 await manager.boot();
@@ -26,7 +29,7 @@ const relayToken = ensureRelayToken(config.dataDir);
 ensureArtifactsDir(config.dataDir);
 const gateway = createViewerGateway({ manager });
 const relay = createCdpRelay({ manager, token: relayToken });
-const server = createApp({ manager, mcp, installer, distDir: config.distDir, dataDir: config.dataDir, token: relayToken, onUpgrade: gateway.handleUpgrade, onRelayUpgrade: relay.handleUpgrade });
+server = createApp({ manager, mcp, installer, distDir: config.distDir, dataDir: config.dataDir, token: relayToken, onUpgrade: gateway.handleUpgrade, onRelayUpgrade: relay.handleUpgrade });
 server.listen(config.port, '127.0.0.1', () => {
   console.log(`code-browser listening on 127.0.0.1:${server.address().port} (data: ${config.dataDir})`);
 });

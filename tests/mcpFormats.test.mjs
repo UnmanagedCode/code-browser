@@ -7,9 +7,9 @@ import { JSON_HEADERS, idleInstaller, listen, request, tmpDir } from './helpers.
 import { createMcp } from '../src/mcp.js';
 import { buildSnippet } from '../src/snippet.js';
 import { call } from './_mcpCall.mjs';
-import { fakeManager } from './fakes/fakeMcpManager.mjs';
+import { fakeManager, testHelperInfo } from './fakes/fakeMcpManager.mjs';
 
-const make = (opts, manager = fakeManager(opts)) => createMcp({ manager, pluginDir: '/plug', pluginId: 'code-browser' });
+const make = (opts, manager = fakeManager(opts)) => createMcp({ manager, pluginDir: '/plug', pluginId: 'code-browser', helperInfo: testHelperInfo });
 const FORMATS = ['text', 'json'];
 
 // ---- refusals: code, shape and details, identical in both formats ----
