@@ -141,3 +141,33 @@ test('runCodeModule names a tracked module whose default export is a function', 
   const mod = await import(new URL(rel, root).href);
   assert.equal(typeof mod.default, 'function');
 });
+
+// Invariant: claudePlugin names (relative, as cc's validator requires) a git-tracked Claude Code plugin root named for
+// the manifest id, whose drive-browser skill has the frontmatter Claude Code reads, so cc can load it into sessions.
+test('claudePlugin points at a tracked Claude Code plugin with the drive-browser skill', () => {
+  const rel = manifest.claudePlugin;
+  assert.equal(typeof rel, 'string');
+  assert.ok(!rel.startsWith('/') && !rel.split(/[\\/]/).includes('..'), rel);
+  const root = new URL('..', import.meta.url);
+  const files = [`${rel}/.claude-plugin/plugin.json`, `${rel}/skills/drive-browser/SKILL.md`];
+  for (const f of files) {
+    assert.doesNotThrow(() => execFileSync('git', ['ls-files', '--error-unmatch', f], { cwd: root, stdio: 'pipe' }), `${f} is not tracked`);
+  }
+  const plugin = JSON.parse(fs.readFileSync(new URL(files[0], root), 'utf8'));
+  assert.equal(plugin.name, manifest.id);
+  assert.match(fs.readFileSync(new URL(files[1], root), 'utf8'), /^---\nname: drive-browser\ndescription: .+\n---\n/);
+});
+
+// Invariant: every code or constant the skill names in backticks still exists in src/, so a rename there cannot leave
+// the skill teaching a refusal code or limit that no longer exists.
+test('every code and constant the skill names exists in src/', () => {
+  const skill = fs.readFileSync(new URL(`../${manifest.claudePlugin}/skills/drive-browser/SKILL.md`, import.meta.url), 'utf8');
+  const names = [...new Set([...skill.matchAll(/`([A-Z][A-Z0-9_]{2,})`/g)].map((m) => m[1]))];
+  assert.ok(names.length > 0);
+  const srcDir = new URL('../src/', import.meta.url);
+  const source = fs.readdirSync(srcDir, { recursive: true })
+    .filter((f) => f.endsWith('.js'))
+    .map((f) => fs.readFileSync(new URL(f, srcDir), 'utf8'))
+    .join('\n');
+  for (const n of names) assert.match(source, new RegExp(`\\b${n}\\b`), `${n} is not in src/`);
+});

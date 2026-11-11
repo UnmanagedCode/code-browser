@@ -12,6 +12,7 @@
     "navLabel": "Code Browser"
   },
   "runCodeModule": "src/runCode/index.js",
+  "claudePlugin": "claude",
   "mcp": {
     "endpoint": "/api/mcp",
     "timeoutMs": 60000,

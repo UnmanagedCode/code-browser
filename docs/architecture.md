@@ -50,6 +50,7 @@ src/browserSession.js    per running browser: tabs, dialogs, nav state, input, c
 src/{tabs,controller,screencast,input,frame}.js   pure or near-pure parts of the session
 src/viewportFit.js       launched browsers only: the page viewport follows the largest viewer's panel shape
 src/viewerGateway.js     panel WebSocket: permissions and fan-out
+claude/                  Claude Code plugin root (claudePlugin): skills/drive-browser/SKILL.md
 frontend/src             main/App/api/socket/route/frame, components/, input/
 ```
 
@@ -241,6 +242,7 @@ Run: `npm test` (backend `node --test`, including the Python-gated proxy tests, 
 - **Fake upstream** (`tests/fakes/fakeUpstream.mjs`): the backend's `CdpConnection` scripted (handlers per method, `HOLD` to keep a command pending, `event`, `drop`), with `fakeRelayManager` standing in for the manager and session; `tests/cdpRelay.test.mjs` runs the real relay and app over it with real `ws` clients.
 - **run_code helper:** `tests/runCodeModule.test.mjs` (factory routing and no-I/O with a cc whose every read throws; connect against spy servers; save; a spawned import under `--permission --allow-fs-read=*` whose cwd holds a decoy `playwright-core`), `tests/pickPage.test.mjs`.
 - **Live stack** (`liveStack` in `tests/helpers.mjs`): real manager, session and gateway over the fake, with a second CDP client standing in for an agent.
+- **Skill:** `tests/manifest.test.mjs` checks the skill's layout and frontmatter, that its files are tracked, and that every code or constant it names exists in `src/`.
 - **Typed MCP:** `tests/_jsonSchemaSubset.mjs` is a test-only port of cc's `checkSchema`/`validate`; `call` in `tests/_mcpCall.mjs` asserts the reply shape of every tool call in the suite and validates json against the manifest `outputSchema`. `tests/mcp.live.test.mjs` validates replies with real session data (tabs, crash, attach failure, attached browser) and the oldest stored layout `migrateLegacyStore` can move in, all on temp data dirs. `tests/jsonSchemaSubset.test.mjs` compares the port's keyword and type sets with cc's when `CODE_CONDUCTOR_DIR` is set.
 - **Config, migration, boot:** `tests/config.test.mjs` (data dir comes only from the variable; only `src/migrateLegacyStore.js` names the legacy path), `tests/migrateLegacyStore.test.mjs` (no-ops, move, modes, refusals), `tests/boot.test.mjs` (spawns `server.js`: migration precedes boot, a refusal does not listen, a missing variable refuses). A test that spawns `server.js` sets `PROJECTS_ROOT` to a fixture and `CONDUCTOR_PLUGIN_DATA_DIR` explicitly: agent shells export the real `PROJECTS_ROOT`, and `migrateLegacyStore` takes `env` with no default for the same reason.
 - **Fake clock** (`fakeClock`): screencast pacing, the control lease and the title sweep are tested without real waits; `liveStack({clock})` injects it into both the controller and the sweep.

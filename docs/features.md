@@ -52,6 +52,13 @@ No tool attaches or connects a browser: only a person does, in the panel.
 - **Bash snippet (the raw CDP endpoint):** advisory. The script talks to Chromium over its own CDP connection; the backend is not on that path and cannot stop it. The agent is *told* the state: `controller` in `start_browser`/`browser_info`/`list_browsers`, and a do-not-drive note while a person holds control. A script that ignores it can still act.
 - For the person it is enforced: see Control.
 
+### The drive-browser skill
+
+- It is a Claude Code plugin root at `claude/`, declared by the manifest's `claudePlugin`. cc passes it as `--plugin-dir` to every session it launches on the local System; the skill appears as `code-browser:drive-browser`.
+- It covers the helper flow, why to prefer the helper over the snippet, the controller lock, `SANDBOX_UNAVAILABLE` (stop and ask), signing in through the panel, and what to do for each relay refusal.
+- Pickup: cc reads `claudePlugin` from the manifest on a Settings → Plugins → Rescan, a cc restart or a backend start; a session gets the skill when it is created or resumed after that. Edits to `SKILL.md` reach the next new session.
+- Rule for whoever edits it: add only what tool results and refusals do not already say.
+
 ## Panel
 
 Open it from cc's **Code Browser** nav entry, or from the `panelPath` link an agent gives you.
