@@ -16,7 +16,7 @@
     "members": [
       {
         "name": "connect",
-        "description": "Connect Playwright to a running shared browser and return {browser, context, page, info, save}: `page` is the tab to drive, `info` is browser_info's data, `save(bytes, ext)` writes a file (a screenshot, say) and returns its path, and `browser.close()` only disconnects. Start the browser first with start_browser. Refused with BROWSER_CONTROLLED while a human has control. Usage: `const { page, save } = await cc.code_browser.connect({ name: \"default\" });`. Load the drive-browser skill for the full workflow.",
+        "description": "Connect Playwright to a running shared browser and return {browser, context, page, info, save}: `page` is the tab to drive, `info` is browser_info's data, `save(bytes, ext)` is an async function that writes a Buffer (a screenshot, say) to the plugin's artifacts directory and resolves its path, and `browser.close()` only disconnects. Start the browser first with start_browser. Refused with BROWSER_CONTROLLED while a human has control. Usage: `const { page, save } = await cc.code_browser.connect({ name: \"default\" });`. Load the drive-browser skill for the full workflow.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -35,13 +35,12 @@
         },
         "outputSchema": {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": true,
           "required": [
             "browser",
             "context",
             "page",
-            "info",
-            "save"
+            "info"
           ],
           "properties": {
             "browser": {
@@ -63,13 +62,9 @@
               "type": "object",
               "additionalProperties": true,
               "description": "browser_info's data for this browser (tabs, controller, helper)."
-            },
-            "save": {
-              "type": "object",
-              "additionalProperties": true,
-              "description": "Async function save(bytes, ext) that stores a Buffer under the plugin's artifacts directory and resolves its path."
             }
-          }
+          },
+          "description": "Also carries `save`, an async function (not expressible in this schema)."
         }
       }
     ]
@@ -457,7 +452,7 @@
               "properties": {
                 "module": {
                   "type": "string",
-                  "description": "file URL of the helper: `(await import(module)).default({ cc })` where cc.code_browser.connect is unavailable"
+                  "description": "file URL of the helper: `(await import(module)).default({ cc }).connect({ name })` where cc.code_browser.connect is unavailable"
                 },
                 "relay": {
                   "type": "string"
@@ -744,7 +739,7 @@
               "properties": {
                 "module": {
                   "type": "string",
-                  "description": "file URL of the helper: `(await import(module)).default({ cc })` where cc.code_browser.connect is unavailable"
+                  "description": "file URL of the helper: `(await import(module)).default({ cc }).connect({ name })` where cc.code_browser.connect is unavailable"
                 },
                 "relay": {
                   "type": "string"

@@ -13,6 +13,8 @@ const FRONTEND = ['path', 'navLabel', 'keepAlive'];
 const MCP = ['endpoint', 'scope', 'timeoutMs', 'tools'];
 const PROP = ['type', 'enum', 'minLength', 'maxLength', 'pattern', 'minimum', 'maximum', 'items', 'description', 'default'];
 const SCHEMA = ['type', 'properties', 'required', 'description', 'additionalProperties'];
+const RUN_CODE = ['module', 'members'];
+const MEMBER = ['name', 'description', 'inputSchema', 'outputSchema'];
 const MCP_TIMEOUT_CAP = 120_000;
 
 // Invariant: the manifest only uses keys cc accepts, so the plugin never loads as invalid.
@@ -34,6 +36,15 @@ test('manifest keys are within the sets cc accepts', () => {
       within(spec, PROP, `${tool.name}.${prop}`);
     }
   }
+  within(manifest.runCode, RUN_CODE, 'runCode');
+  for (const member of manifest.runCode.members) {
+    within(member, MEMBER, `runCode.${member.name}`);
+    within(member.inputSchema, SCHEMA, `runCode.${member.name}.inputSchema`);
+    assert.equal(member.inputSchema.type, 'object');
+    for (const [prop, spec] of Object.entries(member.inputSchema.properties ?? {})) {
+      within(spec, PROP, `runCode.${member.name}.${prop}`);
+    }
+  }
 });
 
 // Invariant: the name pattern in the tool schemas is the one NAME_RE enforces, so schema and runtime agree.
@@ -44,6 +55,8 @@ test('tool name patterns equal NAME_RE', async () => {
       if (spec.pattern) assert.equal(spec.pattern, NAME_RE.source);
     }
   }
+  const connect = manifest.runCode.members.find((m) => m.name === 'connect');
+  assert.equal(connect.inputSchema.properties.name.pattern, NAME_RE.source);
 });
 
 // Invariant: no tool can grant the unsandboxed opt-in: each takes at most a `name`, and none is named for it.
@@ -161,7 +174,8 @@ test('runCode declares connect with an optional name and a described output', ()
   assert.equal(m.inputSchema.type, 'object');
   assert.deepEqual(Object.keys(m.inputSchema.properties).sort(), ['name', 'timeout']);
   assert.equal(m.inputSchema.required, undefined);
-  assert.deepEqual(Object.keys(m.outputSchema.properties).sort(), ['browser', 'context', 'info', 'page', 'save']);
+  assert.deepEqual(Object.keys(m.outputSchema.properties).sort(), ['browser', 'context', 'info', 'page']);
+  assert.match(m.description, /`save\(bytes, ext\)`/);
   // cc's output-schema subset requires every object schema to state additionalProperties.
   for (const schema of [m.outputSchema, ...Object.values(m.outputSchema.properties)]) assert.equal(typeof schema.additionalProperties, 'boolean');
 });
