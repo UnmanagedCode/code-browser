@@ -91,6 +91,14 @@ test('stop_browser says it only disconnects an attached browser', () => {
   assert.match(desc('stop_browser'), /only disconnects/);
 });
 
+// Invariant: stop_browser's description, read at the point of use, tells the agent to stop only browsers it started and
+// never while a person holds control: no other surface carries that ownership rule.
+test('stop_browser says to stop only own browsers and never while a person has control', () => {
+  const desc = manifest.mcp.tools.find((t) => t.name === 'stop_browser').description;
+  assert.match(desc, /only stop a browser you started/i);
+  assert.match(desc, /never while a person holds control/i);
+});
+
 // Invariant: the panel is called one thing everywhere it names itself: manifest name, nav label and page title.
 test('the nav label and the page title equal the manifest name', () => {
   assert.equal(manifest.frontend.navLabel, manifest.name);

@@ -35,7 +35,7 @@ Use the snippet only when `run_code` is not among your tools or the work outlast
 - For a sign-in, give the user `panelPath` and ask them to take control, sign in and hand back. Never ask for credentials in chat. The login stays with that browser name.
 
 ## `SANDBOX_UNAVAILABLE`
-Don't retry, don't try another browser name, don't launch a Chromium yourself, and don't touch code-browser's data dir or HTTP routes: each bypasses a gate that exists for the person's consent.
+Until a person enables "Allow without sandbox" for that browser in the panel, don't retry, don't try another browser name, don't launch a Chromium yourself, and don't touch code-browser's data dir or HTTP routes: each bypasses a gate that exists for the person's consent.
 
 ## Other refusals
 | Code | Do |
