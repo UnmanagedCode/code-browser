@@ -9,7 +9,7 @@ description: Drive a shared headless browser with the Code Browser tools (code-b
 1. `start_browser({ name })`. Follow the result's `notes`.
 2. Drive it from `run_code`, one program per unit of work, returning a digest (values, text, file paths), never page HTML:
    ```js
-   const { browser, page, save } = await (await cc.code_browser.import()).connect({ name: 'default' });
+   const { browser, page, save } = await cc.code_browser.connect({ name: 'default' });
    try {
      await page.goto('https://example.com');
      return { title: await page.title(), shot: await save(await page.screenshot(), 'png') };
@@ -46,4 +46,4 @@ Until a person enables "Allow without sandbox" for that browser in the panel, do
 | `RELAY_SLOW` in a dropped program's error | The program stopped reading: don't block the event loop while connected. |
 | `UNAUTHORIZED` | The helper's relay token was refused: tell the user. Don't read the token file or connect with it yourself. |
 | a CDP call answered "… is not allowed through code-browser's relay" | Refused by design (`FORBIDDEN` in `src/relayRoutes.js`): closing or crashing the shared browser, or opening a CDP channel the relay cannot see. Don't attempt it another way. |
-| `MODULE_UNKNOWN` | Call `import()` with no argument. If cc still refuses, the helper is not loaded: use the snippet and tell the user. |
+| cc reports PLUGIN_LOAD_FAILED for code_browser | The helper module did not load for this run: use the snippet and tell the user. |

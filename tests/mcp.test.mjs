@@ -49,7 +49,7 @@ test('start_browser/browser_info: json data and text view agree', async () => {
     assert.deepEqual(r.meta.tabs.map((t) => t.targetId), ['T1']);
     assert.deepEqual(Object.keys(r.meta), ['name', 'kind', 'status', 'attached', 'cdpEndpoint', 'controller', 'sandbox', 'allowUnsandboxed', 'tabs', 'panelPath', 'helper']);
     assert.deepEqual(r.meta.helper, testHelperInfo('e2e'));
-    assert.ok(r.text.includes('In run_code: const { page } = await (await cc.code_browser.import()).connect({ name: "e2e" });'));
+    assert.ok(r.text.includes('In run_code: const { page } = await cc.code_browser.connect({ name: "e2e" });'));
     assert.ok(r.text.includes(PANEL_E2E));
     assert.match(r.text, /relative to the address the user opens cc at/);
     assert.match(r.text, /Do not add a host/);

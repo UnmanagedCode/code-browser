@@ -7,12 +7,14 @@ import { checkSchema } from './_jsonSchemaSubset.mjs';
 const manifest = JSON.parse(fs.readFileSync(new URL('../conductor.plugin.json', import.meta.url), 'utf8'));
 
 // The key sets cc's manifest validator accepts (code-conductor docs/plugins.md); any other key makes the plugin invalid.
-const TOP = ['id', 'name', 'version', 'pluginApi', 'backend', 'frontend', 'mcp', 'conventions', 'roles', 'playbooks', 'claudePlugin', 'runCodeModule', 'menuItems'];
+const TOP = ['id', 'name', 'version', 'pluginApi', 'backend', 'frontend', 'mcp', 'conventions', 'roles', 'playbooks', 'claudePlugin', 'runCode', 'menuItems'];
 const BACKEND = ['start', 'healthPath', 'readyWhen'];
 const FRONTEND = ['path', 'navLabel', 'keepAlive'];
 const MCP = ['endpoint', 'scope', 'timeoutMs', 'tools'];
 const PROP = ['type', 'enum', 'minLength', 'maxLength', 'pattern', 'minimum', 'maximum', 'items', 'description', 'default'];
 const SCHEMA = ['type', 'properties', 'required', 'description', 'additionalProperties'];
+const RUN_CODE = ['module', 'members'];
+const MEMBER = ['name', 'description', 'inputSchema', 'outputSchema'];
 const MCP_TIMEOUT_CAP = 120_000;
 
 // Invariant: the manifest only uses keys cc accepts, so the plugin never loads as invalid.
@@ -34,6 +36,15 @@ test('manifest keys are within the sets cc accepts', () => {
       within(spec, PROP, `${tool.name}.${prop}`);
     }
   }
+  within(manifest.runCode, RUN_CODE, 'runCode');
+  for (const member of manifest.runCode.members) {
+    within(member, MEMBER, `runCode.${member.name}`);
+    within(member.inputSchema, SCHEMA, `runCode.${member.name}.inputSchema`);
+    assert.equal(member.inputSchema.type, 'object');
+    for (const [prop, spec] of Object.entries(member.inputSchema.properties ?? {})) {
+      within(spec, PROP, `runCode.${member.name}.${prop}`);
+    }
+  }
 });
 
 // Invariant: the name pattern in the tool schemas is the one NAME_RE enforces, so schema and runtime agree.
@@ -44,6 +55,8 @@ test('tool name patterns equal NAME_RE', async () => {
       if (spec.pattern) assert.equal(spec.pattern, NAME_RE.source);
     }
   }
+  const connect = manifest.runCode.members.find((m) => m.name === 'connect');
+  assert.equal(connect.inputSchema.properties.name.pattern, NAME_RE.source);
 });
 
 // Invariant: no tool can grant the unsandboxed opt-in: each takes at most a `name`, and none is named for it.
@@ -64,10 +77,10 @@ test('list_browsers explains allowUnsandboxed and attached', () => {
 });
 
 // Invariant: before its first call an agent learns both ways to drive the browser: the run_code helper through
-// cc.code_browser.import() (or helper.module where that is unavailable) and the Bash snippet; and to obey `controller`.
+// cc.code_browser.connect() (or helper.module where that is unavailable) and the Bash snippet; and to obey `controller`.
 test('start_browser and browser_info name the run_code helper and the snippet', () => {
   const desc = (name) => manifest.mcp.tools.find((t) => t.name === name).description;
-  assert.ok(desc('start_browser').includes('cc.code_browser.import()'));
+  assert.ok(desc('start_browser').includes('cc.code_browser.connect({ name })'));
   assert.match(desc('start_browser'), /`snippet`/);
   assert.match(desc('browser_info'), /`helper\.module`/);
   assert.match(desc('browser_info'), /`snippet`/);
@@ -110,13 +123,20 @@ test('the nav label and the page title equal the manifest name', () => {
 const TOOL_KEYS = ['name', 'description', 'inputSchema', 'outputSchema'];
 
 // Invariant: every tool declares an outputSchema inside cc's validated vocabulary with an object root, and the tool
-// entries use only the keys cc accepts, so cc serves each tool in json.
+// entries use only the keys cc accepts, so cc serves each tool in json. A run_code member's optional outputSchema is
+// held to the same subset and root.
 test('every tool has an outputSchema within cc\'s subset and an object root', () => {
+  const inSubset = (schema, name) => {
+    assert.doesNotThrow(() => checkSchema(schema), name);
+    assert.equal(schema.type, 'object', name);
+  };
   for (const tool of manifest.mcp.tools) {
     for (const k of Object.keys(tool)) assert.ok(TOOL_KEYS.includes(k), `unknown key '${tool.name}.${k}'`);
     assert.ok(tool.outputSchema, `${tool.name} has an outputSchema`);
-    assert.doesNotThrow(() => checkSchema(tool.outputSchema), tool.name);
-    assert.equal(tool.outputSchema.type, 'object', tool.name);
+    inSubset(tool.outputSchema, tool.name);
+  }
+  for (const member of manifest.runCode.members) {
+    if (member.outputSchema !== undefined) inSubset(member.outputSchema, `runCode.${member.name}`);
   }
 });
 
@@ -137,10 +157,10 @@ test('descriptions are format-neutral', () => {
   for (const tool of manifest.mcp.tools) assert.doesNotMatch(tool.description, /returns? (json|text)|raw text|\bmeta\b/i, tool.name);
 });
 
-// Invariant: runCodeModule names, in the form cc's validator accepts (a relative .js/.mjs path, no '..', no leading '/'),
-// a git-tracked file whose default export is a function: the factory cc calls for cc.code_browser.import().
-test('runCodeModule names a tracked module whose default export is a function', async () => {
-  const rel = manifest.runCodeModule;
+// Invariant: runCode.module names, in the form cc's validator accepts (a relative .js/.mjs path, no '..', no leading '/'),
+// a git-tracked file whose default export is a function: the factory cc calls for cc.code_browser.connect().
+test('runCode.module names a tracked module whose default export is a function', async () => {
+  const rel = manifest.runCode.module;
   assert.equal(typeof rel, 'string');
   assert.match(rel, /\.(mjs|js)$/);
   assert.ok(!rel.startsWith('/') && !rel.split(/[\\/]/).includes('..'), rel);
@@ -148,6 +168,21 @@ test('runCodeModule names a tracked module whose default export is a function', 
   assert.doesNotThrow(() => execFileSync('git', ['ls-files', '--error-unmatch', rel], { cwd: root, stdio: 'pipe' }), `${rel} is not tracked`);
   const mod = await import(new URL(rel, root).href);
   assert.equal(typeof mod.default, 'function');
+});
+
+// Invariant: runCode declares exactly the member `connect`, with a description that carries a usage example and names the
+// drive-browser skill, and an input schema in cc's subset where `name` stays optional so a bare connect() validates.
+test('runCode declares connect with an optional name and a described output', () => {
+  const { members } = manifest.runCode;
+  assert.deepEqual(members.map((m) => m.name), ['connect']);
+  const [m] = members;
+  assert.match(m.description, /cc\.code_browser\.connect\(/);
+  assert.match(m.description, /drive-browser/);
+  assert.equal(m.inputSchema.type, 'object');
+  assert.deepEqual(Object.keys(m.inputSchema.properties).sort(), ['name', 'timeout']);
+  assert.equal(m.inputSchema.required, undefined);
+  assert.deepEqual(Object.keys(m.outputSchema.properties).sort(), ['browser', 'context', 'info', 'page']);
+  assert.match(m.description, /`save\(bytes, ext\)`/);
 });
 
 // Invariant: claudePlugin names (relative, as cc's validator requires) a git-tracked Claude Code plugin root named for

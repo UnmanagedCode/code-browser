@@ -44,37 +44,34 @@ function tokenFile(token = 'ab'.repeat(32)) {
   return f;
 }
 
-// Invariant: with no module name the factory returns exactly {connect}, and does no I/O: it never touches cc, so a
-// browser that is not running cannot make the load itself fail (cc memoizes a failed load for the whole run).
-test('the default module is {connect} and the factory touches nothing', () => {
-  for (const ctx of [{ cc: hostileCc, module: null }, { cc: hostileCc }, { pluginId: 'code-browser', baseUrl: 'http://x', caller: {}, cc: hostileCc, module: null }]) {
+// Invariant: the factory returns exactly {connect}, and does no I/O: it never touches cc, so a browser that is not
+// running cannot make the load itself fail (cc fails the whole namespace for the run when the factory throws).
+test('the factory returns {connect} and touches nothing', () => {
+  for (const ctx of [{ cc: hostileCc }, { pluginId: 'code-browser', baseUrl: 'http://x', caller: {}, cc: hostileCc }]) {
     const mod = codeBrowserModule(ctx);
     assert.deepEqual(Object.keys(mod), ['connect']);
     assert.equal(typeof mod.connect, 'function');
   }
 });
 
-// Invariant: any other module name throws an Error with code MODULE_UNKNOWN whose message names the requested module
-// and the known ones; cc passes that code through to the program.
-test('an unknown module name is MODULE_UNKNOWN naming the known modules', () => {
-  for (const module of ['nope', '', 'connect']) {
-    assert.throws(() => codeBrowserModule({ cc: hostileCc, module }), (err) => err instanceof Error && err.code === 'MODULE_UNKNOWN'
-      && err.message.includes(`'${module}'`) && /default module/.test(err.message));
+// Invariant: a factory call without a cc object throws a TypeError (cc reports it as a load failure).
+test('a missing cc is a TypeError', () => {
+  for (const ctx of [undefined, {}, { cc: null }, { cc: 'x' }]) {
+    assert.throws(() => codeBrowserModule(ctx), (err) => err instanceof TypeError);
   }
 });
 
-// Invariant: a factory call without a cc object fails with something other than MODULE_UNKNOWN (cc reports it as
-// MODULE_LOAD_FAILED).
-test('a missing cc is a load failure, not MODULE_UNKNOWN', () => {
-  for (const ctx of [undefined, {}, { cc: null, module: null }, { cc: 'x', module: null }]) {
-    assert.throws(() => codeBrowserModule(ctx), (err) => err instanceof TypeError && err.code === undefined);
-  }
+// Invariant: cc calls a member with `this` = the factory's object; connect must not depend on it.
+test('connect works called as a member of the returned object', async () => {
+  const refusal = new Error('x');
+  const mod = codeBrowserModule({ cc: { code_browser: { browser_info: async () => { throw refusal; } } } });
+  await assert.rejects(mod.connect({}), (err) => err === refusal);
 });
 
 // Invariant: while a human holds control, connect refuses with BROWSER_CONTROLLED before reading the token or dialling.
 test('connect with a human in control throws BROWSER_CONTROLLED without dialling', async () => {
   const spy = await spyServer({ onUpgrade: (_r, s) => s.destroy() });
-  const { connect } = codeBrowserModule({ cc: ccWith(infoFor(spy.port, { controller: 'human', tokenFile: '/nonexistent/token' })), module: null });
+  const { connect } = codeBrowserModule({ cc: ccWith(infoFor(spy.port, { controller: 'human', tokenFile: '/nonexistent/token' })) });
   await assert.rejects(connect({ name: 'a' }), (err) => err.code === 'BROWSER_CONTROLLED' && /refused while a human has control/.test(err.message));
   assert.deepEqual(spy.seen.upgrades, []);
 });
@@ -82,7 +79,7 @@ test('connect with a human in control throws BROWSER_CONTROLLED without dialling
 // Invariant: browser_info's own refusal (a browser that is not running, a bad name) reaches the program unchanged.
 test("connect passes browser_info's refusal through", async () => {
   const refusal = Object.assign(new Error('NOT_RUNNING: browser stopped'), { name: 'ConductorError', code: 'NOT_RUNNING' });
-  const { connect } = codeBrowserModule({ cc: { code_browser: { browser_info: async () => { throw refusal; } } }, module: null });
+  const { connect } = codeBrowserModule({ cc: { code_browser: { browser_info: async () => { throw refusal; } } } });
   await assert.rejects(connect(), (err) => err === refusal);
 });
 
@@ -92,7 +89,7 @@ test('a refused relay upgrade becomes an error with its code', async () => {
   const token = 'cd'.repeat(32);
   for (const [status, body, code] of [[409, "BROWSER_CONTROLLED: a person controls 'a' in the panel", 'BROWSER_CONTROLLED'], [401, 'UNAUTHORIZED: bad token', 'UNAUTHORIZED'], [409, "NOT_RUNNING: browser 'a' is not running", 'NOT_RUNNING']]) {
     const spy = await spyServer({ onUpgrade: (_r, s) => s.end(`HTTP/1.1 ${status} X\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`) });
-    const { connect } = codeBrowserModule({ cc: ccWith(infoFor(spy.port, { tokenFile: tokenFile(token) })), module: null });
+    const { connect } = codeBrowserModule({ cc: ccWith(infoFor(spy.port, { tokenFile: tokenFile(token) })) });
     await assert.rejects(connect({ timeout: 5000 }), (err) => err.code === code && body.endsWith(err.message));
     assert.equal(spy.seen.upgrades[0].headers.authorization, `Bearer ${token}`);
     assert.equal(spy.seen.upgrades[0].url, '/api/relay/a');
@@ -130,13 +127,12 @@ test('the module loads under --permission and uses its own playwright-core', asy
   fs.writeFileSync(path.join(cwd, 'node_modules', 'playwright-core', 'package.json'), '{"name":"playwright-core","type":"module","main":"index.js","exports":"./index.js"}');
   fs.writeFileSync(path.join(cwd, 'node_modules', 'playwright-core', 'index.js'), "throw new Error('DECOY playwright-core loaded');");
   const program = `const mod = await import(${JSON.stringify(helperModuleUrl(pluginDir))});
-const m = mod.default({ cc: {}, module: null });
-let unknown; try { mod.default({ cc: {}, module: 'x' }); } catch (e) { unknown = e.code; }
-console.log(JSON.stringify({ keys: Object.keys(m), unknown }));`;
+const m = mod.default({ cc: {} });
+console.log(JSON.stringify({ keys: Object.keys(m) }));`;
   const child = spawn(process.execPath, ['--permission', '--allow-fs-read=*', '--input-type=module', '-e', program], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   child.stdout.on('data', (d) => { out += d; });
   child.stderr.on('data', (d) => { out += d; });
   assert.equal(await waitForExit(child, 20_000, 'the plan-mode import'), 0, out);
-  assert.deepEqual(JSON.parse(out.trim()), { keys: ['connect'], unknown: 'MODULE_UNKNOWN' });
+  assert.deepEqual(JSON.parse(out.trim()), { keys: ['connect'] });
 });

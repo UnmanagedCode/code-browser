@@ -11,17 +11,17 @@ code-browser gives an agent and a person one shared headless Chromium. The agent
 3. Drive it, preferably from `run_code` with the helper:
 
    ```js
-   const { browser, page, save } = await (await cc.code_browser.import()).connect({ name: 'default' });
+   const { browser, page, save } = await cc.code_browser.connect({ name: 'default' });
    await page.goto('https://example.com');
    const shot = await save(await page.screenshot(), 'png'); // absolute path under the data dir; open it with Read
    await browser.close();                                   // disconnects only
    ```
 
-   Where `cc.code_browser.import` is unavailable, load the same helper by URL: `(await import(info.helper.module)).default({ cc, module: null })`, with `info` from `browser_info`. Otherwise, from Bash: save the snippet as an `.mjs` file, replace `// … your steps …`, run it with `node`.
+   Where `cc.code_browser.connect` is unavailable, load the same helper by URL: `(await import(info.helper.module)).default({ cc }).connect({ name })`, with `info` from `browser_info`. Otherwise, from Bash: save the snippet as an `.mjs` file, replace `// … your steps …`, run it with `node`.
 4. Before each later snippet script call `browser_info` and respect `controller`.
 
 - The browser keeps its tabs, logins and cookies between programs. A program ends with `browser.close()`, which only disconnects.
-- **The run_code helper** connects through the backend's CDP relay: it works in cc's plan mode (the program itself writes no files: `save()` hands bytes to the backend; in a launched browser Playwright's downloads go to the backend's artifacts dir, and in an attached one Chrome keeps its own download settings), an attached Chrome in approval mode asks nothing more after the person's Connect, and it is refused while a person holds control. `connect` returns `{browser, context, page, info, save}`; `info` is `browser_info`'s data. Contract: [protocol.md → run_code module](protocol.md#run_code-module-srcruncode).
+- **The run_code helper** connects through the backend's CDP relay: it works in cc's plan mode (the program itself writes no files: `save()` hands bytes to the backend; in a launched browser Playwright's downloads go to the backend's artifacts dir, and in an attached one Chrome keeps its own download settings), an attached Chrome in approval mode asks nothing more after the person's Connect, and it is refused while a person holds control. `connect` returns `{browser, context, page, info, save}`; `info` is `browser_info`'s data. Contract: [protocol.md → run_code members](protocol.md#run_code-members-srcruncode).
 - **The Bash snippet** connects to the raw CDP endpoint: one new connection per script.
 - **Where downloads land.** In a launched browser the helper's Playwright points downloads at `<dataDir>/artifacts`, where the newest `ARTIFACTS_KEEP` files are kept. In an attached browser it passes `noDefaults`, so Chrome's own download behaviour stays: files go wherever that Chrome is configured to put them, written by the user running it, and code-browser neither moves nor prunes them.
 - **Any CDP client can redirect downloads.** With `Browser.setDownloadBehavior`, a client (the helper's Playwright included) can make Chrome write downloads anywhere the user running that Chrome can write: the backend's user for a launched browser. code-browser does not filter it, because Playwright sets its own downloads dir the same way.

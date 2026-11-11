@@ -11,7 +11,64 @@
     "path": "/",
     "navLabel": "Code Browser"
   },
-  "runCodeModule": "src/runCode/index.js",
+  "runCode": {
+    "module": "src/runCode/index.js",
+    "members": [
+      {
+        "name": "connect",
+        "description": "Connect Playwright to a running shared browser and return {browser, context, page, info, save}: `page` is the tab to drive, `info` is browser_info's data, `save(bytes, ext)` is an async function that writes a Buffer (a screenshot, say) to the plugin's artifacts directory and resolves its path, and `browser.close()` only disconnects. Start the browser first with start_browser. Refused with BROWSER_CONTROLLED while a human has control. Usage: `const { page, save } = await cc.code_browser.connect({ name: \"default\" });`. Load the drive-browser skill for the full workflow.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9\\-]{0,39}$",
+              "maxLength": 40,
+              "description": "Browser name. Defaults to \"default\"."
+            },
+            "timeout": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Milliseconds to wait for the connection. Defaults to 10000."
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "browser",
+            "context",
+            "page",
+            "info"
+          ],
+          "properties": {
+            "browser": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "Playwright Browser connected through code-browser's CDP relay; close() only disconnects."
+            },
+            "context": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "The browser's Playwright BrowserContext (its first)."
+            },
+            "page": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "The Playwright Page to drive: the active tab, or the first one."
+            },
+            "info": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "browser_info's data for this browser (tabs, controller, helper)."
+            }
+          },
+          "description": "Also carries `save`, an async function (not expressible in this schema)."
+        }
+      }
+    ]
+  },
   "claudePlugin": "claude",
   "mcp": {
     "endpoint": "/api/mcp",
@@ -172,7 +229,7 @@
       },
       {
         "name": "start_browser",
-        "description": "Start (creating on first use) a persistent headless Chromium that you and the human share; a browser name keeps its logins and cookies across stops. Drive it with Playwright: in run_code, `await (await cc.code_browser.import()).connect({ name })` returns a connected `browser`, `context` and `page`; from Bash, run the result's `snippet` as an .mjs script (no Playwright install needed). A human watches in a panel and can take control.",
+        "description": "Start (creating on first use) a persistent headless Chromium that you and the human share; a browser name keeps its logins and cookies across stops. Drive it with Playwright: in run_code, `await cc.code_browser.connect({ name })` returns a connected `browser`, `context` and `page`; from Bash, run the result's `snippet` as an .mjs script (no Playwright install needed). A human watches in a panel and can take control.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -395,7 +452,7 @@
               "properties": {
                 "module": {
                   "type": "string",
-                  "description": "file URL of the helper: `(await import(module)).default({ cc, module: null })` where cc.code_browser.import is unavailable"
+                  "description": "file URL of the helper: `(await import(module)).default({ cc }).connect({ name })` where cc.code_browser.connect is unavailable"
                 },
                 "relay": {
                   "type": "string"
@@ -459,7 +516,7 @@
       },
       {
         "name": "browser_info",
-        "description": "Current state of a running shared browser: tabs, the active tab, who controls it (`controller`), the CDP endpoint, the Bash `snippet`, `helper.module` (the run_code helper's file URL, for `await import()` where cc.code_browser.import is unavailable), and `panelPath` to give the user. Call it before each snippet script, and while `controller` is \"human\" do not drive the page.",
+        "description": "Current state of a running shared browser: tabs, the active tab, who controls it (`controller`), the CDP endpoint, the Bash `snippet`, `helper.module` (the run_code helper's file URL, for `await import()` where cc.code_browser.connect is unavailable), and `panelPath` to give the user. Call it before each snippet script, and while `controller` is \"human\" do not drive the page.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -682,7 +739,7 @@
               "properties": {
                 "module": {
                   "type": "string",
-                  "description": "file URL of the helper: `(await import(module)).default({ cc, module: null })` where cc.code_browser.import is unavailable"
+                  "description": "file URL of the helper: `(await import(module)).default({ cc }).connect({ name })` where cc.code_browser.connect is unavailable"
                 },
                 "relay": {
                   "type": "string"
