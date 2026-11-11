@@ -6,7 +6,7 @@ description: Drive a shared headless browser with the Code Browser tools (code-b
 # Driving a browser with Code Browser
 
 ## Flow
-1. `start_browser({ name })`. Tabs, logins and cookies persist per browser name across stops: reuse a name to keep a login, pick a new one for work that must not share cookies. Follow the result's `notes`.
+1. `start_browser({ name })`. Follow the result's `notes`.
 2. Drive it from `run_code`, one program per unit of work, returning a digest (values, text, file paths), never page HTML:
    ```js
    const { browser, page, save } = await (await cc.code_browser.import()).connect({ name: 'default' });
@@ -14,13 +14,13 @@ description: Drive a shared headless browser with the Code Browser tools (code-b
      await page.goto('https://example.com');
      return { title: await page.title(), shot: await save(await page.screenshot(), 'png') };
    } finally {
-     await browser.close(); // disconnects only; the browser keeps running
+     await browser.close();
    }
    ```
    `connect` also returns `context` and `info` (browser_info's data).
-   - `save(bytes, ext)` resolves an absolute path: open it with Read. It is how a plan-mode program gets bytes out. Only the newest `ARTIFACTS_KEEP` saved files are kept (`src/limits.js`): copy any you need to keep.
+   - `save(bytes, ext)` resolves an absolute path: open it with Read. It is how a plan-mode program gets bytes out. Only the newest `ARTIFACTS_KEEP` files in the artifacts dir are kept (`src/limits.js`; a launched browser's downloads land there too): copy any you need to keep.
    - Always close your `browser` (in `finally`): open connections count against the browser's relay limit.
-3. Call `stop_browser` only for a browser you started (absent or `stopped` in `list_browsers` before your `start_browser`), and never while a person has control. Leave every other browser running.
+3. Stop only browsers you started.
 
 ## Helper or Bash snippet
 Prefer the helper. Unlike the result's Bash `snippet`, it:
@@ -31,11 +31,11 @@ Prefer the helper. Unlike the result's Bash `snippet`, it:
 Use the snippet only when `run_code` is not among your tools or the work outlasts run_code's `timeoutMs` ceiling. Never switch to the snippet or the raw `cdpEndpoint` to get past a refusal the helper gave.
 
 ## When a person has control
-- While `controller` is `"human"`, `connect` throws `BROWSER_CONTROLLED`. If a person takes control mid-program, your connection is dropped and pending calls reject with `BROWSER_CONTROLLED` in the message. Don't retry in a loop: tell the user what you are waiting for, check `browser_info` once they say they are done, then run a new program that re-reads the page (they may have navigated).
+- While `controller` is `"human"`, `connect` throws `BROWSER_CONTROLLED`. If a person takes control mid-program, your connection is dropped and pending calls reject with `BROWSER_CONTROLLED` in the message. Don't retry in a loop: tell the user what you are waiting for, then run a new program that re-reads the page (they may have navigated).
 - For a sign-in, give the user `panelPath` and ask them to take control, sign in and hand back. Never ask for credentials in chat. The login stays with that browser name.
 
 ## `SANDBOX_UNAVAILABLE`
-Only a person can turn on "Allow without sandbox" for that browser in the panel. Stop and ask them, and call `start_browser` again only after they confirm. Meanwhile don't retry, don't try another browser name, don't launch a Chromium yourself, and don't touch code-browser's data dir or HTTP routes: each bypasses a gate that exists for the person's consent.
+Don't retry, don't try another browser name, don't launch a Chromium yourself, and don't touch code-browser's data dir or HTTP routes: each bypasses a gate that exists for the person's consent.
 
 ## Other refusals
 | Code | Do |
