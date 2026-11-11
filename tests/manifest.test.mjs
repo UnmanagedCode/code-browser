@@ -123,13 +123,20 @@ test('the nav label and the page title equal the manifest name', () => {
 const TOOL_KEYS = ['name', 'description', 'inputSchema', 'outputSchema'];
 
 // Invariant: every tool declares an outputSchema inside cc's validated vocabulary with an object root, and the tool
-// entries use only the keys cc accepts, so cc serves each tool in json.
+// entries use only the keys cc accepts, so cc serves each tool in json. A run_code member's optional outputSchema is
+// held to the same subset and root.
 test('every tool has an outputSchema within cc\'s subset and an object root', () => {
+  const inSubset = (schema, name) => {
+    assert.doesNotThrow(() => checkSchema(schema), name);
+    assert.equal(schema.type, 'object', name);
+  };
   for (const tool of manifest.mcp.tools) {
     for (const k of Object.keys(tool)) assert.ok(TOOL_KEYS.includes(k), `unknown key '${tool.name}.${k}'`);
     assert.ok(tool.outputSchema, `${tool.name} has an outputSchema`);
-    assert.doesNotThrow(() => checkSchema(tool.outputSchema), tool.name);
-    assert.equal(tool.outputSchema.type, 'object', tool.name);
+    inSubset(tool.outputSchema, tool.name);
+  }
+  for (const member of manifest.runCode.members) {
+    if (member.outputSchema !== undefined) inSubset(member.outputSchema, `runCode.${member.name}`);
   }
 });
 
@@ -176,8 +183,6 @@ test('runCode declares connect with an optional name and a described output', ()
   assert.equal(m.inputSchema.required, undefined);
   assert.deepEqual(Object.keys(m.outputSchema.properties).sort(), ['browser', 'context', 'info', 'page']);
   assert.match(m.description, /`save\(bytes, ext\)`/);
-  // cc's output-schema subset requires every object schema to state additionalProperties.
-  for (const schema of [m.outputSchema, ...Object.values(m.outputSchema.properties)]) assert.equal(typeof schema.additionalProperties, 'boolean');
 });
 
 // Invariant: claudePlugin names (relative, as cc's validator requires) a git-tracked Claude Code plugin root named for
