@@ -281,9 +281,9 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
       await p2.getByText('Agent has control').waitFor();
     });
 
-    // The run_code helper as a program reaches it without cc's import(): by the file URL in browser_info's helper.module,
+    // The run_code helper as a program reaches it without cc's members: by the file URL in browser_info's helper.module,
     // under cc's plan-mode permissions. `cc` here is a stand-in for cc's runtime object: browser_info over api/mcp in json.
-    await t.test('5b. the run_code helper on the absolute-path route under --permission: connect, evaluate, save, MODULE_UNKNOWN', async () => {
+    await t.test('5b. the run_code helper on the absolute-path route under --permission: connect, evaluate, save', async () => {
       const program = `
 const cc = { code_browser: { browser_info: async (args) => {
   const r = await (await fetch(${JSON.stringify(`http://127.0.0.1:${port}/api/mcp`)}, { method: 'POST', headers: { 'content-type': 'application/json' },
@@ -293,14 +293,12 @@ const cc = { code_browser: { browser_info: async (args) => {
 } } };
 const info = await cc.code_browser.browser_info({ name: 'e2e' });
 const mod = await import(info.helper.module);
-let unknown = null;
-try { mod.default({ cc, module: 'nope' }); } catch (e) { unknown = e.code; }
-const { browser, page, save } = await mod.default({ cc, module: null }).connect({ name: 'e2e' });
+const { browser, page, save } = await mod.default({ cc }).connect({ name: 'e2e' });
 await page.goto(${JSON.stringify(`${fixtureUrl}?helper`)});
 const title = await page.evaluate(() => document.title);
 const shot = await save(await page.screenshot(), 'png');
 await browser.close();
-console.log(JSON.stringify({ title, shot, unknown }));
+console.log(JSON.stringify({ title, shot }));
 `;
       const file = path.join(projectsRoot, `helper-${Date.now()}.mjs`);
       fs.writeFileSync(file, program);
@@ -311,7 +309,6 @@ console.log(JSON.stringify({ title, shot, unknown }));
       assert.equal(await new Promise((resolve) => child.on('close', resolve)), 0, out);
       const r = JSON.parse(out.trim().split('\n').at(-1));
       assert.equal(r.title, 'fixture');
-      assert.equal(r.unknown, 'MODULE_UNKNOWN');
       assert.equal(path.dirname(r.shot), path.join(dataDir, 'artifacts'));
       assert.deepEqual(fs.readFileSync(r.shot).subarray(0, 8), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'a PNG');
       assert.equal(modeOf(r.shot), 0o600);

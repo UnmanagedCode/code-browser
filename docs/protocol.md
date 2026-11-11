@@ -102,9 +102,9 @@ Check order in `handle`: `format`, then `tool`, then `arguments`, then the tool.
 - `notes`: the warnings that apply now, in text order (`src/notes.js`): the do-not-drive note when `controller` is `human` (`HUMAN_NOTE`, which also says the run_code helper is refused); the `WARNING` when `sandbox` is `false`; for an attached browser the attached note (`ATTACHED_NOTE`: the user's tabs and logins, work in your own tab, do not close tabs you did not open, `sandbox` is null, `stop_browser` only disconnects and only the user reconnects, a person may be using the window); when `attached.asksApproval` the approval note (`APPROVAL_NOTE`: the run_code helper asks nothing, each Bash snippet script raises Chrome's dialog, tell the user first, use few snippet scripts).
 - `rules`: the Playwright rules (the viewport rule only for launched browsers).
 - `snippet`: the whole ready-to-run Bash script (`src/snippet.js`). It connects to the raw `cdpEndpoint`, picks its page with the helper's `pickPage` (imported by file URL), and in approval mode `connectOverCDP` waits `APPROVAL_TIMEOUT_MS`.
-- `helper`: `{module, relay, artifacts, tokenFile, artifactsDir}` for the [run_code module](#run_code-module-srcruncode) (`src/helperInfo.js`): `module` is the module's `file:` URL; `relay` is `ws://127.0.0.1:<port>/api/relay/<name>`; `artifacts` is `http://127.0.0.1:<port>/api/artifacts`; `tokenFile` is the path of the relay token file (never its value: no tool result carries the token); `artifactsDir` is `<dataDir>/artifacts`.
+- `helper`: `{module, relay, artifacts, tokenFile, artifactsDir}` for the [run_code members](#run_code-members-srcruncode) (`src/helperInfo.js`): `module` is the module's `file:` URL; `relay` is `ws://127.0.0.1:<port>/api/relay/<name>`; `artifacts` is `http://127.0.0.1:<port>/api/artifacts`; `tokenFile` is the path of the relay token file (never its value: no tool result carries the token); `artifactsDir` is `<dataDir>/artifacts`.
 
-`browser_info` text: each note followed by a blank line, the `Panel:` line with its relative-address note, `Rules:` as `- ` bullets, the `In run_code:` line (`await (await cc.code_browser.import()).connect({ name })`), then the snippet in a `js` fence after `From Bash, …`. `meta` is `{name, kind, status, attached, cdpEndpoint, controller, sandbox, allowUnsandboxed, tabs, panelPath, helper}`; the json-only fields (`lastExit`, `attachError`, `sandboxUnavailable`, `activeTargetId`) are a text summary, not a cap.
+`browser_info` text: each note followed by a blank line, the `Panel:` line with its relative-address note, `Rules:` as `- ` bullets, the `In run_code:` line (`await cc.code_browser.connect({ name })`), then the snippet in a `js` fence after `From Bash, …`. `meta` is `{name, kind, status, attached, cdpEndpoint, controller, sandbox, allowUnsandboxed, tabs, panelPath, helper}`; the json-only fields (`lastExit`, `attachError`, `sandboxUnavailable`, `activeTargetId`) are a text summary, not a cap.
 
 Refusals (`code`, with `details`):
 
@@ -234,20 +234,13 @@ Close codes (the reason text starts with a code where one applies):
 - A client that misses a pong (`RELAY_PING_MS`) is terminated.
 - When a client goes, for whatever reason, its sessions are detached, each child on its parent session and children before parents, then its root; `Browser.close` is never sent, so the browser and its tabs keep running.
 
-## run_code module (`src/runCode/`)
+## run_code members (`src/runCode/`)
 
-The module a cc `run_code` program loads to get a connected Playwright page (entry `src/runCode/index.js`). cc serves `cc.code_browser.import()` from the file the manifest's `runCodeModule` key names (`src/runCode/index.js`); on a cc without plugin modules the absolute-path route below works.
+The members a cc `run_code` program calls to get a connected Playwright page. The manifest's `runCode` key names the module (`src/runCode/index.js`) and declares the member `connect` with its `description`, `inputSchema` and `outputSchema`; cc validates args against `inputSchema` before loading the module.
 
-- **Through cc:** `const cb = await cc.code_browser.import()`. cc calls the default export once per requested name with `ctx = {pluginId, baseUrl, caller, cc, module}` (`module`: the name asked for, or `null`), evaluates the file once per run and memoizes the result per name.
-- **Without cc's import:** `const cb = (await import(info.helper.module)).default({ cc, module: null })`, with `info` from `browser_info`.
-- The factory reads only `ctx.cc` and `ctx.module`, and does no I/O (a failed load is memoized for the run, so runtime state such as a stopped browser must fail later, at `connect`).
-
-| `ctx.module` | Factory result |
-|---|---|
-| `null` | `{connect}` |
-| anything else | throws `Error` with `code: "MODULE_UNKNOWN"`, naming the requested and the known modules (cc passes it through as `MODULE_UNKNOWN`) |
-
-Named modules are entries of `MODULES` in `src/runCode/index.js`. A factory call without a `cc` object throws a `TypeError` (cc reports `MODULE_LOAD_FAILED`).
+- **Through cc:** `const { page } = await cc.code_browser.connect({ name })`, or `cc.call('code_browser__connect', { name })`. cc calls the default export once per run with `ctx = {pluginId, baseUrl, caller, cc}` and calls the `connect` property of the returned object with that object as `this` and one args object.
+- **Without cc's members:** `const cb = (await import(info.helper.module)).default({ cc })`, with `info` from `browser_info`, then `cb.connect({ name })`.
+- The factory reads only `ctx.cc` and does no I/O (a failed load is `PLUGIN_LOAD_FAILED` for the whole namespace for that run, so runtime state such as a stopped browser must fail later, at `connect`). A factory call without a `cc` object throws a `TypeError`.
 
 `connect({name = DEFAULT_BROWSER_NAME, timeout = CDP_TIMEOUT_MS} = {})` → `{browser, context, page, info, save}`:
 

@@ -7,7 +7,7 @@ import { checkSchema } from './_jsonSchemaSubset.mjs';
 const manifest = JSON.parse(fs.readFileSync(new URL('../conductor.plugin.json', import.meta.url), 'utf8'));
 
 // The key sets cc's manifest validator accepts (code-conductor docs/plugins.md); any other key makes the plugin invalid.
-const TOP = ['id', 'name', 'version', 'pluginApi', 'backend', 'frontend', 'mcp', 'conventions', 'roles', 'playbooks', 'claudePlugin', 'runCodeModule', 'menuItems'];
+const TOP = ['id', 'name', 'version', 'pluginApi', 'backend', 'frontend', 'mcp', 'conventions', 'roles', 'playbooks', 'claudePlugin', 'runCode', 'menuItems'];
 const BACKEND = ['start', 'healthPath', 'readyWhen'];
 const FRONTEND = ['path', 'navLabel', 'keepAlive'];
 const MCP = ['endpoint', 'scope', 'timeoutMs', 'tools'];
@@ -64,10 +64,10 @@ test('list_browsers explains allowUnsandboxed and attached', () => {
 });
 
 // Invariant: before its first call an agent learns both ways to drive the browser: the run_code helper through
-// cc.code_browser.import() (or helper.module where that is unavailable) and the Bash snippet; and to obey `controller`.
+// cc.code_browser.connect() (or helper.module where that is unavailable) and the Bash snippet; and to obey `controller`.
 test('start_browser and browser_info name the run_code helper and the snippet', () => {
   const desc = (name) => manifest.mcp.tools.find((t) => t.name === name).description;
-  assert.ok(desc('start_browser').includes('cc.code_browser.import()'));
+  assert.ok(desc('start_browser').includes('cc.code_browser.connect({ name })'));
   assert.match(desc('start_browser'), /`snippet`/);
   assert.match(desc('browser_info'), /`helper\.module`/);
   assert.match(desc('browser_info'), /`snippet`/);
@@ -137,10 +137,10 @@ test('descriptions are format-neutral', () => {
   for (const tool of manifest.mcp.tools) assert.doesNotMatch(tool.description, /returns? (json|text)|raw text|\bmeta\b/i, tool.name);
 });
 
-// Invariant: runCodeModule names, in the form cc's validator accepts (a relative .js/.mjs path, no '..', no leading '/'),
-// a git-tracked file whose default export is a function: the factory cc calls for cc.code_browser.import().
-test('runCodeModule names a tracked module whose default export is a function', async () => {
-  const rel = manifest.runCodeModule;
+// Invariant: runCode.module names, in the form cc's validator accepts (a relative .js/.mjs path, no '..', no leading '/'),
+// a git-tracked file whose default export is a function: the factory cc calls for cc.code_browser.connect().
+test('runCode.module names a tracked module whose default export is a function', async () => {
+  const rel = manifest.runCode.module;
   assert.equal(typeof rel, 'string');
   assert.match(rel, /\.(mjs|js)$/);
   assert.ok(!rel.startsWith('/') && !rel.split(/[\\/]/).includes('..'), rel);
@@ -148,6 +148,22 @@ test('runCodeModule names a tracked module whose default export is a function', 
   assert.doesNotThrow(() => execFileSync('git', ['ls-files', '--error-unmatch', rel], { cwd: root, stdio: 'pipe' }), `${rel} is not tracked`);
   const mod = await import(new URL(rel, root).href);
   assert.equal(typeof mod.default, 'function');
+});
+
+// Invariant: runCode declares exactly the member `connect`, with a description that carries a usage example and names the
+// drive-browser skill, and an input schema in cc's subset where `name` stays optional so a bare connect() validates.
+test('runCode declares connect with an optional name and a described output', () => {
+  const { members } = manifest.runCode;
+  assert.deepEqual(members.map((m) => m.name), ['connect']);
+  const [m] = members;
+  assert.match(m.description, /cc\.code_browser\.connect\(/);
+  assert.match(m.description, /drive-browser/);
+  assert.equal(m.inputSchema.type, 'object');
+  assert.deepEqual(Object.keys(m.inputSchema.properties).sort(), ['name', 'timeout']);
+  assert.equal(m.inputSchema.required, undefined);
+  assert.deepEqual(Object.keys(m.outputSchema.properties).sort(), ['browser', 'context', 'info', 'page', 'save']);
+  // cc's output-schema subset requires every object schema to state additionalProperties.
+  for (const schema of [m.outputSchema, ...Object.values(m.outputSchema.properties)]) assert.equal(typeof schema.additionalProperties, 'boolean');
 });
 
 // Invariant: claudePlugin names (relative, as cc's validator requires) a git-tracked Claude Code plugin root named for

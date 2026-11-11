@@ -11,13 +11,13 @@ code-browser gives an agent and a person one shared headless Chromium. The agent
 3. Drive it, preferably from `run_code` with the helper:
 
    ```js
-   const { browser, page, save } = await (await cc.code_browser.import()).connect({ name: 'default' });
+   const { browser, page, save } = await cc.code_browser.connect({ name: 'default' });
    await page.goto('https://example.com');
    const shot = await save(await page.screenshot(), 'png'); // absolute path under the data dir; open it with Read
    await browser.close();                                   // disconnects only
    ```
 
-   Where `cc.code_browser.import` is unavailable, load the same helper by URL: `(await import(info.helper.module)).default({ cc, module: null })`, with `info` from `browser_info`. Otherwise, from Bash: save the snippet as an `.mjs` file, replace `// … your steps …`, run it with `node`.
+   Where `cc.code_browser.connect` is unavailable, load the same helper by URL: `(await import(info.helper.module)).default({ cc }).connect({ name })`, with `info` from `browser_info`. Otherwise, from Bash: save the snippet as an `.mjs` file, replace `// … your steps …`, run it with `node`.
 4. Before each later snippet script call `browser_info` and respect `controller`.
 
 - The browser keeps its tabs, logins and cookies between programs. A program ends with `browser.close()`, which only disconnects.

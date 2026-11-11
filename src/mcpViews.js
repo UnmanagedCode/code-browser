@@ -24,7 +24,7 @@ function browserInfo(d) {
     'Rules:',
     ...d.rules.map((rule) => `- ${rule}`),
     '',
-    `In run_code: const { page } = await (await cc.code_browser.import()).connect({ name: ${lit(d.name)} });`,
+    `In run_code: const { page } = await cc.code_browser.connect({ name: ${lit(d.name)} });`,
     '',
     'From Bash, save this as an .mjs file and run it with node:',
     '```js',
