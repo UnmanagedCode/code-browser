@@ -41,7 +41,7 @@ Every tool answers in both of cc's formats, json (the complete data) and text (p
 |---|---|
 | `list_browsers` | name, `kind`, status, controller, CDP endpoint, sandbox state, the read-only `allowUnsandboxed`, and `attached` for an attached browser |
 | `start_browser` | starts (creating on first use) a browser; idempotent. Refuses an attached browser with `ATTACHED` |
-| `stop_browser` | stops it; the profile is kept. For an attached browser it only disconnects |
+| `stop_browser` | stops it; the profile is kept. For an attached browser it only disconnects. Its description tells the agent to stop only browsers it started, and never while a person holds control |
 | `browser_info` | CDP endpoint, tabs, active tab, controller, `sandbox`, read-only `allowUnsandboxed`, `kind`, `attached`, panel path, snippet, `helper` (the run_code helper's module URL, relay, token file path) |
 
 No tool attaches or connects a browser: only a person does, in the panel.
@@ -51,6 +51,13 @@ No tool attaches or connects a browser: only a person does, in the panel.
 - **run_code helper (the relay):** enforced. While a person holds control, `connect` fails with `BROWSER_CONTROLLED`. When a person takes control, every connected program is dropped: its pending calls fail with `BROWSER_CONTROLLED` in the message. After the person hands back, a new `connect` works.
 - **Bash snippet (the raw CDP endpoint):** advisory. The script talks to Chromium over its own CDP connection; the backend is not on that path and cannot stop it. The agent is *told* the state: `controller` in `start_browser`/`browser_info`/`list_browsers`, and a do-not-drive note while a person holds control. A script that ignores it can still act.
 - For the person it is enforced: see Control.
+
+### The drive-browser skill
+
+- It is a Claude Code plugin root at `claude/`, declared by the manifest's `claudePlugin`. cc passes it as `--plugin-dir` to every session it launches on the local System; the skill appears as `code-browser:drive-browser`.
+- It covers the helper flow, why to prefer the helper over the snippet, the controller lock, the ban on working around `SANDBOX_UNAVAILABLE`, signing in through the panel, and what to do for each relay refusal.
+- Pickup: cc reads `claudePlugin` from the manifest on a Settings → Plugins → Rescan, a cc restart or a backend start; a session gets the skill when it is created or resumed after that. Edits to `SKILL.md` reach the next new session.
+- Rule for whoever edits it: add only what tool results and refusals do not already say.
 
 ## Panel
 

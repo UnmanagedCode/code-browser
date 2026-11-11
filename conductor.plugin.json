@@ -12,6 +12,7 @@
     "navLabel": "Code Browser"
   },
   "runCodeModule": "src/runCode/index.js",
+  "claudePlugin": "claude",
   "mcp": {
     "endpoint": "/api/mcp",
     "timeoutMs": 60000,
@@ -179,7 +180,7 @@
               "type": "string",
               "pattern": "^[a-z0-9][a-z0-9\\-]{0,39}$",
               "maxLength": 40,
-              "description": "Browser name (lowercase letters, digits, dashes). Defaults to \"default\"."
+              "description": "Browser name (lowercase letters, digits, dashes). Defaults to \"default\". A new name starts with no logins or cookies."
             }
           }
         },
@@ -416,7 +417,7 @@
       },
       {
         "name": "stop_browser",
-        "description": "Stop a shared browser. Its profile (logins, cookies) is kept; start_browser brings it back. For an attached browser (the user's own) it only disconnects code-browser: the browser and its tabs keep running, and only the user can reconnect it.",
+        "description": "Stop a shared browser. Its profile (logins, cookies) is kept; start_browser brings it back. For an attached browser (the user's own) it only disconnects code-browser: the browser and its tabs keep running, and only the user can reconnect it. Only stop a browser you started (it was absent or `stopped` in `list_browsers` before your `start_browser`), and never while a person holds control; leave every other browser running.",
         "inputSchema": {
           "type": "object",
           "properties": {

@@ -91,6 +91,14 @@ test('stop_browser says it only disconnects an attached browser', () => {
   assert.match(desc('stop_browser'), /only disconnects/);
 });
 
+// Invariant: stop_browser's description, read at the point of use, tells the agent to stop only browsers it started and
+// never while a person holds control: no other surface carries that ownership rule.
+test('stop_browser says to stop only own browsers and never while a person has control', () => {
+  const desc = manifest.mcp.tools.find((t) => t.name === 'stop_browser').description;
+  assert.match(desc, /only stop a browser you started/i);
+  assert.match(desc, /never while a person holds control/i);
+});
+
 // Invariant: the panel is called one thing everywhere it names itself: manifest name, nav label and page title.
 test('the nav label and the page title equal the manifest name', () => {
   assert.equal(manifest.frontend.navLabel, manifest.name);
@@ -140,4 +148,34 @@ test('runCodeModule names a tracked module whose default export is a function', 
   assert.doesNotThrow(() => execFileSync('git', ['ls-files', '--error-unmatch', rel], { cwd: root, stdio: 'pipe' }), `${rel} is not tracked`);
   const mod = await import(new URL(rel, root).href);
   assert.equal(typeof mod.default, 'function');
+});
+
+// Invariant: claudePlugin names (relative, as cc's validator requires) a git-tracked Claude Code plugin root named for
+// the manifest id, whose drive-browser skill has the frontmatter Claude Code reads, so cc can load it into sessions.
+test('claudePlugin points at a tracked Claude Code plugin with the drive-browser skill', () => {
+  const rel = manifest.claudePlugin;
+  assert.equal(typeof rel, 'string');
+  assert.ok(!rel.startsWith('/') && !rel.split(/[\\/]/).includes('..'), rel);
+  const root = new URL('..', import.meta.url);
+  const files = [`${rel}/.claude-plugin/plugin.json`, `${rel}/skills/drive-browser/SKILL.md`];
+  for (const f of files) {
+    assert.doesNotThrow(() => execFileSync('git', ['ls-files', '--error-unmatch', f], { cwd: root, stdio: 'pipe' }), `${f} is not tracked`);
+  }
+  const plugin = JSON.parse(fs.readFileSync(new URL(files[0], root), 'utf8'));
+  assert.equal(plugin.name, manifest.id);
+  assert.match(fs.readFileSync(new URL(files[1], root), 'utf8'), /^---\nname: drive-browser\ndescription: .+\n---\n/);
+});
+
+// Invariant: every code or constant the skill names in backticks still exists in src/, so a rename there cannot leave
+// the skill teaching a refusal code or limit that no longer exists.
+test('every code and constant the skill names exists in src/', () => {
+  const skill = fs.readFileSync(new URL(`../${manifest.claudePlugin}/skills/drive-browser/SKILL.md`, import.meta.url), 'utf8');
+  const names = [...new Set([...skill.matchAll(/`([A-Z][A-Z0-9_]{2,})`/g)].map((m) => m[1]))];
+  assert.ok(names.length > 0);
+  const srcDir = new URL('../src/', import.meta.url);
+  const source = fs.readdirSync(srcDir, { recursive: true })
+    .filter((f) => f.endsWith('.js'))
+    .map((f) => fs.readFileSync(new URL(f, srcDir), 'utf8'))
+    .join('\n');
+  for (const n of names) assert.match(source, new RegExp(`\\b${n}\\b`), `${n} is not in src/`);
 });
