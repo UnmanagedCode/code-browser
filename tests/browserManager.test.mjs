@@ -1,6 +1,6 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -243,26 +243,59 @@ test('a symlinked opt-in file is not honoured, written through or chmod-ed', asy
   assert.equal(fs.readFileSync(target, 'utf8'), 'keep me', 'revoking unlinked the link, not its target');
 });
 
-// Invariant: a non-regular entry at the opt-in path (FIFO, socket, directory) is "not allowed" with a warning, and
-// neither the read nor boot blocks or fails on it. Bounded: a regression to a blocking open fails fast, not hangs.
-for (const kind of ['fifo', 'socket', 'directory']) {
-  test(`a ${kind} at the opt-in path is not allowed, warned about, and does not block or fail boot`, { timeout: 5000 }, async () => {
-    const dataDir = tmpDir();
-    const file = optInOf(dataDir);
-    let server;
-    if (kind === 'fifo') execFileSync('mkfifo', [file]);
-    else if (kind === 'directory') fs.mkdirSync(file);
-    else { server = net.createServer(); await new Promise((r) => server.listen(file, r)); }
-    try {
-      const { manager, warns } = make({ dataDir, env: NO_SANDBOX });
-      manager.create('a');
-      await manager.boot();
-      assert.equal(manager.allowsUnsandboxed(), false);
-      assert.ok(warns.some((w) => /opt-in/.test(w)));
-      await assert.rejects(manager.start('a'), (e) => e.code === 'SANDBOX_UNAVAILABLE');
-    } finally { server?.close(); }
-  });
-}
+// Invariant: a FIFO at the opt-in path never blocks boot or the read: both return at once, the read is "not allowed",
+// and the warning is the non-regular one (so the `fstat().isFile()` gate, not a later failure, rejected it). It runs
+// in a child with a real kill timeout, because a blocking synchronous open would freeze this process's own timers.
+test('a fifo at the opt-in path is rejected without blocking', () => {
+  const dataDir = tmpDir();
+  execFileSync('mkfifo', [optInOf(dataDir)]);
+  const script = `
+    import { allowsUnsandboxed, tightenOptIn } from ${JSON.stringify(new URL('../src/sandboxOptIn.js', import.meta.url).href)};
+    const warns = [];
+    const log = { warn: (m) => warns.push(m) };
+    tightenOptIn(${JSON.stringify(dataDir)}, log);
+    const allowed = allowsUnsandboxed(${JSON.stringify(dataDir)}, log);
+    console.log(JSON.stringify({ allowed, warns }));
+  `;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' });
+  assert.equal(r.error, undefined, `the child did not finish in time: ${r.error}`);
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.allowed, false);
+  assert.ok(out.warns.length >= 1 && out.warns.every((w) => /not a regular file/.test(w)), out.warns.join('\n'));
+});
+
+// Invariant: a directory at the opt-in path is rejected by the `fstat().isFile()` gate (the non-regular warning, not
+// a read error), reads as "not allowed", fails no boot, and boot never chmods it.
+test('a directory at the opt-in path is rejected as non-regular and left untouched by boot', async () => {
+  const dataDir = tmpDir();
+  fs.mkdirSync(optInOf(dataDir), { mode: 0o755 });
+  fs.chmodSync(optInOf(dataDir), 0o755);
+  const before = modeOf(optInOf(dataDir));
+  const { manager, warns } = make({ dataDir, env: NO_SANDBOX });
+  manager.create('a');
+  await manager.boot();
+  assert.equal(modeOf(optInOf(dataDir)), before, 'boot did not fchmod the directory');
+  assert.equal(manager.allowsUnsandboxed(), false);
+  assert.ok(warns.some((w) => /not a regular file/.test(w)));
+  await assert.rejects(manager.start('a'), (e) => e.code === 'SANDBOX_UNAVAILABLE');
+});
+
+// Invariant: a Unix socket at the opt-in path (whose open fails with ENXIO) is "not allowed" with a warning and fails
+// no boot.
+test('a socket at the opt-in path is not allowed, warned about, and does not fail boot', async () => {
+  const dataDir = tmpDir();
+  const server = net.createServer();
+  await new Promise((r) => server.listen(optInOf(dataDir), r));
+  try {
+    const { manager, warns } = make({ dataDir, env: NO_SANDBOX });
+    manager.create('a');
+    await manager.boot();
+    assert.equal(manager.allowsUnsandboxed(), false);
+    assert.ok(warns.some((w) => /could not open the sandbox opt-in/.test(w)));
+    await assert.rejects(manager.start('a'), (e) => e.code === 'SANDBOX_UNAVAILABLE');
+  } finally { server.close(); }
+});
 
 // Invariant: revoking consent takes effect now for every browser: each one running unsandboxed is stopped (profile
 // kept, not a crash) and the next start is refused. A browser running sandboxed is left alone.
