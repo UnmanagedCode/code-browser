@@ -47,7 +47,7 @@ test('start_browser/browser_info: json data and text view agree', async () => {
     assert.equal(r.meta.cdpEndpoint, 'http://127.0.0.1:9333');
     assert.equal(r.meta.controller, 'agent');
     assert.deepEqual(r.meta.tabs.map((t) => t.targetId), ['T1']);
-    assert.deepEqual(Object.keys(r.meta), ['name', 'kind', 'status', 'attached', 'cdpEndpoint', 'controller', 'sandbox', 'allowUnsandboxed', 'tabs', 'panelPath', 'helper']);
+    assert.deepEqual(Object.keys(r.meta), ['name', 'kind', 'status', 'attached', 'cdpEndpoint', 'controller', 'sandbox', 'tabs', 'panelPath', 'helper']);
     assert.deepEqual(r.meta.helper, testHelperInfo('e2e'));
     assert.ok(r.text.includes('In run_code: const { page } = await cc.code_browser.connect({ name: "e2e" });'));
     assert.ok(r.text.includes(PANEL_E2E));
@@ -130,18 +130,25 @@ test('an allowUnsandboxed argument changes nothing', async () => {
     }
   }
   assert.deepEqual(manager.grants, []);
+  assert.equal(manager.overview().allowUnsandboxed, false);
   assert.deepEqual(mcp.toolNames.sort(), ['browser_info', 'list_browsers', 'start_browser', 'stop_browser']);
 });
 
-// Invariant: the read-only opt-in state is visible to the agent in browser_info and list_browsers, in json and in the text listing.
-test('allowUnsandboxed is reported by list_browsers, not changed by browser_info', async () => {
+// Invariant: the read-only global opt-in is visible to the agent once, at the top of list_browsers, in json and in text
+// (also when the list is empty), and never as a per-browser field.
+test('allowUnsandboxed is reported once by list_browsers, in json and text', async () => {
   const manager = fakeManager();
   const mcp = make({}, manager);
+  assert.match((await call(mcp, 'list_browsers', {}, 'text')).text, /\nallowUnsandboxed false \(/);
   manager.ensure('a');
-  manager.list()[0].allowUnsandboxed = true;
   await call(mcp, 'start_browser', { name: 'a' }, 'json');
-  assert.equal((await call(mcp, 'list_browsers', {}, 'json')).structured.browsers[0].allowUnsandboxed, true);
-  assert.match((await call(mcp, 'list_browsers', {}, 'text')).text, /allowUnsandboxed true/);
+  for (const allow of [false, true]) {
+    await manager.setAllowUnsandboxed(allow);
+    const json = (await call(mcp, 'list_browsers', {}, 'json')).structured;
+    assert.equal(json.allowUnsandboxed, allow);
+    assert.equal('allowUnsandboxed' in json.browsers[0], false);
+    assert.match((await call(mcp, 'list_browsers', {}, 'text')).text, new RegExp(`^allowUnsandboxed ${allow} \\(`, 'm'));
+  }
 });
 
 // Invariant: the text listing is prose that names the json fields, says how to proceed, and flags what needs attention.
@@ -149,13 +156,13 @@ test('list_browsers text: empty hint, one line per browser with json field names
   const manager = fakeManager();
   const mcp = make({}, manager);
   assert.match((await call(mcp, 'list_browsers', {}, 'text')).text, /^No browsers yet\. start_browser creates one/);
-  assert.deepEqual((await call(mcp, 'list_browsers', {}, 'json')).structured, { browsers: [] });
+  assert.deepEqual((await call(mcp, 'list_browsers', {}, 'json')).structured, { browsers: [], allowUnsandboxed: false });
   await call(mcp, 'start_browser', { name: 'a' }, 'json');
   manager.ensure('b');
   Object.assign(manager.state.get('b'), { sandboxUnavailable: true, lastExit: { code: null, signal: 'SIGKILL', at: 0 } });
   const text = (await call(mcp, 'list_browsers', {}, 'text')).text;
   assert.match(text, /^2 browser\(s\):/);
-  assert.match(text, /^- a: kind launched, status running, controller agent, cdpEndpoint "http:\/\/127\.0\.0\.1:9333", sandbox true, allowUnsandboxed false$/m);
+  assert.match(text, /^- a: kind launched, status running, controller agent, cdpEndpoint "http:\/\/127\.0\.0\.1:9333", sandbox true$/m);
   assert.match(text, /^- b: .*sandboxUnavailable true \(a human must enable "Allow without sandbox" in the panel\), lastExit code null signal "SIGKILL" at 1970-01-01T00:00:00\.000Z$/m);
   assert.ok(!/^- a: .*(sandboxUnavailable|lastExit|attachError)/m.test(text));
   assert.match(text, /Call browser_info <name> for tabs and the Playwright snippet\.$/);

@@ -7,6 +7,7 @@ import { createChromiumInstaller } from './src/chromium/install.js';
 import { createSessionForEntry } from './src/browserSession.js';
 import { loadConfig } from './src/config.js';
 import { migrateLegacyStore } from './src/migrateLegacyStore.js';
+import { migrateSandboxOptIn } from './src/migrateSandboxOptIn.js';
 import { createHelperInfo } from './src/helperInfo.js';
 import { createMcp } from './src/mcp.js';
 import { ensureRelayToken } from './src/relayToken.js';
@@ -15,6 +16,7 @@ import { createViewerGateway } from './src/viewerGateway.js';
 const config = loadConfig();
 // Must precede manager.boot(): boot creates the data dir and its secret, which would make the move's target non-empty.
 migrateLegacyStore({ env: process.env, dataDir: config.dataDir });
+migrateSandboxOptIn(config.dataDir);
 const manager = createBrowserManager({
   dataDir: config.dataDir,
   createSession: (entry) => createSessionForEntry(entry),

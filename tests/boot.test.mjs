@@ -65,6 +65,33 @@ test('the migration runs before boot creates the store', async () => {
   }
 });
 
+// Invariant: the legacy move runs before the opt-in migration and both run before boot: per-browser opt-ins (in the
+// data dir or moved in from a legacy store) are dropped, and the global flag starts off with no per-browser field.
+test('server.js drops per-browser opt-ins before the manager boots', async () => {
+  for (const legacy of [false, true]) {
+    const projectsRoot = tmpDir();
+    const target = storeDir(projectsRoot);
+    const holder = legacy ? path.join(projectsRoot, '.code-browser') : target;
+    fs.mkdirSync(path.join(holder, 'profiles', 'a'), { recursive: true });
+    fs.mkdirSync(path.join(holder, 'settings'), { recursive: true });
+    fs.writeFileSync(path.join(holder, 'settings', 'a.json'), '{"allowUnsandboxed":true}');
+    const b = run({ PROJECTS_ROOT: projectsRoot, CONDUCTOR_PLUGIN_DATA_DIR: target });
+    try {
+      await waitFor(() => /listening on 127\.0\.0\.1:\d+/.test(b.out()), { what: 'backend to listen', timeout: 10_000 });
+      const port = /listening on 127\.0\.0\.1:(\d+)/.exec(b.out())[1];
+      assert.equal(fs.existsSync(path.join(target, 'settings')), false, `legacy=${legacy}`);
+      const res = await fetch(`http://127.0.0.1:${port}/api/browsers`);
+      const json = await res.json();
+      assert.equal(json.allowUnsandboxed, false);
+      assert.deepEqual(json.browsers.map((x) => x.name), ['a']);
+      assert.equal('allowUnsandboxed' in json.browsers[0], false);
+      assert.equal(fs.existsSync(path.join(target, 'allow-unsandboxed.json')), false);
+    } finally {
+      await b.stop();
+    }
+  }
+});
+
 // Invariant: a failed migration stops the backend before it listens and changes nothing on disk.
 test('a failed migration refuses to boot', async () => {
   const projectsRoot = tmpDir();

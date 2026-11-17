@@ -8,6 +8,7 @@ export const testHelperInfo = createHelperInfo({ pluginDir: '/plug', dataDir: '/
 export function fakeManager({ controller = 'agent', sandbox = true, refuse = false, attached = null, asksApproval = false, tabs = null } = {}) {
   const state = new Map();
   const grants = [];
+  let allowed = false;
   const summaryOf = (n) => {
     const e = state.get(n);
     if (!e) throw new CodedError('NOT_FOUND', `no browser named '${n}'`);
@@ -16,19 +17,21 @@ export function fakeManager({ controller = 'agent', sandbox = true, refuse = fal
   return {
     grants,
     state,
-    setAllowUnsandboxed: async (...a) => { grants.push(a); },
+    setAllowUnsandboxed: async (allow) => { grants.push(allow); allowed = allow; },
+    allowsUnsandboxed: () => allowed,
     list: () => [...state.values()],
+    overview: () => ({ browsers: [...state.values()], allowUnsandboxed: allowed }),
     summary: summaryOf,
     ensure: (n) => {
       if (state.has(n)) return;
-      const common = { name: n, controller: 'agent', lastExit: null, cdpEndpoint: null, status: 'stopped', sandbox: null, allowUnsandboxed: false, sandboxUnavailable: false };
+      const common = { name: n, controller: 'agent', lastExit: null, cdpEndpoint: null, status: 'stopped', sandbox: null, sandboxUnavailable: false };
       state.set(n, attached
         ? { ...common, kind: 'attached', attached: { address: '127.0.0.1:9222', via: attached, asksApproval: null }, attachError: null }
         : { ...common, kind: 'launched', attached: null, attachError: null });
     },
     start: async (n) => {
       if (attached) throw new CodedError('ATTACHED', `'${n}' is the user's own browser, attached in the panel`);
-      if (refuse) throw new CodedError('SANDBOX_UNAVAILABLE', `Chromium has no usable sandbox on this host, and browser '${n}' is not allowed to run without one`);
+      if (refuse) throw new CodedError('SANDBOX_UNAVAILABLE', `Chromium has no usable sandbox on this host, and running without it is not allowed (browser '${n}' was not started)`);
       Object.assign(state.get(n), { status: 'running', sandbox, controller, cdpEndpoint: 'http://127.0.0.1:9333' });
     },
     stop: async (n) => { summaryOf(n).status = 'stopped'; },

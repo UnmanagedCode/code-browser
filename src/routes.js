@@ -17,7 +17,7 @@ export function buildRoutes({ manager, mcp, installer, dataDir, artifactMaxBytes
   };
   return [
     { method: 'GET', path: /^\/api\/health$/, handler: () => ({ ok: true }) },
-    { method: 'GET', path: /^\/api\/browsers$/, handler: () => ({ browsers: manager.list() }) },
+    { method: 'GET', path: /^\/api\/browsers$/, handler: () => manager.overview() },
     {
       method: 'POST', path: /^\/api\/browsers$/, mutating: true,
       handler: async ({ body }) => {
@@ -34,12 +34,13 @@ export function buildRoutes({ manager, mcp, installer, dataDir, artifactMaxBytes
       method: 'POST', path: new RegExp(`^/api/browsers/${name}/stop$`), mutating: true,
       handler: async ({ params }) => { await manager.stop(params[0]); return { browser: manager.summary(params[0]) }; },
     },
+    // The one plugin-wide opt-in to run launched browsers without Chromium's sandbox: the panel's alone.
     {
-      method: 'POST', path: new RegExp(`^/api/browsers/${name}/allow-unsandboxed$`), mutating: true, requireOrigin: true,
-      handler: async ({ params, body }) => {
+      method: 'POST', path: /^\/api\/allow-unsandboxed$/, mutating: true, requireOrigin: true,
+      handler: async ({ body }) => {
         if (typeof body?.allow !== 'boolean') throw new CodedError('BAD_REQUEST', 'allow must be a boolean');
-        await manager.setAllowUnsandboxed(params[0], body.allow);
-        return { browser: manager.summary(params[0]) };
+        await manager.setAllowUnsandboxed(body.allow);
+        return { allowUnsandboxed: manager.allowsUnsandboxed() };
       },
     },
     // Attach and Connect are the panel's alone: only a person connects code-browser to their own browser.

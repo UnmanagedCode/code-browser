@@ -126,7 +126,7 @@ test('INTERNAL: tool name and cause in the message, no raw code, no details, no 
   try {
     for (const format of FORMATS) {
       const manager = fakeManager();
-      manager.list = () => { throw Object.assign(new Error('disk gone'), { code: 'EACCES' }); };
+      manager.overview = () => { throw Object.assign(new Error('disk gone'), { code: 'EACCES' }); };
       const r = await call(make({}, manager), 'list_browsers', {}, format);
       assert.equal(r.code, 'INTERNAL');
       assert.match(r.error, /list_browsers/);
@@ -208,7 +208,7 @@ test('INTERNAL survives a thrown object with a hostile message', async () => {
     const hostile = Object.defineProperty({}, 'message', { get() { throw new Error('x'); } });
     for (const thrown of [hostile, Object.create(null), { toString() { throw new Error('y'); } }]) {
       const manager = fakeManager();
-      manager.list = () => { throw thrown; };
+      manager.overview = () => { throw thrown; };
       const r = await call(make({}, manager), 'list_browsers', {}, 'json');
       assert.equal(r.code, 'INTERNAL');
       assert.match(r.error, /list_browsers failed unexpectedly/);
@@ -233,7 +233,7 @@ test('INTERNAL survives a non-string message and a revoked Proxy', async () => {
     revoked.revoke();
     for (const thrown of [{ message: Symbol('m') }, { message: { toString() { throw new Error('x'); } } }, revoked.proxy]) {
       const manager = fakeManager();
-      manager.list = () => { throw thrown; };
+      manager.overview = () => { throw thrown; };
       const r = await make({}, manager).handle({ tool: 'list_browsers', format: 'json' });
       assert.equal(r.code, 'INTERNAL');
       assert.match(r.error, /list_browsers failed unexpectedly/);

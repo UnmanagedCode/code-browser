@@ -76,7 +76,7 @@
     "tools": [
       {
         "name": "list_browsers",
-        "description": "List the shared browsers: name, kind (launched: a headless Chromium code-browser runs; attached: the user's own browser, which a human attached in the panel), status (running|stopped, or connecting for an attached one), who controls it (agent|human), the CDP endpoint while running, the read-only allowUnsandboxed (whether a human allowed it to run without the sandbox), and for an attached browser `attached` (its debug address, how it is reached, and whether Chrome asks the user to approve each connection).",
+        "description": "List the shared browsers: name, kind (launched: a headless Chromium code-browser runs; attached: the user's own browser, which a human attached in the panel), status (running|stopped, or connecting for an attached one), who controls it (agent|human), the CDP endpoint while running, and, once at the top level, the read-only allowUnsandboxed (whether a human allowed every launched browser to run without the sandbox; only a human can change it), and for an attached browser `attached` (its debug address, how it is reached, and whether Chrome asks the user to approve each connection).",
         "inputSchema": {
           "type": "object",
           "properties": {}
@@ -85,7 +85,8 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "browsers"
+            "browsers",
+            "allowUnsandboxed"
           ],
           "properties": {
             "browsers": {
@@ -100,7 +101,6 @@
                   "status",
                   "cdpEndpoint",
                   "sandbox",
-                  "allowUnsandboxed",
                   "sandboxUnavailable",
                   "lastExit",
                   "attached",
@@ -145,10 +145,6 @@
                       "null"
                     ],
                     "description": "false: running without Chromium's sandbox, do not browse untrusted pages; null when stopped or attached"
-                  },
-                  "allowUnsandboxed": {
-                    "type": "boolean",
-                    "description": "read-only: a human allowed it to run without the sandbox"
                   },
                   "sandboxUnavailable": {
                     "type": "boolean",
@@ -223,6 +219,10 @@
                   }
                 }
               }
+            },
+            "allowUnsandboxed": {
+              "type": "boolean",
+              "description": "read-only: a human allowed every launched browser to run without Chromium's sandbox"
             }
           }
         }
@@ -251,7 +251,6 @@
             "status",
             "cdpEndpoint",
             "sandbox",
-            "allowUnsandboxed",
             "sandboxUnavailable",
             "lastExit",
             "attached",
@@ -303,10 +302,6 @@
                 "null"
               ],
               "description": "false: running without Chromium's sandbox, do not browse untrusted pages; null when stopped or attached"
-            },
-            "allowUnsandboxed": {
-              "type": "boolean",
-              "description": "read-only: a human allowed it to run without the sandbox"
             },
             "sandboxUnavailable": {
               "type": "boolean",
@@ -538,7 +533,6 @@
             "status",
             "cdpEndpoint",
             "sandbox",
-            "allowUnsandboxed",
             "sandboxUnavailable",
             "lastExit",
             "attached",
@@ -590,10 +584,6 @@
                 "null"
               ],
               "description": "false: running without Chromium's sandbox, do not browse untrusted pages; null when stopped or attached"
-            },
-            "allowUnsandboxed": {
-              "type": "boolean",
-              "description": "read-only: a human allowed it to run without the sandbox"
             },
             "sandboxUnavailable": {
               "type": "boolean",

@@ -19,6 +19,8 @@ interface Props {
   state: BrowserState | null;
   dialogs: DialogInfo[];
   summary?: BrowserSummary;
+  // A human allowed every launched browser to run without Chromium's sandbox.
+  allowUnsandboxed: boolean;
   // The socket is down: the last frame stays, dimmed, and nothing can be driven.
   offline: boolean;
   // The person just arrived here: the heading takes focus, if the panel has it.
@@ -30,7 +32,7 @@ interface Props {
   onConnect(): void;
 }
 
-export function Viewer({ name, socket, state, dialogs, summary, offline, focusHeading, onError, onBack, onStart, onStop, onConnect }: Props) {
+export function Viewer({ name, socket, state, dialogs, summary, allowUnsandboxed, offline, focusHeading, onError, onBack, onStart, onStop, onConnect }: Props) {
   const keyboardRef = useRef<HTMLTextAreaElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const headingId = useId();
@@ -100,7 +102,7 @@ export function Viewer({ name, socket, state, dialogs, summary, offline, focusHe
             )}
           </div>
         ) : !running && state?.status === 'stopped' && summary?.sandboxUnavailable ? (
-          <SandboxNotice summary={summary} onError={onError} />
+          <SandboxNotice summary={summary} allowed={allowUnsandboxed} onError={onError} />
         ) : !running ? (
           <div className="stopped" role="status" data-status={state?.status ?? 'connecting'}>
             <p>{state?.status === 'stopped' ? 'This browser is stopped.' : 'Connecting…'}</p>

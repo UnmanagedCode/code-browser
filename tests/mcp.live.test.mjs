@@ -7,6 +7,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { createBrowserManager } from '../src/browserManager.js';
 import { createMcp } from '../src/mcp.js';
+import { migrateSandboxOptIn } from '../src/migrateSandboxOptIn.js';
 import { testHelperInfo } from './fakes/fakeMcpManager.mjs';
 import { readRun } from '../src/runState.js';
 import { call } from './_mcpCall.mjs';
@@ -114,8 +115,8 @@ test('LAUNCH_FAILED details.logTail from the real manager', async () => {
   assert.equal(typeof r.details.logTail, 'string');
 });
 
-// Invariant: the oldest layout the plugin can still load validates: a bare profile dir, a settings file with unknown keys,
-// malformed settings and attached records (read as none), an extra-field attached record with a `localhost` address
+// Invariant: the oldest layout the plugin can still load validates: a bare profile dir, a per-browser settings directory (dropped by the
+// opt-in migration, which server.js runs before boot), malformed attached records (read as none), an extra-field attached record with a `localhost` address
 // (normalised to 127.0.0.1) and a stale run file. Every schema field is still present and typed.
 test('the oldest stored shapes still produce valid list_browsers json', async () => {
   const dataDir = tmpDir();
@@ -128,13 +129,15 @@ test('the oldest stored shapes still produce valid list_browsers json', async ()
   w('attached/bad.json', '{nope');
   w('run/old.json', '{"keeperPid":999999991,"chromiumPid":999999992,"startedAt":1}');
   stack = liveStack({ dataDir });
+  migrateSandboxOptIn(dataDir, { log() {} });
   await stack.manager.boot();
   const mcp = mcpOf(stack.manager);
-  const { browsers } = (await call(mcp, 'list_browsers', {}, 'json')).structured;
+  const { browsers, allowUnsandboxed } = (await call(mcp, 'list_browsers', {}, 'json')).structured;
+  assert.equal(fs.existsSync(path.join(dataDir, 'settings')), false);
+  assert.equal(allowUnsandboxed, false);
   const by = Object.fromEntries(browsers.map((b) => [b.name, b]));
   assert.deepEqual(Object.keys(by).sort(), ['mine', 'old', 'old2']);
   assert.equal(by.mine.attached.address, '127.0.0.1:9222');
-  assert.equal(by.old.allowUnsandboxed, true);
-  assert.equal(by.old2.allowUnsandboxed, false);
+  for (const b of browsers) assert.equal('allowUnsandboxed' in b, false);
   await call(mcp, 'list_browsers', {}, 'text');
 });
