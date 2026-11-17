@@ -205,6 +205,42 @@ test('a malformed opt-in file is treated as not allowed and warned about', async
   await assert.rejects(manager.start('a'), (e) => e.code === 'SANDBOX_UNAVAILABLE');
 });
 
+// Invariant: a symlink at the opt-in path is never followed: it reads as "not allowed" (warned), granting replaces it
+// with a fresh private file and writes nothing through it, revoking unlinks the link itself, and boot neither
+// chmods the target nor fails.
+test('a symlinked opt-in file is not honoured, written through or chmod-ed', async () => {
+  const dataDir = tmpDir();
+  const target = path.join(tmpDir(), 'victim.json');
+  const plant = (content) => {
+    fs.rmSync(optInOf(dataDir), { force: true });
+    fs.writeFileSync(target, content, { mode: 0o644 });
+    fs.chmodSync(target, 0o644);
+    fs.symlinkSync(target, optInOf(dataDir));
+  };
+  const { manager, warns } = make({ dataDir, env: NO_SANDBOX });
+  manager.create('a');
+
+  plant('{"allowUnsandboxed":true}');
+  assert.equal(manager.allowsUnsandboxed(), false);
+  assert.ok(warns.some((w) => /symlink/.test(w)));
+  await assert.rejects(manager.start('a'), (e) => e.code === 'SANDBOX_UNAVAILABLE');
+  await manager.boot();
+  assert.equal(modeOf(target), 0o644, 'boot did not chmod through the link');
+  assert.equal(fs.lstatSync(optInOf(dataDir)).isSymbolicLink(), true);
+
+  plant('keep me');
+  await manager.setAllowUnsandboxed(true);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'keep me', 'nothing was written through the link');
+  assert.equal(fs.lstatSync(optInOf(dataDir)).isSymbolicLink(), false);
+  assert.equal(modeOf(optInOf(dataDir)), 0o600);
+  assert.equal(manager.allowsUnsandboxed(), true);
+
+  plant('keep me');
+  await manager.setAllowUnsandboxed(false);
+  assert.equal(fs.existsSync(optInOf(dataDir)), false);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'keep me', 'revoking unlinked the link, not its target');
+});
+
 // Invariant: revoking consent takes effect now for every browser: each one running unsandboxed is stopped (profile
 // kept, not a crash) and the next start is refused. A browser running sandboxed is left alone.
 test('revoking stops every unsandboxed browser at once; sandboxed ones keep running', async () => {
@@ -235,18 +271,40 @@ test('revoking stops every unsandboxed browser at once; sandboxed ones keep runn
   assert.equal(ok.manager.summary('c').sandbox, true);
 });
 
-// Invariant: a start cannot slip past a revoke: one in flight is refused at its sandbox check (the write is
-// synchronous) or, if it already passed, finishes and is stopped; either way nothing is left running unsandboxed.
-test('a revoke issued during an in-flight start stops the browser that start produced', async () => {
-  const { manager } = make({ env: NO_SANDBOX });
+// Invariant: a start that has not yet reached its sandbox check when a revoke lands is refused there (the opt-in write
+// is synchronous), launches nothing unsandboxed, and leaves the browser stopped.
+test('a revoke issued before an in-flight start reaches its sandbox check refuses that start', async () => {
+  const { manager, profile } = make({ env: NO_SANDBOX });
   manager.create('a');
   await manager.setAllowUnsandboxed(true);
   const started = manager.start('a');
   const revoked = manager.setAllowUnsandboxed(false);
-  const [outcome] = await Promise.allSettled([started, revoked]);
-  assert.ok(outcome.status === 'fulfilled' || outcome.reason.code === 'SANDBOX_UNAVAILABLE');
+  await assert.rejects(started, (e) => e.code === 'SANDBOX_UNAVAILABLE');
+  await revoked;
   assert.equal(manager.summary('a').status, 'stopped');
-  assert.equal(manager.allowsUnsandboxed(), false);
+  assert.equal(launchedUnsandboxed(profile('a')), false);
+});
+
+// Invariant: a start that already passed the sandbox check (held inside the --no-sandbox relaunch) finishes, and the
+// revoke's queued per-name stop then stops the browser it produced: pid dead, not a crash, profile kept.
+test('a revoke issued during the unsandboxed relaunch stops the browser that start produced', async () => {
+  const release = path.join(tmpDir(), 'release');
+  const { manager, profile } = make({ env: { ...NO_SANDBOX, FAKE_CHROMIUM_HOLD_PORT_UNTIL: release } });
+  manager.create('a');
+  await manager.setAllowUnsandboxed(true);
+  const started = manager.start('a');
+  // fake-argv.json exists only for the relaunch: the sandboxed launch exited before writing it.
+  await waitFor(() => launchedUnsandboxed(profile('a')), { what: 'the unsandboxed relaunch to begin' });
+  const pid = fakePid(profile('a'));
+  const revoked = manager.setAllowUnsandboxed(false);
+  fs.writeFileSync(release, '');
+  await started;
+  await revoked;
+  const s = manager.summary('a');
+  assert.equal(s.status, 'stopped');
+  assert.equal(s.lastExit, null, 'a deliberate stop is not a crash');
+  await waitFor(() => !pidAlive(pid), { what: 'the relaunched chromium to exit' });
+  assert.ok(fs.existsSync(profile('a')));
 });
 
 // Invariant: a queued stop re-checks consent, so a grant that lands after a revoke but before its stops run keeps
