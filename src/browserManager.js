@@ -496,7 +496,7 @@ export function createBrowserManager({
     for (const f of fs.readdirSync(attachedDir(dataDir)).filter((n) => n.endsWith('.json'))) {
       try { fs.chmodSync(path.join(attachedDir(dataDir), f), PRIVATE_FILE_MODE); } catch (err) { if (err.code !== 'ENOENT') throw err; }
     }
-    tightenOptIn(dataDir);
+    tightenOptIn(dataDir, log);
     await ensureSecret(dataDir);
     for (const name of attachedNames(dataDir)) {
       if (profileExists(name)) log.warn(`code-browser: '${name}' is both a profile and an attached record; the profile wins`);

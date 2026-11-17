@@ -1,5 +1,7 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createBrowserManager } from '../src/browserManager.js';
@@ -241,6 +243,27 @@ test('a symlinked opt-in file is not honoured, written through or chmod-ed', asy
   assert.equal(fs.readFileSync(target, 'utf8'), 'keep me', 'revoking unlinked the link, not its target');
 });
 
+// Invariant: a non-regular entry at the opt-in path (FIFO, socket, directory) is "not allowed" with a warning, and
+// neither the read nor boot blocks or fails on it. Bounded: a regression to a blocking open fails fast, not hangs.
+for (const kind of ['fifo', 'socket', 'directory']) {
+  test(`a ${kind} at the opt-in path is not allowed, warned about, and does not block or fail boot`, { timeout: 5000 }, async () => {
+    const dataDir = tmpDir();
+    const file = optInOf(dataDir);
+    let server;
+    if (kind === 'fifo') execFileSync('mkfifo', [file]);
+    else if (kind === 'directory') fs.mkdirSync(file);
+    else { server = net.createServer(); await new Promise((r) => server.listen(file, r)); }
+    try {
+      const { manager, warns } = make({ dataDir, env: NO_SANDBOX });
+      manager.create('a');
+      await manager.boot();
+      assert.equal(manager.allowsUnsandboxed(), false);
+      assert.ok(warns.some((w) => /opt-in/.test(w)));
+      await assert.rejects(manager.start('a'), (e) => e.code === 'SANDBOX_UNAVAILABLE');
+    } finally { server?.close(); }
+  });
+}
+
 // Invariant: revoking consent takes effect now for every browser: each one running unsandboxed is stopped (profile
 // kept, not a crash) and the next start is refused. A browser running sandboxed is left alone.
 test('revoking stops every unsandboxed browser at once; sandboxed ones keep running', async () => {
@@ -294,7 +317,7 @@ test('a revoke issued during the unsandboxed relaunch stops the browser that sta
   await manager.setAllowUnsandboxed(true);
   const started = manager.start('a');
   // fake-argv.json exists only for the relaunch: the sandboxed launch exited before writing it.
-  await waitFor(() => launchedUnsandboxed(profile('a')), { what: 'the unsandboxed relaunch to begin' });
+  await waitFor(() => launchedUnsandboxed(profile('a')) && fs.existsSync(path.join(profile('a'), 'fake-pid')), { what: 'the unsandboxed relaunch to begin' });
   const pid = fakePid(profile('a'));
   const revoked = manager.setAllowUnsandboxed(false);
   fs.writeFileSync(release, '');
