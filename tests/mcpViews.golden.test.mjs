@@ -36,3 +36,20 @@ test('golden browser_info text: launched, human and unsandboxed', async () => {
 test('golden browser_info text: attached, approval and human', async () => {
   assert.equal(await infoText({ attached: 'direct', asksApproval: true, controller: 'human' }, 'mine'), GOLDEN.attachedApprovalHuman);
 });
+
+// Invariant: list_browsers text for one running unsandboxed launched browser is exactly this prose: the browser line
+// without a per-browser allowUnsandboxed, then the one global flag line, then the closing hint.
+test('golden list_browsers text: one running unsandboxed browser and the global flag', async () => {
+  const manager = fakeManager({ sandbox: false });
+  manager.ensure('a');
+  await manager.start('a');
+  await manager.setAllowUnsandboxed(true);
+  const mcp = createMcp({ manager, pluginDir: '/plug', pluginId: 'code-browser', helperInfo: testHelperInfo });
+  const { text } = await mcp.handle({ tool: 'list_browsers', arguments: {}, format: 'text' });
+  assert.equal(text, [
+    '1 browser(s):',
+    '- a: kind launched, status running, controller agent, cdpEndpoint "http://127.0.0.1:9333", sandbox false',
+    "allowUnsandboxed true (whether a human allowed every launched browser to run without Chromium's sandbox; only a human can change it, in the panel)",
+    'Call browser_info <name> for tabs and the Playwright snippet.',
+  ].join('\n'));
+});

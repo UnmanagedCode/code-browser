@@ -6,7 +6,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { CdpConnection } from './cdp.js';
 import { attachedDir, attachedNames, parseAttachTarget, readAttached, removeAttached, writeAttached } from './attachStore.js';
-import { allowsUnsandboxed, removeSettings, setAllowUnsandboxed as writeAllowUnsandboxed, settingsDir } from './browserSettings.js';
+import { allowsUnsandboxed, setAllowUnsandboxed as writeOptIn, tightenOptIn } from './sandboxOptIn.js';
 import { discover } from './cdpDiscovery.js';
 import { buildArgs, isSandboxFailure } from './chromium/args.js';
 import { locateChromium } from './chromium/locate.js';
@@ -90,7 +90,6 @@ export function createBrowserManager({
     throw new CodedError('NOT_FOUND', `no browser named '${name}'`);
   }
   const startRefusal = (name) => new CodedError('ATTACHED', `'${name}' is the user's own browser, attached in the panel: code-browser did not launch it, and only the user can connect it (with Connect in the panel)`);
-  const sandboxRefusal = (name) => new CodedError('BAD_REQUEST', `'${name}' is an attached browser: code-browser did not launch it, so its sandbox is not code-browser's to change`);
   const requireProfile = (name) => {
     if (kindOf(name) === 'attached') throw startRefusal(name);
   };
@@ -124,6 +123,8 @@ export function createBrowserManager({
     return [...new Set([...profileNames(), ...attachedNames(dataDir).filter((n) => recordOf(n))])].sort();
   }
 
+  const list = () => names().map(summary);
+
   function summary(name) {
     const kind = kindOf(name);
     const entry = running.get(name);
@@ -139,7 +140,6 @@ export function createBrowserManager({
         ...common,
         status: entry ? 'running' : 'stopped',
         sandbox: entry ? entry.sandbox : null,
-        allowUnsandboxed: allowsUnsandboxed(dataDir, name, log),
         sandboxUnavailable: refused.has(name),
         attached: null,
         attachError: null,
@@ -150,7 +150,6 @@ export function createBrowserManager({
       ...common,
       status: entry ? 'running' : connecting.has(name) ? 'connecting' : 'stopped',
       sandbox: null,
-      allowUnsandboxed: false,
       sandboxUnavailable: false,
       attached: { address: rec.address, via: rec.via, asksApproval: entry?.asksApproval ?? approvalSeen.get(name) ?? null },
       attachError: entry ? null : attachErrors.get(name) ?? null,
@@ -167,7 +166,6 @@ export function createBrowserManager({
       throw err;
     }
     fs.chmodSync(profileOf(name), PRIVATE_DIR_MODE);
-    removeSettings(dataDir, name); // a recreated name never inherits an earlier browser's opt-in
     refused.delete(name);
     ensurePrivateDir(path.join(profileOf(name), 'Default'));
     fs.writeFileSync(path.join(profileOf(name), 'Default', 'Preferences'), JSON.stringify(NEW_PROFILE_PREFS));
@@ -253,10 +251,10 @@ export function createBrowserManager({
     await reap(dataDir, name, { profileDir, keeperPath: KEEPER });
     let result = await launch(name, chrome, true);
     if (result.failed?.sandboxFailure) {
-      if (!allowsUnsandboxed(dataDir, name, log)) {
+      if (!allowsUnsandboxed(dataDir, log)) {
         refused.add(name);
         events.emit('change');
-        throw new CodedError('SANDBOX_UNAVAILABLE', `Chromium has no usable sandbox on this host, and browser '${name}' is not allowed to run without one`);
+        throw new CodedError('SANDBOX_UNAVAILABLE', `Chromium has no usable sandbox on this host, and running without it is not allowed (browser '${name}' was not started)`);
       }
       log.warn(`code-browser: '${name}' has no usable Chromium sandbox; relaunching with --no-sandbox`);
       result = await launch(name, chrome, false);
@@ -456,13 +454,20 @@ export function createBrowserManager({
     onExit(entry, entry.handle.exit);
   }
 
-  // Revoking consent stops a browser that runs unsandboxed now; one that runs sandboxed is untouched.
-  async function doSetAllowUnsandboxed(name, allow) {
-    if (kindOf(name) === 'attached') throw sandboxRefusal(name);
-    writeAllowUnsandboxed(dataDir, name, allow);
-    if (!allow && running.get(name)?.sandbox === false) await doStop(name);
+  // Granting is one synchronous write, so every start whose check runs after it sees it. Revoking then queues a
+  // stop behind each name's in-flight start: a start that already passed the check finishes, then is stopped.
+  // Attached browsers have no profile and a null `sandbox`, so they are never touched.
+  async function setAllowUnsandboxed(allow) {
+    writeOptIn(dataDir, allow);
     events.emit('change');
+    if (allow) return;
+    await Promise.all(profileNames().map((name) => withLock(name, async () => {
+      if (allowsUnsandboxed(dataDir, log)) return; // re-granted meanwhile: consent is on again
+      if (running.get(name)?.sandbox === false) await doStop(name);
+    })));
   }
+
+  const overview = () => ({ browsers: list(), allowUnsandboxed: allowsUnsandboxed(dataDir, log) });
 
   async function doDelete(name) {
     const kind = kindOf(name);
@@ -475,7 +480,6 @@ export function createBrowserManager({
       events.emit('change');
       return;
     }
-    removeSettings(dataDir, name); // before the rename: a crash in between keeps the profile and drops the opt-in
     refused.delete(name);
     ensurePrivateDir(trashDir);
     const dest = path.join(trashDir, `${name}-${Date.now()}`);
@@ -487,13 +491,12 @@ export function createBrowserManager({
 
   // Backend boot: nothing outlives the previous backend, so every leftover is killed.
   async function boot() {
-    for (const dir of [dataDir, profilesDir, logsDir, path.join(dataDir, 'run'), settingsDir(dataDir), attachedDir(dataDir), proxyDir(dataDir), trashDir]) ensurePrivateDir(dir);
+    for (const dir of [dataDir, profilesDir, logsDir, path.join(dataDir, 'run'), attachedDir(dataDir), proxyDir(dataDir), trashDir]) ensurePrivateDir(dir);
     for (const name of profileNames()) fs.chmodSync(profileOf(name), PRIVATE_DIR_MODE);
-    for (const dir of [settingsDir(dataDir), attachedDir(dataDir)]) {
-      for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.json'))) {
-        try { fs.chmodSync(path.join(dir, f), PRIVATE_FILE_MODE); } catch (err) { if (err.code !== 'ENOENT') throw err; }
-      }
+    for (const f of fs.readdirSync(attachedDir(dataDir)).filter((n) => n.endsWith('.json'))) {
+      try { fs.chmodSync(path.join(attachedDir(dataDir), f), PRIVATE_FILE_MODE); } catch (err) { if (err.code !== 'ENOENT') throw err; }
     }
+    tightenOptIn(dataDir, log);
     await ensureSecret(dataDir);
     for (const name of attachedNames(dataDir)) {
       if (profileExists(name)) log.warn(`code-browser: '${name}' is both a profile and an attached record; the profile wins`);
@@ -530,7 +533,7 @@ export function createBrowserManager({
   return {
     events,
     names,
-    list: () => names().map(summary),
+    list,
     summary,
     info,
     create,
@@ -541,7 +544,9 @@ export function createBrowserManager({
     // Disconnect and Forget also cancel a connect still in progress (one waiting on Chrome's approval dialog).
     stop: (name) => { cancelAttempt(name); return withLock(name, () => doStop(name)); },
     delete: (name) => { cancelAttempt(name); return withLock(name, () => doDelete(name)); },
-    setAllowUnsandboxed: (name, allow) => launchedOnly(name, sandboxRefusal, () => doSetAllowUnsandboxed(name, allow)),
+    setAllowUnsandboxed: (allow) => setAllowUnsandboxed(allow),
+    allowsUnsandboxed: () => allowsUnsandboxed(dataDir, log),
+    overview,
     entry: (name) => running.get(name),
     session: (name) => running.get(name)?.session,
     boot,

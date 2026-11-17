@@ -16,7 +16,6 @@ export interface BrowserSummary {
   status: 'running' | 'stopped' | 'connecting';
   controller: 'agent' | 'human';
   sandbox: boolean | null;
-  allowUnsandboxed: boolean;
   sandboxUnavailable: boolean;
   lastExit: { code: number | null; signal: string | null; at: number } | null;
   attached: { address: string; via: AttachVia; asksApproval: boolean | null } | null;
@@ -45,7 +44,7 @@ export interface BrowserState {
 export interface DialogInfo { tabId: string; dialogType: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; message: string; defaultPrompt: string }
 
 export type ServerMessage =
-  | { type: 'browsers'; list: BrowserSummary[] }
+  | { type: 'browsers'; list: BrowserSummary[]; allowUnsandboxed: boolean }
   | BrowserState
   | ({ type: 'dialog' } & DialogInfo)
   | { type: 'dialogClosed'; tabId: string }

@@ -13,12 +13,13 @@ import { ARTIFACT_MAX_BYTES } from '../src/limits.js';
 import { buildRoutes } from '../src/routes.js';
 import { JSON_HEADERS, listen, rawExchange, request, tmpDir } from './helpers.mjs';
 
-const MUTATORS = ['create', 'start', 'stop', 'delete', 'setAllowUnsandboxed', 'attach', 'connect'];
+const MUTATORS = ['create', 'start', 'stop', 'delete', 'attach', 'connect'];
 
 // A manager double that records every call; `hang` makes every method never resolve.
 function fakeManager({ hang = false } = {}) {
   const calls = [];
   const browsers = new Map();
+  let allowUnsandboxed = false;
   const rec = (m, fn) => (...a) => {
     calls.push(m);
     if (hang) return new Promise(() => {});
@@ -36,10 +37,9 @@ function fakeManager({ hang = false } = {}) {
     }),
     start: rec('start', (n) => { browsers.get(n).status = 'running'; }),
     stop: rec('stop', (n) => { browsers.get(n).status = 'stopped'; }),
-    setAllowUnsandboxed: rec('setAllowUnsandboxed', (n, allow) => {
-      if (!browsers.has(n)) throw new CodedError('NOT_FOUND', 'no such browser');
-      browsers.get(n).allowUnsandboxed = allow;
-    }),
+    setAllowUnsandboxed: rec('setAllowUnsandboxed', (allow) => { allowUnsandboxed = allow; }),
+    allowsUnsandboxed: () => allowUnsandboxed,
+    overview: rec('overview', () => ({ browsers: [...browsers.values()], allowUnsandboxed })),
     delete: rec('delete', (n) => {
       if (!browsers.delete(n)) throw new CodedError('NOT_FOUND', 'no such browser');
     }),
@@ -169,7 +169,7 @@ const MUTATING = [
   { method: 'POST', path: '/api/browsers', body: '{"name":"x"}' },
   { method: 'POST', path: '/api/browsers/x/start', body: '{}' },
   { method: 'POST', path: '/api/browsers/x/stop', body: '{}' },
-  { method: 'POST', path: '/api/browsers/x/allow-unsandboxed', body: '{"allow":true}', panelOnly: true },
+  { method: 'POST', path: '/api/allow-unsandboxed', body: '{"allow":true}', panelOnly: true },
   { method: 'POST', path: '/api/browsers/x/attach', body: '{"address":"127.0.0.1:9222","via":"proxy"}', panelOnly: true },
   { method: 'POST', path: '/api/browsers/x/connect', body: '{}', panelOnly: true },
   { method: 'POST', path: '/api/chromium/install', body: '{}', panelOnly: true },
@@ -236,12 +236,10 @@ test('chromium install: panel-only start, one at a time, read-only GET', async (
 });
 
 // Invariant: the opt-in route is the panel's alone: it needs the page's own Origin (a bridge or script that sends
-// none gets 403 before any handler runs), JSON, and a boolean; a good request returns the summary.
+// none gets 403 before any handler runs), JSON, and a boolean; a good request returns the global flag.
 test('allow-unsandboxed needs the same Origin, JSON and a boolean', async () => {
   const { port, host, manager } = await boot();
-  await request(port, { method: 'POST', path: '/api/browsers', headers: { ...JSON_HEADERS, host, origin: `http://${host}` }, body: '{"name":"a"}' });
-  manager.calls.length = 0;
-  const path = '/api/browsers/a/allow-unsandboxed';
+  const path = '/api/allow-unsandboxed';
   const same = { ...JSON_HEADERS, host, origin: `http://${host}` };
 
   const noOrigin = await request(port, { method: 'POST', path, headers: JSON_HEADERS, body: '{"allow":true}' });
@@ -256,10 +254,26 @@ test('allow-unsandboxed needs the same Origin, JSON and a boolean', async () => 
 
   const ok = await request(port, { method: 'POST', path, headers: same, body: '{"allow":true}' });
   assert.equal(ok.status, 200);
-  assert.equal(ok.json.browser.allowUnsandboxed, true);
+  assert.deepEqual(ok.json, { allowUnsandboxed: true });
   const off = await request(port, { method: 'POST', path, headers: same, body: '{"allow":false}' });
-  assert.equal(off.json.browser.allowUnsandboxed, false);
-  assert.equal((await request(port, { method: 'POST', path: '/api/browsers/ghost/allow-unsandboxed', headers: same, body: '{"allow":true}' })).status, 404);
+  assert.deepEqual(off.json, { allowUnsandboxed: false });
+});
+
+// Invariant: no per-browser grant path remains: the old route is a 404 and reaches no manager method.
+test('the per-browser grant route is gone', async () => {
+  const { port, host, manager } = await boot();
+  const same = { ...JSON_HEADERS, host, origin: `http://${host}` };
+  assert.equal((await request(port, { method: 'POST', path: '/api/browsers/a/allow-unsandboxed', headers: same, body: '{"allow":true}' })).status, 404);
+  assert.deepEqual(manager.calls, []);
+});
+
+// Invariant: the browser listing carries the global flag next to the browsers, and nothing per browser.
+test('GET api/browsers carries the global flag', async () => {
+  const { port, host } = await boot();
+  const same = { ...JSON_HEADERS, host, origin: `http://${host}` };
+  assert.deepEqual((await request(port, { path: '/api/browsers' })).json, { browsers: [], allowUnsandboxed: false });
+  await request(port, { method: 'POST', path: '/api/allow-unsandboxed', headers: same, body: '{"allow":true}' });
+  assert.equal((await request(port, { path: '/api/browsers' })).json.allowUnsandboxed, true);
 });
 
 // Invariant: a start refused for want of a sandbox is a 409 carrying its code, so the panel can tell it from a failure.
@@ -536,19 +550,17 @@ test('attach and connect: panel-only, JSON, validated, 202', async () => {
   assert.equal((await request(port, { path: '/api/health' })).status, 200);
 });
 
-// Invariant: the REST start route refuses an attached browser with 409 ATTACHED, and the opt-in route refuses it with
-// 400; stop and delete need no Origin and reach the manager.
-test('start, opt-in, stop and delete on an attached browser', async () => {
+// Invariant: the REST start route refuses an attached browser with 409 ATTACHED; stop and delete need no Origin and
+// reach the manager.
+test('start, stop and delete on an attached browser', async () => {
   const manager = fakeManager();
   manager.start = async () => { throw new CodedError('ATTACHED', "the user's own browser"); };
-  manager.setAllowUnsandboxed = async () => { throw new CodedError('BAD_REQUEST', 'an attached browser'); };
   const { port, host } = await boot({ manager });
   const same = { ...JSON_HEADERS, host, origin: `http://${host}` };
   await request(port, { method: 'POST', path: '/api/browsers/mine/attach', headers: same, body: '{"address":"127.0.0.1:9222","via":"direct"}' });
   const started = await request(port, { method: 'POST', path: '/api/browsers/mine/start', headers: same, body: '{}' });
   assert.equal(started.status, 409);
   assert.match(started.json.error, /^ATTACHED: /);
-  assert.equal((await request(port, { method: 'POST', path: '/api/browsers/mine/allow-unsandboxed', headers: same, body: '{"allow":true}' })).status, 400);
   assert.equal((await request(port, { method: 'POST', path: '/api/browsers/mine/stop', headers: JSON_HEADERS, body: '{}' })).status, 200);
   assert.equal((await request(port, { method: 'DELETE', path: '/api/browsers/mine', headers: JSON_HEADERS })).status, 200);
 });

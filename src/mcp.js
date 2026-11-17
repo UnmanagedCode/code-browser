@@ -12,7 +12,7 @@ const RELATIVE_PATH = 'relative to the address the user opens cc at; do not add 
 const attachedOnly = (err, name, details) => new CodedError(err.code, `${err.message}. Browser '${name}' is the user's own browser; ask the user to `
   + `press Connect for it in the code-browser panel, at details.panelPath (${RELATIVE_PATH}).`, details);
 
-const sandboxUnavailable = (err, details) => new CodedError(err.code, `${err.message}. A human must enable "Allow without sandbox" for this browser in the code-browser panel, `
+const sandboxUnavailable = (err, details) => new CodedError(err.code, `${err.message}. A human must enable "Allow without sandbox" in the code-browser panel (one setting for every launched browser), `
   + `at details.panelPath (${RELATIVE_PATH}). You cannot enable it yourself: ask the user, then call start_browser again.`, details);
 
 const isPlainObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -80,7 +80,7 @@ export function createMcp({ manager, pluginDir, pluginId, helperInfo }) {
   }
 
   const handlers = {
-    list_browsers: async () => ({ browsers: manager.list() }),
+    list_browsers: async () => manager.overview(),
     start_browser: async (args) => {
       const name = nameOf(args);
       manager.ensure(name);

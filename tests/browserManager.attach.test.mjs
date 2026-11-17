@@ -42,7 +42,7 @@ test('direct attach: connecting, then running as an attached browser', async () 
   const s = manager.summary('mine');
   assert.deepEqual(s, {
     name: 'mine', kind: 'attached', status: 'running', controller: 'agent', lastExit: null, cdpEndpoint: `http://${f.address}`,
-    sandbox: null, allowUnsandboxed: false, sandboxUnavailable: false,
+    sandbox: null, sandboxUnavailable: false,
     attached: { address: f.address, via: 'direct', asksApproval: false }, attachError: null,
   });
   assert.deepEqual(JSON.parse(fs.readFileSync(recordFile(dataDir, 'mine'), 'utf8')), { address: f.address, via: 'direct' });
@@ -198,13 +198,11 @@ test('a new manager lists the record stopped and does not auto-connect', async (
 });
 
 // Invariant: Forget removes only the record (the browser keeps running); shutdown closes only code-browser's
-// sockets; the sandbox opt-in does not apply to an attached browser.
-test('delete forgets the record only; shutdown leaves the browser; no sandbox opt-in', async () => {
+// sockets.
+test('delete forgets the record only; shutdown leaves the browser', async () => {
   const { manager, dataDir } = await setup();
   const f = await fake();
   await manager.attach('mine', direct(f));
-  await assert.rejects(manager.setAllowUnsandboxed('mine', true), (e) => e.code === 'BAD_REQUEST');
-  assert.ok(!fs.existsSync(path.join(dataDir, 'settings', 'mine.json')));
   await manager.shutdown();
   await sleep(50);
   assert.ok(f.alive());
@@ -353,20 +351,32 @@ test('re-attach cancels a stuck connect', async () => {
   } finally { d.close(); }
 });
 
-// Invariant: start and the sandbox opt-in, which apply only to launched browsers, refuse an attached name at once,
-// even while its connect waits on Chrome's approval dialog (they do not queue behind it).
-test('start and the opt-in refuse an attached name without queueing', async () => {
+// Invariant: start, which applies only to launched browsers, refuses an attached name at once,
+// even while its connect waits on Chrome's approval dialog (it does not queue behind it).
+test('start refuses an attached name without queueing', async () => {
   const { manager } = await setup();
   const f = await fake({ approval: true });
   const pending = assert.rejects(manager.attach('mine', direct(f)), (e) => /cancelled/.test(e.message));
   await waitFor(async () => (await f.pending()) === 1, { what: 'the held connection' });
   const t0 = Date.now();
   await assert.rejects(manager.start('mine'), (e) => e.code === 'ATTACHED');
-  await assert.rejects(manager.setAllowUnsandboxed('mine', true), (e) => e.code === 'BAD_REQUEST');
   assert.ok(Date.now() - t0 < 500, `refusals took ${Date.now() - t0} ms`);
   assert.equal(manager.summary('mine').status, 'connecting');
   await manager.stop('mine');
   await pending;
+});
+
+// Invariant: attached browsers are out of scope of the global sandbox opt-in: granting or revoking it never touches one.
+test('granting or revoking the global opt-in never touches an attached browser', async () => {
+  const { manager } = await setup();
+  const f = await fake();
+  await manager.attach('mine', direct(f));
+  await manager.setAllowUnsandboxed(true);
+  await manager.setAllowUnsandboxed(false);
+  const s = manager.summary('mine');
+  assert.equal(s.status, 'running');
+  assert.equal(s.sandbox, null);
+  assert.ok(f.alive());
 });
 
 // Invariant: a failure after the attached browser is registered (createSession throws, or the session's start

@@ -32,7 +32,7 @@ function fakeSocket() {
   };
 }
 
-const running = (name: string, controller: BrowserSummary['controller'] = 'agent'): BrowserSummary => ({ name, kind: 'launched', status: 'running', controller, sandbox: true, allowUnsandboxed: false, sandboxUnavailable: false, lastExit: null, attached: null, attachError: null });
+const running = (name: string, controller: BrowserSummary['controller'] = 'agent'): BrowserSummary => ({ name, kind: 'launched', status: 'running', controller, sandbox: true, sandboxUnavailable: false, lastExit: null, attached: null, attachError: null });
 const state = (over: Partial<BrowserState> = {}): BrowserState => ({
   type: 'state', name: 'a', status: 'running', sandbox: true, controller: { kind: 'agent' },
   tabs: [{ targetId: 'T1', url: 'https://one.test/', title: 'One', windowId: 1 }], activeTabId: 'T1', canGoBack: false, canGoForward: false, ...over,
@@ -65,7 +65,7 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); goTo(''); });
 
 async function openViewer(controller: BrowserState['controller'] = { kind: 'agent' }) {
   render(<App socket={f.socket} />);
-  await f.emit({ type: 'browsers', list: [running('a', controller?.kind === 'human' ? 'human' : 'agent')] });
+  await f.emit({ type: 'browsers', list: [running('a', controller?.kind === 'human' ? 'human' : 'agent')], allowUnsandboxed: false });
   await f.emit(state({ controller }));
 }
 
@@ -81,7 +81,7 @@ describe('App routing', () => {
   it('shows the browser list when no browser is selected', async () => {
     goTo('');
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [running('a'), { ...running('b'), status: 'stopped', controller: 'agent', lastExit: { code: null, signal: 'SIGSEGV', at: 1 } }] });
+    await f.emit({ type: 'browsers', list: [running('a'), { ...running('b'), status: 'stopped', controller: 'agent', lastExit: { code: null, signal: 'SIGSEGV', at: 1 } }], allowUnsandboxed: false });
     expect(screen.getByRole('heading', { name: 'Code Browser' })).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'Open a' })).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Start b' })).toBeTruthy();
@@ -92,7 +92,7 @@ describe('App routing', () => {
   // Invariant: a browser that is not running is not joined; its Start button is offered instead.
   it('a stopped browser is not joined and offers Start', async () => {
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [{ ...running('a'), status: 'stopped' }] });
+    await f.emit({ type: 'browsers', list: [{ ...running('a'), status: 'stopped' }], allowUnsandboxed: false });
     expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
     expect(f.views.at(-1)).toBeNull();
   });
@@ -247,7 +247,7 @@ describe('controller bar', () => {
     const fetchMock = vi.fn(async () => new Response('{"ok":true}'));
     vi.stubGlobal('fetch', fetchMock);
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [{ ...running('a'), kind: 'attached', sandbox: null, attached: { address: '127.0.0.1:9222', via: 'proxy', asksApproval: null } }] });
+    await f.emit({ type: 'browsers', list: [{ ...running('a'), kind: 'attached', sandbox: null, attached: { address: '127.0.0.1:9222', via: 'proxy', asksApproval: null } }], allowUnsandboxed: false });
     await f.emit(state());
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
@@ -388,7 +388,7 @@ describe('errors and the list', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ browser: running('fresh') }), { status: 201 }));
     vi.stubGlobal('fetch', fetchMock);
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [] });
+    await f.emit({ type: 'browsers', list: [], allowUnsandboxed: false });
     fireEvent.change(screen.getByLabelText('New browser name'), { target: { value: 'fresh' } });
     fireEvent.submit(screen.getByLabelText('New browser name').closest('form')!);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
@@ -407,7 +407,7 @@ describe('errors and the list', () => {
     const nativeConfirm = vi.fn(() => { throw new Error('native confirm used'); });
     vi.stubGlobal('confirm', nativeConfirm);
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [running('a')] });
+    await f.emit({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     pick('a', 'Delete');
     expect(group('Confirm delete').textContent).toContain('Delete browser "a" and its logins?');
     expect(document.activeElement).toBe(within(group('Confirm delete')).getByRole('button', { name: 'Cancel' }));
@@ -427,7 +427,7 @@ describe('errors and the list', () => {
     const fetchMock = vi.fn(async () => new Response('{}'));
     vi.stubGlobal('fetch', fetchMock);
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [running('a')] });
+    await f.emit({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     pick('a', 'Delete');
     fireEvent.keyDown(within(group('Confirm delete')).getByRole('button', { name: 'Cancel' }), { key: 'Escape' });
     expect(screen.queryByRole('group', { name: 'Confirm delete' })).toBeNull();
@@ -441,7 +441,7 @@ describe('view changes clear per-run state', () => {
     await openViewer({ kind: 'human', you: true });
     await f.emit({ type: 'dialog', tabId: 'T1', dialogType: 'alert', message: 'hi', defaultPrompt: '' });
     expect(screen.getByRole('dialog')).toBeTruthy();
-    await f.emit({ type: 'browsers', list: [{ ...running('a'), status: 'stopped' }] });
+    await f.emit({ type: 'browsers', list: [{ ...running('a'), status: 'stopped' }], allowUnsandboxed: false });
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(statusOf().getAttribute('data-status')).toBe('stopped');
     expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
@@ -470,7 +470,7 @@ describe('reconnect', () => {
     render(<App socket={socket} />);
     const first = FakeWs.all[0];
     act(() => first.open());
-    first.deliver({ type: 'browsers', list: [running('a')] });
+    first.deliver({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     first.deliver(state());
     first.deliver(dialogMsg);
     expect(screen.getByRole('dialog')).toBeTruthy();
@@ -494,7 +494,7 @@ describe('reconnect', () => {
     act(() => { vi.advanceTimersByTime(500); });
     const second = FakeWs.all[1];
     act(() => second.open());
-    second.deliver({ type: 'browsers', list: [running('a')] });
+    second.deliver({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     second.deliver(state()); // the server replays state and open dialogs: none are open now
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByRole('tablist')).toBeTruthy();
@@ -505,7 +505,7 @@ describe('reconnect', () => {
   it('a dialog still open on the server reappears after reconnect', () => {
     const { socket, first } = boot();
     const second = reconnect(first);
-    second.deliver({ type: 'browsers', list: [running('a')] });
+    second.deliver({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     second.deliver(state());
     second.deliver(dialogMsg);
     expect(screen.getByRole('dialog').textContent).toContain('pending');
@@ -534,7 +534,7 @@ describe('messages that beat the first render', () => {
     goTo('');
     const { socket, ws } = realSocket();
     ws.open();
-    ws.deliver({ type: 'browsers', list: [running('a')] });
+    ws.deliver({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     render(<App socket={socket} />);
     expect(screen.getByRole('button', { name: 'Open a' })).toBeTruthy();
     socket.close();
@@ -545,7 +545,7 @@ describe('messages that beat the first render', () => {
     goTo('?browser=a');
     const { socket, ws } = realSocket();
     ws.open();
-    ws.deliver({ type: 'browsers', list: [running('a')] });
+    ws.deliver({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     ws.deliver(state());
     render(<App socket={socket} />);
     await waitFor(() => expect(screen.getByRole('tablist')).toBeTruthy());
@@ -559,10 +559,11 @@ describe('sandbox opt-in', () => {
   const reply = (status: number, body: unknown) => vi.fn(async () => new Response(JSON.stringify(body), { status }));
   const refusal = { error: 'SANDBOX_UNAVAILABLE: Chromium has no usable sandbox' };
   const post = (fetchMock: ReturnType<typeof vi.fn>, url: string) => (fetchMock.mock.calls as unknown as [string, RequestInit][]).filter(([u]) => u === url);
+  const flag = (list: BrowserSummary[], allowUnsandboxed: boolean) => ({ type: 'browsers' as const, list, allowUnsandboxed });
 
-  async function openRefused(over: Partial<BrowserSummary> = {}) {
+  async function openRefused(allowed = false) {
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [stopped({ sandboxUnavailable: true, ...over })] });
+    await f.emit(flag([stopped({ sandboxUnavailable: true })], allowed));
   }
 
   // Invariant: a refused start is explained where the human lands, with the way to allow it; nothing is sent yet.
@@ -576,9 +577,9 @@ describe('sandbox opt-in', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  // Invariant: consent needs a second explicit step; Cancel sends nothing, Allow posts {allow:true} to the relative route.
+  // Invariant: consent needs a second explicit step; Cancel sends nothing, Allow posts {allow:true} to the global route.
   it('Allow needs a confirmation step; Cancel sends nothing, Allow posts JSON', async () => {
-    const fetchMock = reply(200, { browser: stopped({ allowUnsandboxed: true }) });
+    const fetchMock = reply(200, { allowUnsandboxed: true });
     vi.stubGlobal('fetch', fetchMock);
     await openRefused();
     fireEvent.click(screen.getByRole('button', { name: /Allow without sandbox/ }));
@@ -590,7 +591,7 @@ describe('sandbox opt-in', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('api/browsers/a/allow-unsandboxed');
+    expect(url).toBe('api/allow-unsandboxed');
     expect(init.method).toBe('POST');
     expect(new Headers(init.headers).get('content-type')).toBe('application/json');
     expect(JSON.parse(init.body as string)).toEqual({ allow: true });
@@ -600,7 +601,7 @@ describe('sandbox opt-in', () => {
   it('with the opt-in on the notice offers Start', async () => {
     const fetchMock = reply(200, {});
     vi.stubGlobal('fetch', fetchMock);
-    await openRefused({ allowUnsandboxed: true });
+    await openRefused(true);
     const notice = screen.getByRole('region', { name: /no usable sandbox/i });
     expect(within(notice).queryByRole('button', { name: /Allow without sandbox/ })).toBeNull();
     fireEvent.click(within(notice).getByRole('button', { name: 'Start' }));
@@ -612,19 +613,19 @@ describe('sandbox opt-in', () => {
     const fetchMock = reply(409, refusal);
     vi.stubGlobal('fetch', fetchMock);
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [stopped()] });
+    await f.emit(flag([stopped()], false));
     fireEvent.click(screen.getByRole('button', { name: 'Start' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     await act(async () => { await Promise.resolve(); });
     expect(screen.queryByRole('alert')).toBeNull();
-    await f.emit({ type: 'browsers', list: [stopped({ sandboxUnavailable: true })] });
+    await f.emit(flag([stopped({ sandboxUnavailable: true })], false));
     expect(screen.getByRole('region', { name: /no usable sandbox/i })).toBeTruthy();
   });
 
   it('other start failures still show a toast', async () => {
     vi.stubGlobal('fetch', reply(500, { error: 'LAUNCH_FAILED: boom' }));
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [stopped()] });
+    await f.emit(flag([stopped()], false));
     fireEvent.click(screen.getByRole('button', { name: 'Start' }));
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('LAUNCH_FAILED'));
   });
@@ -634,7 +635,7 @@ describe('sandbox opt-in', () => {
     goTo('');
     vi.stubGlobal('fetch', reply(409, refusal));
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [stopped()] });
+    await f.emit(flag([stopped()], false));
     fireEvent.click(screen.getByRole('button', { name: 'Start a' }));
     await waitFor(() => expect(location.search).toBe('?browser=a'));
     expect(screen.queryByRole('alert')).toBeNull();
@@ -649,49 +650,80 @@ describe('sandbox opt-in', () => {
 
   describe('browser list', () => {
     beforeEach(() => goTo(''));
+    const section = () => screen.getByRole('region', { name: 'Sandbox' });
 
-    // Invariant: an allowed browser is marked in the list and can be disallowed; one not allowed has no Disallow item.
-    it('shows the allowed marker and Disallow only with the opt-in', async () => {
+    // Invariant: the opt-in is not per browser, so no row's menu offers to allow or disallow it.
+    it('no browser row offers a per-browser sandbox action', async () => {
       render(<App socket={f.socket} />);
-      await f.emit({ type: 'browsers', list: [stopped({ allowUnsandboxed: true }), stopped({ name: 'b' })] });
-      expect(screen.getByText('allowed without sandbox')).toBeTruthy();
-      expect(within(openMenu('a')).getByRole('menuitem', { name: 'Disallow without sandbox' })).toBeTruthy();
-      fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
-      expect(within(openMenu('b')).queryByRole('menuitem', { name: 'Disallow without sandbox' })).toBeNull();
+      await f.emit(flag([stopped(), stopped({ name: 'b' })], true));
+      for (const n of ['a', 'b']) {
+        const items = within(openMenu(n)).getAllByRole('menuitem').map((i) => i.textContent);
+        expect(items.some((t) => /without sandbox/i.test(t ?? ''))).toBe(false);
+        fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+      }
     });
 
-    it('marks a refused, not-allowed browser', async () => {
+    // Invariant: the refused marker shows only while the opt-in is off, and no row carries an "allowed" marker.
+    it('marks a refused browser only while not allowed', async () => {
       render(<App socket={f.socket} />);
-      await f.emit({ type: 'browsers', list: [stopped({ sandboxUnavailable: true })] });
+      await f.emit(flag([stopped({ sandboxUnavailable: true })], false));
       expect(screen.getByText('not started: no sandbox')).toBeTruthy();
+      await f.emit(flag([stopped({ sandboxUnavailable: true })], true));
+      expect(screen.queryByText('not started: no sandbox')).toBeNull();
+      expect(screen.queryByText('allowed without sandbox')).toBeNull();
     });
 
-    // Invariant: disallowing a browser that runs unsandboxed asks first (it stops now); cancelling sends nothing.
-    it('Disallow on a running unsandboxed browser confirms inline first', async () => {
+    // Invariant: allowing, from the always-shown Sandbox section, needs the explicit second step and posts {allow:true}.
+    it('the Sandbox section allows only after confirmation', async () => {
+      const fetchMock = reply(200, { allowUnsandboxed: true });
+      vi.stubGlobal('fetch', fetchMock);
+      render(<App socket={f.socket} />);
+      await f.emit(flag([], false));
+      fireEvent.click(within(section()).getByRole('button', { name: /Allow without sandbox/ }));
+      expect(fetchMock).not.toHaveBeenCalled();
+      fireEvent.click(within(group('Confirm running without the sandbox')).getByRole('button', { name: 'Cancel' }));
+      expect(fetchMock).not.toHaveBeenCalled();
+      fireEvent.click(within(section()).getByRole('button', { name: /Allow without sandbox/ }));
+      fireEvent.click(within(group('Confirm running without the sandbox')).getByRole('button', { name: 'Allow' }));
+      await waitFor(() => expect(post(fetchMock, 'api/allow-unsandboxed')).toHaveLength(1));
+      expect(JSON.parse(post(fetchMock, 'api/allow-unsandboxed')[0][1].body as string)).toEqual({ allow: true });
+    });
+
+    // Invariant: withdrawing while a browser runs unsandboxed asks first, naming it (it stops now); cancelling sends nothing.
+    it('Disallow with an unsandboxed browser running confirms inline first, naming it', async () => {
       const fetchMock = reply(200, {});
       vi.stubGlobal('fetch', fetchMock);
       render(<App socket={f.socket} />);
-      await f.emit({ type: 'browsers', list: [{ ...running('a', 'agent'), sandbox: false, allowUnsandboxed: true }] });
-      pick('a', 'Disallow without sandbox');
-      expect(group('Confirm stop and disallow').textContent).toContain('withdrawing the permission stops it');
+      await f.emit(flag([{ ...running('a', 'agent'), sandbox: false }], true));
+      fireEvent.click(within(section()).getByRole('button', { name: 'Disallow without sandbox' }));
+      expect(group('Confirm stop and disallow').textContent).toContain('Stop a now');
       fireEvent.click(within(group('Confirm stop and disallow')).getByRole('button', { name: 'Cancel' }));
       expect(fetchMock).not.toHaveBeenCalled();
-      pick('a', 'Disallow without sandbox');
+      fireEvent.click(within(section()).getByRole('button', { name: 'Disallow without sandbox' }));
       fireEvent.click(within(group('Confirm stop and disallow')).getByRole('button', { name: 'Stop and disallow' }));
-      await waitFor(() => expect(post(fetchMock, 'api/browsers/a/allow-unsandboxed')).toHaveLength(1));
-      expect(JSON.parse(post(fetchMock, 'api/browsers/a/allow-unsandboxed')[0][1].body as string)).toEqual({ allow: false });
+      await waitFor(() => expect(post(fetchMock, 'api/allow-unsandboxed')).toHaveLength(1));
+      expect(JSON.parse(post(fetchMock, 'api/allow-unsandboxed')[0][1].body as string)).toEqual({ allow: false });
     });
 
-    // Invariant: disallowing where nothing runs unsandboxed changes no process, so it needs no confirmation.
-    it('Disallow on a stopped browser posts {allow:false} without a confirmation', async () => {
+    // Invariant: withdrawing where nothing runs unsandboxed changes no process, so it needs no confirmation.
+    it('Disallow with nothing running unsandboxed posts {allow:false} without a confirmation', async () => {
       const fetchMock = reply(200, {});
       vi.stubGlobal('fetch', fetchMock);
       render(<App socket={f.socket} />);
-      await f.emit({ type: 'browsers', list: [stopped({ allowUnsandboxed: true })] });
-      pick('a', 'Disallow without sandbox');
-      await waitFor(() => expect(post(fetchMock, 'api/browsers/a/allow-unsandboxed')).toHaveLength(1));
+      await f.emit(flag([stopped()], true));
+      fireEvent.click(within(section()).getByRole('button', { name: 'Disallow without sandbox' }));
+      await waitFor(() => expect(post(fetchMock, 'api/allow-unsandboxed')).toHaveLength(1));
       expect(screen.queryByRole('group')).toBeNull();
-      expect(JSON.parse(post(fetchMock, 'api/browsers/a/allow-unsandboxed')[0][1].body as string)).toEqual({ allow: false });
+      expect(JSON.parse(post(fetchMock, 'api/allow-unsandboxed')[0][1].body as string)).toEqual({ allow: false });
+    });
+
+    // Invariant: a `browsers` message that changes only the flag still updates the section.
+    it('a socket update of the flag alone re-renders the section', async () => {
+      render(<App socket={f.socket} />);
+      await f.emit(flag([stopped()], false));
+      expect(within(section()).getByRole('button', { name: /Allow without sandbox/ })).toBeTruthy();
+      await f.emit(flag([stopped()], true));
+      expect(within(section()).getByRole('button', { name: 'Disallow without sandbox' })).toBeTruthy();
     });
   });
 });
@@ -702,7 +734,7 @@ describe('attached browsers', () => {
   });
   const reply = (status: number, body: unknown) => vi.fn(async () => new Response(JSON.stringify(body), { status }));
   const calls = (fetchMock: ReturnType<typeof vi.fn>, url: string) => (fetchMock.mock.calls as unknown as [string, RequestInit][]).filter(([u]) => u === url);
-  const list = async (b: BrowserSummary[]) => { goTo(''); render(<App socket={f.socket} />); await f.emit({ type: 'browsers', list: b }); };
+  const list = async (b: BrowserSummary[]) => { goTo(''); render(<App socket={f.socket} />); await f.emit({ type: 'browsers', list: b, allowUnsandboxed: false }); };
 
   // Invariant: the attach form defaults to 127.0.0.1:9222 through the proxy, and posts the name, the debug address and
   // how to reach it.
@@ -781,13 +813,13 @@ describe('attached browsers', () => {
     vi.stubGlobal('fetch', fetchMock);
     goTo('?browser=mine');
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [attached({ attachError: 'nobody allowed it' })] });
+    await f.emit({ type: 'browsers', list: [attached({ attachError: 'nobody allowed it' })], allowUnsandboxed: false });
     expect(screen.getByText('This browser is disconnected.')).toBeTruthy();
     expect(screen.getByText('nobody allowed it')).toBeTruthy();
     expect(f.views.at(-1)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
     await waitFor(() => expect(calls(fetchMock, 'api/browsers/mine/connect')).toHaveLength(1));
-    await f.emit({ type: 'browsers', list: [attached({ status: 'connecting' })] });
+    await f.emit({ type: 'browsers', list: [attached({ status: 'connecting' })], allowUnsandboxed: false });
     expect(screen.getByText(/click Allow/)).toBeTruthy();
     expect(f.views.at(-1)).toBeNull();
   });
@@ -796,7 +828,7 @@ describe('attached browsers', () => {
   it('tabs without an active tab ask to select one', async () => {
     goTo('?browser=mine');
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [attached({ status: 'running' })] });
+    await f.emit({ type: 'browsers', list: [attached({ status: 'running' })], allowUnsandboxed: false });
     await f.emit(state({ name: 'mine', sandbox: null, activeTabId: null }));
     expect(screen.getByText('Select a tab to watch it.')).toBeTruthy();
     expect(document.querySelector('canvas')).toBeNull();
@@ -1016,12 +1048,12 @@ describe('connection loss', () => {
   it('clears the list on a drop and shows a waiting note', async () => {
     goTo('');
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [running('a')] });
+    await f.emit({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     expect(screen.getByText('a')).toBeTruthy();
     await f.status('closed', 1);
     expect(screen.queryByText('a')).toBeNull();
     expect(screen.getByText('Waiting for code-browser…')).toBeTruthy();
-    await f.emit({ type: 'browsers', list: [running('a')] });
+    await f.emit({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     expect(screen.queryByText('Waiting for code-browser…')).toBeNull();
   });
 
@@ -1047,7 +1079,7 @@ describe('connection loss', () => {
     expect(f.views.at(-1)).toBeNull();
     await f.status('open', 0);
     expect(f.views.at(-1)).toBeNull();
-    await f.emit({ type: 'browsers', list: [running('a')] });
+    await f.emit({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     expect(f.views.at(-1)).toMatchObject({ name: 'a' });
   });
 });
@@ -1077,7 +1109,7 @@ describe('connection loss with the real socket', () => {
     render(<App socket={socket} />);
     const first = FakeWs.all[0];
     act(() => first.open());
-    first.deliver({ type: 'browsers', list: [running('a')] });
+    first.deliver({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     first.deliver(state());
     expect(first.sent.map((m) => m.msg)).toEqual(['hello', 'view']);
     act(() => first.drop());
@@ -1085,7 +1117,7 @@ describe('connection loss with the real socket', () => {
     const second = FakeWs.all[1];
     act(() => second.open());
     expect(second.sent.map((m) => m.msg)).toEqual(['hello']);
-    second.deliver({ type: 'browsers', list: [{ ...running('a'), status: 'stopped' }] });
+    second.deliver({ type: 'browsers', list: [{ ...running('a'), status: 'stopped' }], allowUnsandboxed: false });
     expect(second.sent.map((m) => m.msg)).toEqual(['hello']);
     expect(screen.queryByRole('alert')).toBeNull();
     expect(statusOf().getAttribute('data-status')).toBe('stopped');
@@ -1154,7 +1186,7 @@ describe('browser list layout', () => {
   it('one primary action per row; the menu closes on Escape and returns focus', async () => {
     const stoppedAttached: BrowserSummary = { ...running('c'), kind: 'attached', status: 'stopped', sandbox: null, attached: { address: '127.0.0.1:9222', via: 'proxy', asksApproval: null } };
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [running('a'), { ...running('b'), status: 'stopped' }, stoppedAttached] });
+    await f.emit({ type: 'browsers', list: [running('a'), { ...running('b'), status: 'stopped' }, stoppedAttached], allowUnsandboxed: false });
     const rowOf = (n: string) => within(screen.getByText(n, { selector: 'strong' }).closest('li')!);
     expect(rowOf('a').getByRole('button', { name: 'Open a' })).toBeTruthy();
     expect(rowOf('b').getByRole('button', { name: 'Start b' })).toBeTruthy();
@@ -1175,7 +1207,7 @@ describe('browser list layout', () => {
   it('focus returns to the trigger after a menu choice; Tab closes the menu', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')));
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [running('a')] });
+    await f.emit({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     pick('a', 'Stop');
     expect(screen.queryByRole('menu')).toBeNull();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'More actions for a' }));
@@ -1187,7 +1219,7 @@ describe('browser list layout', () => {
   // Invariant: the new-browser field has a visible label and a hint wired to it.
   it('the New browser field is labelled and described by its hint', async () => {
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [] });
+    await f.emit({ type: 'browsers', list: [], allowUnsandboxed: false });
     const input = screen.getByLabelText('New browser name');
     expect(input.getAttribute('aria-describedby')).toBe('new-browser-hint');
     expect(document.getElementById('new-browser-hint')?.textContent).toBeTruthy();
@@ -1301,7 +1333,7 @@ describe('accessibility and focus', () => {
   it('the list is a main landmark with the Code Browser heading', async () => {
     goTo('');
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [running('a')] });
+    await f.emit({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     expect(within(screen.getByRole('main')).getByRole('heading', { level: 1, name: 'Code Browser' })).toBeTruthy();
   });
 
@@ -1310,7 +1342,7 @@ describe('accessibility and focus', () => {
     focused();
     goTo('');
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [running('a'), running('b')] });
+    await f.emit({ type: 'browsers', list: [running('a'), running('b')], allowUnsandboxed: false });
     fireEvent.click(screen.getByRole('button', { name: 'Open a' }));
     expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1, name: 'a' }));
     fireEvent.click(screen.getByRole('button', { name: 'Back to browsers' }));
@@ -1326,7 +1358,7 @@ describe('accessibility and focus', () => {
     focused(false);
     goTo('');
     window.dispatchEvent(new PopStateEvent('popstate'));
-    await f.emit({ type: 'browsers', list: [running('a')] });
+    await f.emit({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     fireEvent.click(screen.getByRole('button', { name: 'Open a' }));
     expect(document.activeElement).toBe(document.body);
     await f.emit(state({ controller: { kind: 'human', you: true } }));
@@ -1370,7 +1402,7 @@ describe('accessibility and focus', () => {
   it('inline confirm describes its question', async () => {
     goTo('');
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [running('a')] });
+    await f.emit({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     pick('a', 'Delete');
     const g = group('Confirm delete');
     expect(document.getElementById(g.getAttribute('aria-describedby')!)!.textContent).toBe('Delete browser "a" and its logins?');
@@ -1423,7 +1455,7 @@ describe('accessibility and focus', () => {
     goTo('');
     const stoppedAttached: BrowserSummary = { ...running('c'), kind: 'attached', status: 'stopped', sandbox: null, attached: { address: '127.0.0.1:9222', via: 'proxy', asksApproval: null } };
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [running('a'), { ...running('b'), status: 'stopped' }, stoppedAttached] });
+    await f.emit({ type: 'browsers', list: [running('a'), { ...running('b'), status: 'stopped' }, stoppedAttached], allowUnsandboxed: false });
     for (const name of ['Open a', 'Start b', 'Connect c']) expect(screen.getAllByRole('button', { name })).toHaveLength(1);
   });
 
@@ -1431,7 +1463,7 @@ describe('accessibility and focus', () => {
   it('row menu items rove', async () => {
     goTo('');
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [running('a')] });
+    await f.emit({ type: 'browsers', list: [running('a')], allowUnsandboxed: false });
     const menu = openMenu('a');
     const items = within(menu).getAllByRole('menuitem');
     for (const i of items) expect(i.tabIndex).toBe(-1);
@@ -1475,7 +1507,7 @@ describe('Chromium install', () => {
   async function startMissing(table: Record<string, Reply[]>) {
     const r = route({ 'POST api/browsers/a/start': [{ status: 500, body: MISSING }], ...table });
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [stopped()] });
+    await f.emit({ type: 'browsers', list: [stopped()], allowUnsandboxed: false });
     fireEvent.click(screen.getByRole('button', { name: 'Start' }));
     await flush();
     return r;
@@ -1691,7 +1723,7 @@ describe('Chromium install', () => {
       'POST api/browsers/fresh/start': [ok({ browser: running('fresh') })],
     });
     render(<App socket={f.socket} />);
-    await f.emit({ type: 'browsers', list: [] });
+    await f.emit({ type: 'browsers', list: [], allowUnsandboxed: false });
     fireEvent.change(screen.getByLabelText('New browser name'), { target: { value: 'fresh' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
     await flush();

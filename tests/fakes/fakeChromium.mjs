@@ -4,7 +4,8 @@
 // Like Chromium's devtools server: a Host that is not an IP or localhost gets 500, a WebSocket upgrade that carries
 // an Origin gets 403, and /json/version names the browser WebSocket on the Host it was asked through.
 // Test knobs (env): FAKE_CHROMIUM_REQUIRE_NO_SANDBOX, FAKE_CHROMIUM_NO_PORT, FAKE_CHROMIUM_IGNORE_CLOSE, and
-// FAKE_CHROMIUM_APPROVAL (Chrome's own-profile approval mode: /json* is an empty 404, a page socket is 403, and a
+// FAKE_CHROMIUM_HOLD_PORT_UNTIL=<file> (DevToolsActivePort is written only once that file exists, so a test can act while a launch
+// that already started is still in flight), and FAKE_CHROMIUM_APPROVAL (Chrome's own-profile approval mode: /json* is an empty 404, a page socket is 403, and a
 // /devtools/browser[/<id>] upgrade is held until a test answers it: `PUT /fake/approval?answer=allow|deny`;
 // `GET /fake/approval` gives {pending}).
 // Test-only CDP methods (Fake.getState lists every Target.activateTarget as `activations`, and counts open CDP
@@ -227,7 +228,9 @@ wss.on('connection', (ws) => {
   });
 });
 
-server.listen(0, '127.0.0.1', () => {
+server.listen(0, '127.0.0.1', async () => {
   if (process.env.FAKE_CHROMIUM_NO_PORT) return;
+  const hold = process.env.FAKE_CHROMIUM_HOLD_PORT_UNTIL;
+  while (hold && !fs.existsSync(hold)) await new Promise((r) => setTimeout(r, 10));
   fs.writeFileSync(path.join(profile, 'DevToolsActivePort'), `${server.address().port}\n${wsPath}\n`);
 });

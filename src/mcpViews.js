@@ -3,17 +3,18 @@
 
 const lit = (v) => JSON.stringify(v);
 
-function listBrowsers({ browsers }) {
-  if (browsers.length === 0) return { text: 'No browsers yet. start_browser creates one (name defaults to "default").' };
+function listBrowsers({ browsers, allowUnsandboxed }) {
+  const flag = `allowUnsandboxed ${lit(allowUnsandboxed)} (whether a human allowed every launched browser to run without Chromium's sandbox; only a human can change it, in the panel)`;
+  if (browsers.length === 0) return { text: ['No browsers yet. start_browser creates one (name defaults to "default").', flag].join('\n') };
   const lines = browsers.map((b) => {
-    const parts = [`kind ${b.kind}`, `status ${b.status}`, `controller ${b.controller}`, `cdpEndpoint ${lit(b.cdpEndpoint)}`, `sandbox ${lit(b.sandbox)}`, `allowUnsandboxed ${lit(b.allowUnsandboxed)}`];
+    const parts = [`kind ${b.kind}`, `status ${b.status}`, `controller ${b.controller}`, `cdpEndpoint ${lit(b.cdpEndpoint)}`, `sandbox ${lit(b.sandbox)}`];
     if (b.attached) parts.push(`attached ${b.attached.address} via ${b.attached.via}`, `asksApproval ${lit(b.attached.asksApproval)}`);
     if (b.sandboxUnavailable) parts.push('sandboxUnavailable true (a human must enable "Allow without sandbox" in the panel)');
     if (b.lastExit) parts.push(`lastExit code ${lit(b.lastExit.code)} signal ${lit(b.lastExit.signal)} at ${new Date(b.lastExit.at).toISOString()}`);
     if (b.attachError) parts.push(`attachError ${lit(b.attachError)}`);
     return `- ${b.name}: ${parts.join(', ')}`;
   });
-  return { text: [`${browsers.length} browser(s):`, ...lines, 'Call browser_info <name> for tabs and the Playwright snippet.'].join('\n') };
+  return { text: [`${browsers.length} browser(s):`, ...lines, flag, 'Call browser_info <name> for tabs and the Playwright snippet.'].join('\n') };
 }
 
 function browserInfo(d) {
@@ -39,7 +40,6 @@ function browserInfo(d) {
     cdpEndpoint: d.cdpEndpoint,
     controller: d.controller,
     sandbox: d.sandbox,
-    allowUnsandboxed: d.allowUnsandboxed,
     tabs: d.tabs,
     panelPath: d.panelPath,
     helper: d.helper,

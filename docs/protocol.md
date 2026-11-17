@@ -20,7 +20,7 @@ Applied by `src/app.js` to every HTTP request, in this order; no handler runs be
 
 - A request with **no** `Origin` skips only check 1. cc calls `api/mcp` server-side without one.
 - A foreign `Origin` is refused on `api/mcp` too, and a `text/plain` or form body is refused with `415` whatever the `Origin`.
-- A **panel-only route** (`requireOrigin` in `src/routes.js`: `POST api/browsers/:name/allow-unsandboxed`, `…/attach`, `…/connect`, `POST api/chromium/install`) additionally refuses a request with **no** `Origin` (`403`, before the content-type check). A browser always sends `Origin` on a `fetch` POST and cc's proxy passes it through, so the panel is unaffected; cc's MCP bridge and plain scripts send none. This is not a defence against a client that adds the header.
+- A **panel-only route** (`requireOrigin` in `src/routes.js`: `POST api/allow-unsandboxed`, `POST api/browsers/:name/attach`, `…/connect`, `POST api/chromium/install`) additionally refuses a request with **no** `Origin` (`403`, before the content-type check). A browser always sends `Origin` on a `fetch` POST and cc's proxy passes it through, so the panel is unaffected; cc's MCP bridge and plain scripts send none. This is not a defence against a client that adds the header.
 - A WebSocket upgrade must carry an `Origin` (see below), except the CDP relay, which must carry none ([CDP relay](#cdp-relay-apirelayname)).
 - `POST api/artifacts` is for local programs: a page cannot send `application/octet-stream` without a preflight, and none holds the token.
 - Every response carries the CSP and `nosniff`, `no-referrer`, `no-store` (`src/http.js`, `SECURITY_HEADERS`), including `404`, `503` and the reply to a malformed request (`clientError`).
@@ -30,27 +30,27 @@ Applied by `src/app.js` to every HTTP request, in this order; no handler runs be
 | Route | Body | Returns |
 |---|---|---|
 | `GET api/health` | — | `{ok:true}`. Never touches the browser manager. |
-| `GET api/browsers` | — | `{browsers:[summary]}` |
+| `GET api/browsers` | — | `{browsers: [summary], allowUnsandboxed: boolean}` |
 | `GET api/chromium/install` | — | `{install: InstallState}`: the latest Chromium install run of this backend (in memory; `idle` until one starts). Read-only, and subject to the loopback-`Host` rule |
 | `POST api/chromium/install` | `{}` | `202 {install: InstallState}` (status `running`); panel-only (needs `Origin`); `409 INSTALL_RUNNING` while one runs (one per backend); `500 INSTALL_UNAVAILABLE` (`details.install`) when `playwright-core` is not installed. No MCP tool starts it |
 | `POST api/browsers` | `{name}` | `201 {browser: summary}`: creates the profile and starts it; `409 EXISTS` when the name is taken |
 | `POST api/browsers/:name/start` | `{}` | `{browser: summary}`; no-op when running; `409 ATTACHED` for an attached browser |
 | `POST api/browsers/:name/stop` | `{}` | `{browser: summary}`; the profile is kept. An attached browser is disconnected (code-browser's own connection and tunnel close; nothing is sent to the browser) and a connect in progress is cancelled |
-| `POST api/browsers/:name/allow-unsandboxed` | `{allow: boolean}` | `{browser: summary}`; panel-only (needs `Origin`); `allow: false` stops the browser if it runs unsandboxed; `400 BAD_REQUEST` when `allow` is not a boolean or the browser is attached |
+| `POST api/allow-unsandboxed` | `{allow: boolean}` | `{allowUnsandboxed: boolean}`; panel-only (needs `Origin`); the one plugin-wide opt-in for every launched browser; `allow: false` stops every browser running unsandboxed (answers after the stops); `400 BAD_REQUEST` when `allow` is not a boolean |
 | `POST api/browsers/:name/attach` | `{address, via}` | `202 {browser: summary}` (status `connecting`); panel-only. Saves `attached/<name>.json` (re-pointing an attached name) and connects in the background. `address`: `127.0.0.1:<port>` or `localhost:<port>` (port 1–65535; canonicalised to `127.0.0.1`); `via`: `proxy` \| `direct`; anything else `400 BAD_ENDPOINT`. `409 EXISTS` when the name is a profile or another attached browser has the same `{address, via}` |
 | `POST api/browsers/:name/connect` | `{}` | `202 {browser: summary}` (status `connecting`); panel-only; connects an attached browser in the background; `400 BAD_REQUEST` for a profile, `404 NOT_FOUND` for an unknown name |
 | `DELETE api/browsers/:name` | — | `{ok:true}`; stops the browser and moves the profile to the trash dir. For an attached browser: disconnects and removes the record only |
 | `POST api/mcp` | `{tool, arguments, caller, format}` | see MCP |
 | `POST api/artifacts?ext=<ext>` | raw bytes, `application/octet-stream` | `201 {path}`: the absolute path of a new file under `<dataDir>/artifacts`, mode `0600`. Needs the bearer token. `ext` must match `EXT_RE` (`src/artifacts.js`), else `400 BAD_REQUEST`. The dir keeps the newest `ARTIFACTS_KEEP` files (the new one always among them; subdirectories untouched) |
 
-`summary` = `{name, kind: "launched"|"attached", status: "running"|"stopped"|"connecting", controller: "agent"|"human", sandbox: boolean|null, allowUnsandboxed: boolean, sandboxUnavailable: boolean, lastExit: {code, signal, at}|null, cdpEndpoint: string|null, attached: {address, via, asksApproval: boolean|null}|null, attachError: string|null}`. `lastExit` is set only after an unexpected exit (for an attached browser: the connection dropped; the panel shows *Disconnected*). `allowUnsandboxed` is the human's per-browser opt-in to run without Chromium's sandbox. `sandboxUnavailable` is true after a start was refused for want of a sandbox, until a start succeeds or the browser is deleted; it is held in memory and does not survive a backend restart.
+`summary` = `{name, kind: "launched"|"attached", status: "running"|"stopped"|"connecting", controller: "agent"|"human", sandbox: boolean|null, sandboxUnavailable: boolean, lastExit: {code, signal, at}|null, cdpEndpoint: string|null, attached: {address, via, asksApproval: boolean|null}|null, attachError: string|null}`. `lastExit` is set only after an unexpected exit (for an attached browser: the connection dropped; the panel shows *Disconnected*). `sandboxUnavailable` is true after a start was refused for want of a sandbox, until a start succeeds or the browser is deleted; it is held in memory and does not survive a backend restart.
 
 Attached browsers (`kind: "attached"`, a person's own browser):
 
 - `status` `connecting` while an attach or connect is in progress (attached only).
 - `attached`: the saved `address` and `via`, and `asksApproval` (Chrome's approval mode, known once discovery has run; `null` before), `null` for launched browsers.
 - `attachError`: why the last connect failed, held in memory; cleared by the next attach or connect.
-- `sandbox` is `null`, `allowUnsandboxed` and `sandboxUnavailable` are `false`.
+- `sandbox` is `null`, `sandboxUnavailable` is `false`.
 - `cdpEndpoint` is a URL on the backend's own loopback: `http://127.0.0.1:<port>` (direct), `http://127.0.0.1:<tunnel port>` (through the proxy), or `ws://…/devtools/browser` in approval mode. It never carries the proxy secret.
 
 Errors are `{error: "<CODE>: <message>"}` (plus `details` when the error carries extras) with the status from `src/errors.js` (`statusFor`): `INVALID_NAME`/`BAD_REQUEST`/`BAD_ENDPOINT` 400, `UNAUTHORIZED` 401, `FORBIDDEN` 403, `NOT_FOUND` 404, `EXISTS`/`NOT_RUNNING`/`SANDBOX_UNAVAILABLE`/`ATTACHED`/`INSTALL_RUNNING`/`BROWSER_CONTROLLED` 409, `PAYLOAD_TOO_LARGE` 413, `UNSUPPORTED_MEDIA_TYPE` 415, `RELAY_FULL` 503, anything else 500 (`CHROMIUM_NOT_FOUND`, `LAUNCH_FAILED`, `INSTALL_UNAVAILABLE`). A failed connect of an attached browser has no HTTP status: attach and connect answer `202` before connecting, and the failure arrives as the summary's `attachError` (an `ATTACH_FAILED` or `EXISTS` message).
@@ -86,14 +86,14 @@ Check order in `handle`: `format`, then `tool`, then `arguments`, then the tool.
 
 | Tool | Arguments | json (`structured`) | text |
 |---|---|---|---|
-| `list_browsers` | — | `{browsers: [summary]}`, every browser | one line per browser using the json field names with JSON-literal values, then a hint to call `browser_info` |
+| `list_browsers` | — | `{browsers: [summary], allowUnsandboxed: boolean}`, every browser; `allowUnsandboxed` is the read-only plugin-wide opt-in | one line per browser using the json field names with JSON-literal values, an `allowUnsandboxed <true\|false> (…)` line (also when there are no browsers), then a hint to call `browser_info` |
 | `start_browser` | `name?` | as `browser_info`; creates the profile when the name is new; no-op when running | as `browser_info` |
 | `stop_browser` | `name?` | `{name, kind, status: "stopped"}` | one sentence; for an attached browser it says code-browser only disconnected and that only the user reconnects |
 | `browser_info` | `name?` | `{...summary, tabs, activeTargetId, panelPath, notes, rules, snippet, helper}` | `{text, meta}` |
 
-`name` defaults to `default` and must match `NAME_RE` (`src/limits.js`). No tool attaches or connects a browser, and every tool takes `name` only; other arguments (such as `allowUnsandboxed`) are ignored. `arguments` must be an object (`BAD_REQUEST` otherwise).
+`name` defaults to `default` and must match `NAME_RE` (`src/limits.js`). No tool attaches or connects a browser, and every tool takes `name` only; other arguments (such as `allowUnsandboxed`) are ignored: the opt-in is read-only to agents. `arguments` must be an object (`BAD_REQUEST` otherwise).
 
-`summary` is the shape of `manager.summary()` (the REST fields above): `name, kind, controller, status, cdpEndpoint, sandbox, allowUnsandboxed, sandboxUnavailable, lastExit, attached, attachError`, all always present. The schema is written out in full in `conductor.plugin.json` for `list_browsers` and for `browser_info`/`start_browser` (cc's subset has no `$ref`); `tests/manifest.test.mjs` pins the copies equal.
+`summary` is the shape of `manager.summary()` (the REST fields above): `name, kind, controller, status, cdpEndpoint, sandbox, sandboxUnavailable, lastExit, attached, attachError`, all always present. The schema is written out in full in `conductor.plugin.json` for `list_browsers` and for `browser_info`/`start_browser` (cc's subset has no `$ref`); `tests/manifest.test.mjs` pins the copies equal.
 
 `browser_info` json, beyond the summary:
 
@@ -104,7 +104,7 @@ Check order in `handle`: `format`, then `tool`, then `arguments`, then the tool.
 - `snippet`: the whole ready-to-run Bash script (`src/snippet.js`). It connects to the raw `cdpEndpoint`, picks its page with the helper's `pickPage` (imported by file URL), and in approval mode `connectOverCDP` waits `APPROVAL_TIMEOUT_MS`.
 - `helper`: `{module, relay, artifacts, tokenFile, artifactsDir}` for the [run_code members](#run_code-members-srcruncode) (`src/helperInfo.js`): `module` is the module's `file:` URL; `relay` is `ws://127.0.0.1:<port>/api/relay/<name>`; `artifacts` is `http://127.0.0.1:<port>/api/artifacts`; `tokenFile` is the path of the relay token file (never its value: no tool result carries the token); `artifactsDir` is `<dataDir>/artifacts`.
 
-`browser_info` text: each note followed by a blank line, the `Panel:` line with its relative-address note, `Rules:` as `- ` bullets, the `In run_code:` line (`await cc.code_browser.connect({ name })`), then the snippet in a `js` fence after `From Bash, …`. `meta` is `{name, kind, status, attached, cdpEndpoint, controller, sandbox, allowUnsandboxed, tabs, panelPath, helper}`; the json-only fields (`lastExit`, `attachError`, `sandboxUnavailable`, `activeTargetId`) are a text summary, not a cap.
+`browser_info` text: each note followed by a blank line, the `Panel:` line with its relative-address note, `Rules:` as `- ` bullets, the `In run_code:` line (`await cc.code_browser.connect({ name })`), then the snippet in a `js` fence after `From Bash, …`. `meta` is `{name, kind, status, attached, cdpEndpoint, controller, sandbox, tabs, panelPath, helper}`; the json-only fields (`lastExit`, `attachError`, `sandboxUnavailable`, `activeTargetId`) are a text summary, not a cap.
 
 Refusals (`code`, with `details`):
 
@@ -116,7 +116,7 @@ Refusals (`code`, with `details`):
 | `INVALID_NAME` | `name` fails `NAME_RE` | — |
 | `NOT_FOUND` | `stop_browser`/`browser_info` on an unknown name | — |
 | `NOT_RUNNING` | `browser_info` on a stopped browser | launched: `{name, kind: "launched"}`; attached: `{name, kind: "attached", panelPath}`, and the message says it is the user's own browser and to ask them to press Connect |
-| `SANDBOX_UNAVAILABLE` | `start_browser` with no usable sandbox and no human opt-in; the message says only a human can enable *Allow without sandbox* | `{name, panelPath}` |
+| `SANDBOX_UNAVAILABLE` | `start_browser` with no usable sandbox and no human opt-in; the message says only a human can enable *Allow without sandbox* (one setting for every launched browser) | `{name, panelPath}` |
 | `ATTACHED` | `start_browser` on an attached browser; the message says to ask the user to Connect it | `{name, panelPath}` |
 | `CHROMIUM_NOT_FOUND` | no Chromium | `{tried, install}`, or `{path}` for a missing `CODE_BROWSER_CHROMIUM` |
 | `LAUNCH_FAILED` | Chromium did not come up | `{logTail}` for a launch that timed out or exited; other causes have a message only |
@@ -172,7 +172,7 @@ Refusals (`code`, with `details`):
 
 | `type` | Fields |
 |---|---|
-| `browsers` | `list: [summary]`, on `hello` and on every change |
+| `browsers` | `list: [summary]`, `allowUnsandboxed: boolean`, on `hello` and on every change |
 | `state` | `name, status, sandbox` (`null` for an attached browser)`, controller: {kind:"agent"} \| {kind:"human", you: boolean}, tabs: [{targetId,url,title,windowId}] (`windowId` is `null` until known), activeTabId, recentTabIds (tab ids, most recently shown through code-browser first), canGoBack, canGoForward`; on `view` and on every change. A browser that stops sends `{name, status:"stopped"}` and the viewer is un-viewed. |
 | `dialog` | `tabId, dialogType` (`alert`\|`confirm`\|`prompt`\|`beforeunload`), `message, defaultPrompt`; a pending dialog is replayed to a viewer that joins late |
 | `dialogClosed` | `tabId` |

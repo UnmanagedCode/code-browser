@@ -16,13 +16,13 @@ const { chromium } = createRequire(path.join(root, 'package.json'))('playwright-
 const NAME = 'attached-browser-name-xx-27'; // 27 characters: the longest a toolbar has to hold
 const longTab = (i, windowId) => ({ targetId: `T${i}`, windowId, url: `https://example.test/${'path/'.repeat(8)}${i}`, title: `A rather long page title number ${i} that never fits a tab` });
 const TABS = Array.from({ length: 12 }, (_, i) => longTab(i + 1, i < 6 ? 1 : 2));
-const summary = (over) => ({ name: 'x', kind: 'launched', status: 'running', controller: 'human', sandbox: true, allowUnsandboxed: false, sandboxUnavailable: false, lastExit: null, attached: null, attachError: null, ...over });
+const summary = (over) => ({ name: 'x', kind: 'launched', status: 'running', controller: 'human', sandbox: true, sandboxUnavailable: false, lastExit: null, attached: null, attachError: null, ...over });
 const ATTACHED = { address: '127.0.0.1:9222', via: 'proxy', asksApproval: true };
 const BROWSERS = [
   summary({ name: 'work', kind: 'attached', attached: ATTACHED }),
   summary({ name: 'a', kind: 'attached', attached: ATTACHED }),
   summary({ name: NAME, kind: 'attached', attached: { address: '127.0.0.1:9222', via: 'proxy', asksApproval: true } }),
-  summary({ name: 'unsandboxed-launch', status: 'stopped', allowUnsandboxed: true, lastExit: { code: null, signal: 'SIGSEGV', at: 1 } }),
+  summary({ name: 'unsandboxed-launch', status: 'running', sandbox: false }),
   summary({ name: 'mine', kind: 'attached', status: 'stopped', sandbox: null, attached: { address: 'host.docker.internal:9222', via: 'proxy', asksApproval: true }, attachError: 'Chrome did not answer: the remote debugging prompt was not allowed in time, so nothing was attached' }),
 ];
 const STATE = { type: 'state', status: 'running', sandbox: true, controller: { kind: 'human', you: true }, tabs: TABS, activeTabId: 'T1', recentTabIds: [], canGoBack: true, canGoForward: false };
@@ -42,7 +42,7 @@ async function startFake(dist) {
     ws.on('message', (data) => {
       const m = JSON.parse(String(data));
       received.push(m);
-      if (m.msg === 'hello') ws.send(JSON.stringify({ type: 'browsers', list: BROWSERS }));
+      if (m.msg === 'hello') ws.send(JSON.stringify({ type: 'browsers', list: BROWSERS, allowUnsandboxed: true }));
       if (m.msg === 'view' && m.name) ws.send(JSON.stringify({ ...STATE, name: m.name }));
     });
   });
@@ -171,7 +171,7 @@ test('panel layout and keyboard in real Chromium', { skip: process.env.RUN_REAL_
       assert.ok((await overflow(page)) <= 0, `no horizontal scroll at ${width}px`);
       const cut = await page.$$eval('.row-status', (els) => els.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent));
       assert.deepEqual(cut, [], `no status line is cut at ${width}px`);
-      for (const b of await boxes(page, '.browser-row button')) assert.ok(b.right <= width + 0.5, `${b.label} lies within the viewport at ${width}px`);
+      for (const b of await boxes(page, '.browser-row button, .sandbox-setting button')) assert.ok(b.right <= width + 0.5, `${b.label} lies within the viewport at ${width}px`);
     }
     await page.context().close();
   });

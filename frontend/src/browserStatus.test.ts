@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { statusParts } from './browserStatus';
 import type { BrowserSummary } from './protocol';
 
-const base: BrowserSummary = { name: 'a', kind: 'launched', status: 'running', controller: 'agent', sandbox: true, allowUnsandboxed: false, sandboxUnavailable: false, lastExit: null, attached: null, attachError: null };
-const texts = (b: Partial<BrowserSummary>) => statusParts({ ...base, ...b }).map((p) => p.text);
+const base: BrowserSummary = { name: 'a', kind: 'launched', status: 'running', controller: 'agent', sandbox: true, sandboxUnavailable: false, lastExit: null, attached: null, attachError: null };
+const texts = (b: Partial<BrowserSummary>, allowed = false) => statusParts({ ...base, ...b }, allowed).map((p) => p.text);
 const attached = { address: '127.0.0.1:9222', via: 'proxy' as const, asksApproval: true };
 
 describe('statusParts', () => {
@@ -11,10 +11,11 @@ describe('statusParts', () => {
   it('launched browsers', () => {
     expect(texts({})).toEqual(['Running', 'agent control']);
     expect(texts({ controller: 'human' })).toEqual(['Running', 'human control']);
-    expect(texts({ sandbox: false, allowUnsandboxed: true })).toEqual(['Running', 'agent control', 'no sandbox', 'allowed without sandbox']);
+    expect(texts({ sandbox: false }, true)).toEqual(['Running', 'agent control', 'no sandbox']);
     expect(texts({ status: 'stopped', sandboxUnavailable: true })).toEqual(['Stopped', 'not started: no sandbox']);
+    expect(texts({ status: 'stopped', sandboxUnavailable: true }, true)).toEqual(['Stopped']);
     expect(texts({ status: 'stopped', lastExit: { code: 1, signal: null, at: 1 } })).toEqual(['Stopped', 'Crashed']);
-    expect(statusParts({ ...base, status: 'stopped', lastExit: { code: 1, signal: null, at: 1 } }).at(-1)?.warn).toBe(true);
+    expect(statusParts({ ...base, status: 'stopped', lastExit: { code: 1, signal: null, at: 1 } }, false).at(-1)?.warn).toBe(true);
   });
 
   // Invariant: an attached browser's line names how and where it is reached, plus approval and disconnect state.

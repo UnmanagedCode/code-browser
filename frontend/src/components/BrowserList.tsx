@@ -7,11 +7,12 @@ import type { BrowserSummary } from '../protocol';
 import { NAME_RE } from '../../../src/limits.js';
 import { AttachForm, type AttachDraft } from './AttachForm';
 import { InlineConfirm } from './InlineConfirm';
+import { SandboxSetting } from './SandboxSetting';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 
 // `returnFrom` is the browser the person just left, if any: its row takes focus on arrival.
 interface Props {
-  browsers: BrowserSummary[]; loading: boolean; returnFrom: string | null;
+  browsers: BrowserSummary[]; allowUnsandboxed: boolean; loading: boolean; returnFrom: string | null;
   onOpen(name: string): void; onError(message: string): void;
   // A start or create failed for want of Chromium: `command` installs it by hand.
   onChromiumMissing(name: string, command: string): void;
@@ -19,15 +20,14 @@ interface Props {
 
 export const ALLOW_HINT = 'If Chrome asks "Allow remote debugging?", click Allow.';
 
-type Pending = { name: string; kind: 'delete' | 'forget' | 'disallow' };
+type Pending = { name: string; kind: 'delete' | 'forget' };
 
 const CONFIRMS: Record<Pending['kind'], { label: string; message: (name: string) => string; confirmLabel: string }> = {
   delete: { label: 'Confirm delete', message: (n) => `Delete browser "${n}" and its logins?`, confirmLabel: 'Delete' },
   forget: { label: 'Confirm forget', message: (n) => `Forget "${n}"? code-browser disconnects and forgets it; the browser and its tabs are untouched.`, confirmLabel: 'Forget' },
-  disallow: { label: 'Confirm stop and disallow', message: (n) => `Stop "${n}" now? It is running without the sandbox, and withdrawing the permission stops it.`, confirmLabel: 'Stop and disallow' },
 };
 
-export function BrowserList({ browsers, loading, returnFrom, onOpen, onError, onChromiumMissing }: Props) {
+export function BrowserList({ browsers, allowUnsandboxed, loading, returnFrom, onOpen, onError, onChromiumMissing }: Props) {
   const [name, setName] = useState('');
   const [attachOpen, setAttachOpen] = useState(false);
   const [draft, setDraft] = useState<AttachDraft | null>(null);
@@ -54,14 +54,9 @@ export function BrowserList({ browsers, loading, returnFrom, onOpen, onError, on
   const setTrigger = (n: string) => (el: HTMLButtonElement | null) => { if (el) triggers.current.set(n, el); else triggers.current.delete(n); };
   const backToTrigger = (n: string) => triggers.current.get(n)?.focus();
 
-  const disallow = (b: BrowserSummary) => {
-    if (b.status === 'running' && b.sandbox === false) setPending({ name: b.name, kind: 'disallow' });
-    else run(() => api.setAllowUnsandboxed(b.name, false));
-  };
   const confirmed = (p: Pending) => {
     setPending(null);
-    const call = p.kind === 'disallow' ? () => api.setAllowUnsandboxed(p.name, false) : () => api.deleteBrowser(p.name);
-    run(call).finally(() => backToTrigger(p.name));
+    run(() => api.deleteBrowser(p.name)).finally(() => backToTrigger(p.name));
   };
   const cancelled = (p: Pending) => { setPending(null); backToTrigger(p.name); };
 
@@ -78,10 +73,9 @@ export function BrowserList({ browsers, loading, returnFrom, onOpen, onError, on
     if (stopped) items.push({ label: 'Open', onSelect: () => onOpen(b.name) });
     if (!stopped) items.push({ label: attached ? 'Disconnect' : 'Stop', onSelect: () => { run(() => api.stopBrowser(b.name)); } });
     if (attached) items.push({ label: 'Change…', onSelect: () => { setDraft({ name: b.name, address: b.attached!.address, via: b.attached!.via }); setAttachOpen(true); } });
-    if (!attached && b.allowUnsandboxed) items.push({ label: 'Disallow without sandbox', onSelect: () => disallow(b) });
     items.push({ label: attached ? 'Forget' : 'Delete', tone: 'destructive', onSelect: () => setPending({ name: b.name, kind: attached ? 'forget' : 'delete' }) });
     const confirm = pending?.name === b.name ? pending : null;
-    const parts = statusParts(b);
+    const parts = statusParts(b, allowUnsandboxed);
     return (
       <li key={b.name} className="browser-row">
         <div className="row-main">
@@ -154,6 +148,7 @@ export function BrowserList({ browsers, loading, returnFrom, onOpen, onError, on
           onError={onError}
         />
       )}
+      {!loading && <SandboxSetting allowed={allowUnsandboxed} browsers={browsers} onError={onError} />}
     </main>
   );
 }

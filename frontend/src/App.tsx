@@ -19,6 +19,7 @@ export function App({ socket }: { socket: ViewerSocket }) {
   // Set by a route change a person made (not by the first load): the arriving view then takes focus, if the panel has it.
   const [arrival, setArrival] = useState<{ from: string | null } | null>(null);
   const [browsers, setBrowsers] = useState<BrowserSummary[]>([]);
+  const [allowUnsandboxed, setAllowUnsandboxed] = useState(false);
   const [state, setState] = useState<BrowserState | null>(null);
   const [dialogs, setDialogs] = useState<DialogInfo[]>([]);
   const [toast, setToast] = useState<ToastContent | null>(null);
@@ -62,7 +63,7 @@ export function App({ socket }: { socket: ViewerSocket }) {
 
   useEffect(() => socket.onMessage((m) => {
     switch (m.type) {
-      case 'browsers': setBrowsers(m.list); setSynced(true); break;
+      case 'browsers': setBrowsers(m.list); setAllowUnsandboxed(m.allowUnsandboxed); setSynced(true); break;
       case 'state': setState(m); break;
       case 'dialog': setDialogs((d) => [...d.filter((x) => x.tabId !== m.tabId), { tabId: m.tabId, dialogType: m.dialogType, message: m.message, defaultPrompt: m.defaultPrompt }]); break;
       case 'dialogClosed': setDialogs((d) => d.filter((x) => x.tabId !== m.tabId)); break;
@@ -79,6 +80,7 @@ export function App({ socket }: { socket: ViewerSocket }) {
     if (status === 'closed') {
       setSynced(false);
       setBrowsers([]);
+      setAllowUnsandboxed(false);
       setDialogs([]);
     }
   }), [socket, checkInstallOnOpen]);
@@ -124,7 +126,7 @@ export function App({ socket }: { socket: ViewerSocket }) {
       )}
       {toast && <Toast toast={toast} onDismiss={() => setToast(null)} />}
       {name === null ? (
-        <BrowserList browsers={browsers} loading={offline} returnFrom={arrival?.from ?? null} onOpen={open} onError={showError} onChromiumMissing={onChromiumMissing} />
+        <BrowserList browsers={browsers} allowUnsandboxed={allowUnsandboxed} loading={offline} returnFrom={arrival?.from ?? null} onOpen={open} onError={showError} onChromiumMissing={onChromiumMissing} />
       ) : (
         <Viewer
           name={name}
@@ -132,6 +134,7 @@ export function App({ socket }: { socket: ViewerSocket }) {
           state={shownState}
           dialogs={dialogs}
           summary={summary}
+          allowUnsandboxed={allowUnsandboxed}
           offline={offline}
           focusHeading={arrival !== null}
           onError={showError}

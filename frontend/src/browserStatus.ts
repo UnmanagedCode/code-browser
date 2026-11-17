@@ -6,7 +6,7 @@ const STATUS_WORD: Record<string, string> = { running: 'Running', stopped: 'Stop
 const controllerPart = (b: BrowserSummary): StatusPart => ({ text: b.controller === 'human' ? 'human control' : 'agent control' });
 
 // The facts shown on a browser row's one status line, in order.
-export function statusParts(b: BrowserSummary): StatusPart[] {
+export function statusParts(b: BrowserSummary, allowUnsandboxed: boolean): StatusPart[] {
   const parts: StatusPart[] = [{ text: Object.hasOwn(STATUS_WORD, b.status) ? STATUS_WORD[b.status] : 'Unknown' }];
   if (b.kind === 'attached' && b.attached) {
     const a = b.attached;
@@ -18,8 +18,7 @@ export function statusParts(b: BrowserSummary): StatusPart[] {
   }
   if (b.status === 'running') parts.push(controllerPart(b));
   if (b.status === 'running' && b.sandbox === false) parts.push({ text: 'no sandbox', warn: true });
-  if (b.allowUnsandboxed) parts.push({ text: 'allowed without sandbox', warn: true });
-  if (b.sandboxUnavailable && !b.allowUnsandboxed) parts.push({ text: 'not started: no sandbox', warn: true });
+  if (b.sandboxUnavailable && !allowUnsandboxed) parts.push({ text: 'not started: no sandbox', warn: true });
   if (b.status === 'stopped' && b.lastExit) parts.push({ text: 'Crashed', warn: true });
   return parts;
 }

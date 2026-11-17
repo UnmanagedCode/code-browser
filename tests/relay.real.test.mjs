@@ -101,7 +101,7 @@ test('CDP relay on real Chromium', { skip: process.env.RUN_REAL_CHROMIUM !== '1'
       if (err.code !== 'SANDBOX_UNAVAILABLE') throw err;
       // The fixture's stand-in for a person's "Allow without sandbox" in the panel.
       t.diagnostic('no usable sandbox here: the fixture browser runs unsandboxed');
-      await manager.setAllowUnsandboxed(NAME, true);
+      await manager.setAllowUnsandboxed(true);
       await manager.start(NAME);
     }
     const session = manager.session(NAME);

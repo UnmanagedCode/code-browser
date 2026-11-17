@@ -122,7 +122,7 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
     const newPage = async () => (await panel.newContext({ viewport: { width: 1000, height: 800 } })).newPage();
     const listed = async (name = 'e2e') => (await tool(backend.port, 'list_browsers')).browsers.find((b) => b.name === name);
     const modeOf = (f) => fs.statSync(f).mode & 0o777;
-    const settingsFile = path.join(dataDir, 'settings', 'e2e.json');
+    const optInFile = path.join(dataDir, 'allow-unsandboxed.json');
     const profileDir = path.join(dataDir, 'profiles', 'e2e');
     const procsFor = (needle) => spawnSync('pgrep', ['-af', needle], { encoding: 'utf8' }).stdout.split('\n').filter((l) => l && !l.includes('pgrep'));
 
@@ -147,13 +147,16 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
       assert.deepEqual(procsFor(profileDir), [], 'a refused start must leave no Chromium behind');
       const b = await listed();
       assert.equal(b.status, 'stopped');
-      assert.equal(b.allowUnsandboxed, false);
+      assert.equal('allowUnsandboxed' in b, false, 'the opt-in is not a per-browser field');
+      assert.equal((await tool(port, 'list_browsers')).allowUnsandboxed, false);
       assert.equal(b.sandboxUnavailable, true);
 
-      const grant = (headers) => fetch(`http://127.0.0.1:${port}/api/browsers/e2e/allow-unsandboxed`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{"allow":true}' });
-      assert.equal((await grant({})).status, 403, 'no Origin');
-      assert.equal((await grant({ origin: 'http://evil.test' })).status, 403, 'foreign Origin');
-      assert.ok(!fs.existsSync(settingsFile), 'a refused grant must not write the opt-in');
+      const same = { origin: `http://127.0.0.1:${port}` };
+      const post = (p, headers) => fetch(`http://127.0.0.1:${port}${p}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{"allow":true}' });
+      assert.equal((await post('/api/allow-unsandboxed', {})).status, 403, 'no Origin');
+      assert.equal((await post('/api/allow-unsandboxed', { origin: 'http://evil.test' })).status, 403, 'foreign Origin');
+      assert.equal((await post('/api/browsers/e2e/allow-unsandboxed', same)).status, 404, 'no per-browser grant route');
+      assert.ok(!fs.existsSync(optInFile), 'a refused grant must not write the opt-in');
     });
 
     await t.test('2b. a human grants it in the panel UI and starts the browser', { skip: !refused && 'sandbox usable on this host' }, async () => {
@@ -164,8 +167,8 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
       await page.getByRole('button', { name: 'Allow', exact: true }).click();
       await page.getByRole('button', { name: 'Start', exact: true }).click();
       await waitFor(async () => (await listed()).status === 'running', { what: 'e2e to run after the human allowed it', timeout: 20_000 });
-      assert.equal(modeOf(settingsFile), 0o600);
-      assert.equal(modeOf(path.dirname(settingsFile)), 0o700);
+      assert.equal(modeOf(optInFile), 0o600);
+      assert.equal(modeOf(dataDir), 0o700);
       await page.close();
     });
 
@@ -180,7 +183,6 @@ test('real Chromium end to end', { skip: process.env.RUN_REAL_CHROMIUM !== '1' &
       assert.equal(typeof started.sandbox, 'boolean');
       if (refused) {
         assert.equal(started.sandbox, false);
-        assert.equal(started.allowUnsandboxed, true);
         assert.equal(started.notes.filter((n) => n.startsWith('WARNING')).length, 1);
       }
 
@@ -415,7 +417,7 @@ console.log(await page.textContent('#result'));`);
       cleanup.push(() => backend.proc.kill('SIGKILL'));
       const list = (await tool(backend.port, 'list_browsers')).browsers;
       assert.deepEqual(list.map((b) => [b.name, b.status]), [['e2e', 'stopped']]);
-      assert.equal(list[0].allowUnsandboxed, refused, 'the opt-in survives a backend restart');
+      assert.equal((await tool(backend.port, 'list_browsers')).allowUnsandboxed, refused, 'the opt-in survives a backend restart');
       assert.ok(fs.existsSync(path.join(dataDir, 'profiles', 'e2e')));
 
       const rest = (method, p) => fetch(`http://127.0.0.1:${backend.port}/api/browsers/${p}`, { method, headers: { 'content-type': 'application/json' }, body: method === 'DELETE' ? undefined : '{}' });
@@ -457,25 +459,33 @@ console.log(await page.textContent('#result'));`);
       assert.equal((await rest('POST', 'e2e/start')).status, 200);
     });
 
-    await t.test('9. a human revokes in the panel (stopping the browser), then delete removes profile and opt-in', async () => {
+    await t.test('9. a human revokes the global opt-in in the panel (stopping every unsandboxed browser), then delete removes the profile', async () => {
       if (refused) {
         assert.equal((await listed()).status, 'running');
+        // One grant covers every launched browser: a second one starts with no further grant.
+        const second = await tool(backend.port, 'start_browser', { name: 'e2e-b' });
+        assert.ok(!second.error, second.error);
+        assert.equal(second.sandbox, false);
+        assert.equal(second.notes.filter((n) => n.startsWith('WARNING')).length, 1);
         const page = await newPage();
         await page.goto(`http://127.0.0.1:${backend.port}/`);
-        await page.getByRole('button', { name: 'More actions for e2e' }).click();
-        await page.getByRole('menuitem', { name: 'Disallow without sandbox' }).click();
+        await page.getByRole('region', { name: 'Sandbox' }).getByRole('button', { name: 'Disallow without sandbox' }).click();
         await page.getByRole('group', { name: 'Confirm stop and disallow' }).getByRole('button', { name: 'Stop and disallow' }).click();
-        await waitFor(async () => { const b = await listed(); return b.status === 'stopped' && b.allowUnsandboxed === false; }, { what: 'revoke to stop the browser', timeout: 20_000 });
-        assert.equal((await listed()).lastExit, null, 'a revoke is a deliberate stop, not a crash');
-        assert.ok(!fs.existsSync(settingsFile));
+        await waitFor(async () => {
+          const l = await tool(backend.port, 'list_browsers');
+          return l.allowUnsandboxed === false && l.browsers.filter((b) => b.name.startsWith('e2e')).every((b) => b.status === 'stopped');
+        }, { what: 'revoke to stop every unsandboxed browser', timeout: 20_000 });
+        for (const n of ['e2e', 'e2e-b']) assert.equal((await listed(n)).lastExit, null, 'a revoke is a deliberate stop, not a crash');
+        assert.ok(!fs.existsSync(optInFile));
         assert.equal((await tool(backend.port, 'start_browser', { name: 'e2e' })).code, 'SANDBOX_UNAVAILABLE');
         await page.close();
+        assert.equal((await fetch(`http://127.0.0.1:${backend.port}/api/browsers/e2e-b`, { method: 'DELETE', headers: { 'content-type': 'application/json' } })).status, 200);
       }
       const rest = (method, p) => fetch(`http://127.0.0.1:${backend.port}/api/browsers/${p}`, { method, headers: { 'content-type': 'application/json' }, body: method === 'DELETE' ? undefined : '{}' });
       assert.equal((await rest('POST', 'e2e/stop')).status, 200);
       assert.equal((await rest('DELETE', 'e2e')).status, 200);
       assert.ok(!fs.existsSync(profileDir));
-      assert.ok(!fs.existsSync(settingsFile));
+      assert.ok(!fs.existsSync(optInFile), 'deleting a browser does not recreate the global opt-in');
     });
 
     // ---- 10–11: the user's own browser, attached by a human in the panel ----

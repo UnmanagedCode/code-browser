@@ -92,12 +92,17 @@ export function createViewerGateway({ manager, log = console, pingMs = PING_MS }
     return conn.session;
   }
 
+  const browsersMessage = () => {
+    const { browsers, allowUnsandboxed } = manager.overview();
+    return { type: 'browsers', list: browsers, allowUnsandboxed };
+  };
+
   const handlers = {
     hello(conn, msg) {
       if (conn.viewerId) throw new CodedError('BAD_REQUEST', 'already said hello');
       if (typeof msg.viewerId !== 'string' || !VIEWER_ID_RE.test(msg.viewerId)) throw new CodedError('BAD_REQUEST', 'invalid viewerId');
       conn.viewerId = msg.viewerId;
-      sendIfChanged(conn, 'browsers', { type: 'browsers', list: manager.list() });
+      sendIfChanged(conn, 'browsers', browsersMessage());
     },
     view(conn, msg) {
       if (msg.name === null) { leave(conn); return; }
@@ -157,7 +162,7 @@ export function createViewerGateway({ manager, log = console, pingMs = PING_MS }
   }
 
   const onManagerChange = () => {
-    for (const c of conns) if (c.viewerId) sendIfChanged(c, 'browsers', { type: 'browsers', list: manager.list() });
+    for (const c of conns) if (c.viewerId) sendIfChanged(c, 'browsers', browsersMessage());
   };
   // A browser that stops takes its viewers' session away; they see it as stopped.
   const onExited = (entry) => {
